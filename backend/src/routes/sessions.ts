@@ -1,0 +1,27 @@
+import { Router } from "express";
+import * as ctrl from "../controllers/sessionController";
+
+export const sessionRouter = Router();
+
+// Sessions
+sessionRouter.get("/",    ctrl.listSessions);
+sessionRouter.post("/",   ctrl.createSession);
+sessionRouter.get("/:id", ctrl.getSession);
+sessionRouter.patch("/:id", ctrl.updateSession);
+sessionRouter.delete("/:id", ctrl.deleteSession);
+
+// Party management
+sessionRouter.post("/:id/characters",                ctrl.addCharacter);
+sessionRouter.delete("/:id/characters/:characterId", ctrl.removeCharacter);
+
+// Roll summary for DM helper
+sessionRouter.get("/:id/rolls", ctrl.getRollSummary);
+
+// Combat
+sessionRouter.post("/:id/combats",                                        ctrl.startCombat);
+sessionRouter.get("/:id/combats/:combatId",                               ctrl.getCombat);
+sessionRouter.post("/:id/combats/:combatId/next-round",                   ctrl.nextRound);
+sessionRouter.post("/:id/combats/:combatId/end",                          ctrl.endCombat);
+sessionRouter.patch("/:id/combats/:combatId/combatants/:combatantId",     ctrl.updateCombatant);
+sessionRouter.post("/:id/combats/:combatId/combatants/:combatantId/damage", ctrl.damageCombatant);
+sessionRouter.post("/:id/combats/:combatId/combatants/:combatantId/heal",   ctrl.healCombatant);

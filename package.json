@@ -1,0 +1,12 @@
+{
+  "name": "dnd5e-companion",
+  "private": true,
+  "description": "Run from repo root before Docker/CI to catch the same TypeScript errors as container builds.",
+  "scripts": {
+    "check": "npm run sanity:levelup && npm run sanity:subclasses && npm run sanity:feature-choices && npm run build --prefix backend && npm run build --prefix frontend",
+    "sync-forge": "node scripts/build-dungeon-forge.mjs",
+    "sanity:levelup": "node scripts/levelup-sanity.mjs",
+    "sanity:subclasses": "npm run sanity:subclasses --prefix backend",
+    "sanity:feature-choices": "npm run sanity:feature-choices --prefix backend"
+  }
+}

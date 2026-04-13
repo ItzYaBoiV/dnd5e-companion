@@ -1,0 +1,36 @@
+# Environment
+.env
+.env.local
+
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Build outputs
+dist/
+*/dist/
+build/
+*/build/
+
+# Prisma
+*.db
+*.db-journal
+
+# Logs
+*.log
+logs/
+
+# Docker volumes
+postgres_data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Generated dice assets
+frontend/public/dice-three/

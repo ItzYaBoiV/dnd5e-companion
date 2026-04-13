@@ -1,0 +1,215 @@
+import { create } from "zustand";
+import { characterApi } from "@/services/api";
+import type { Character } from "@/types/dnd";
+
+const API = "/api";
+
+async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API}${path}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 204) return undefined as T;
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+  return data as T;
+}
+
+export interface SessionSummary {
+  id: string; name: string; status: string;
+  characters: { characterId: string; playerName: string; isActive: boolean }[];
+  updatedAt: string;
+}
+
+export interface ActiveSession {
+  id: string; name: string; status: string; notes: string;
+  dungeonId: string | null; storyId: string | null;
+  characters: { id: string; characterId: string; playerName: string; isActive: boolean }[];
+  combats: Combat[];
+}
+
+export interface Combat {
+  id: string; name: string; status: string; round: number;
+  combatants: Combatant[];
+  turnOrder?: Combatant[];
+}
+
+export interface Combatant {
+  id: string; type: "player" | "monster"; label: string;
+  characterId: string | null; monsterSlug: string | null;
+  initiative: number; currentHp: number; maxHp: number;
+  temporaryHp: number; armorClass: number;
+  conditions: string[]; isConcentrating: boolean;
+  isAlive: boolean; notes: string;
+}
+
+export interface RollSummary {
+  inCombat: boolean;
+  round?: number;
+  combatId?: string;
+  turnOrder?: Combatant[];
+  playerRolls: PlayerRollInfo[];
+  dmRolls: DmRollInfo[];
+}
+
+export interface PlayerRollInfo {
+  characterId: string; characterName: string; classSlug: string;
+  level: number; currentHp: number; maxHp: number;
+  initiative: number; passivePerception: number;
+  keyRolls: {
+    attacks: { melee: { bonus: number; label: string }; ranged: { bonus: number; label: string }; spell: { bonus: number; dc: number; label: string } | null };
+    saves: Record<string, { bonus: number; proficient: boolean }>;
+    skills: Record<string, number>;
+  };
+}
+
+export interface DmRollInfo {
+  combatantId: string; label: string; monsterSlug: string; monsterName: string;
+  currentHp: number; maxHp: number; armorClass: number;
+  actions: { name: string; description: string; attackBonus: number | null; damageDice: string | null; damageBonus: number | null; damageType: string | null; saveDc: number | null; saveType: string | null }[];
+}
+
+interface SessionStore {
+  sessions:        SessionSummary[];
+  activeSession:   ActiveSession | null;
+  activeCombat:    Combat | null;
+  rollSummary:     RollSummary | null;
+  partyCharacters: Character[];
+  isLoading:       boolean;
+  error:           string | null;
+
+  loadSessions:     () => Promise<void>;
+  loadSession:      (id: string) => Promise<void>;
+  createSession:    (name: string) => Promise<ActiveSession>;
+  deleteSession:    (id: string) => Promise<void>;
+
+  addCharacter:     (characterId: string, playerName: string) => Promise<void>;
+  removeCharacter:  (characterId: string) => Promise<void>;
+  loadPartyChars:   () => Promise<void>;
+
+  startCombat:      (name: string, combatants: Partial<Combatant>[]) => Promise<void>;
+  endCombat:        () => Promise<void>;
+  nextRound:        () => Promise<void>;
+  damageCombatant:  (combatantId: string, amount: number) => Promise<void>;
+  healCombatant:    (combatantId: string, amount: number) => Promise<void>;
+  updateCombatant:  (combatantId: string, data: Partial<Combatant>) => Promise<void>;
+  refreshRolls:     () => Promise<void>;
+}
+
+export const useSessionStore = create<SessionStore>((set, get) => ({
+  sessions: [], activeSession: null, activeCombat: null,
+  rollSummary: null, partyCharacters: [], isLoading: false, error: null,
+
+  loadSessions: async () => {
+    set({ isLoading: true });
+    try {
+      const sessions = await req<SessionSummary[]>("GET", "/sessions");
+      set({ sessions, isLoading: false });
+    } catch (e) { set({ error: String(e), isLoading: false }); }
+  },
+
+  loadSession: async (id) => {
+    set({ isLoading: true });
+    try {
+      const session = await req<ActiveSession>("GET", `/sessions/${id}`);
+      const activeCombat = session.combats?.find((c) => c.status === "active") ?? null;
+      set({ activeSession: session, activeCombat, isLoading: false });
+      await get().loadPartyChars();
+      if (activeCombat) await get().refreshRolls();
+    } catch (e) { set({ error: String(e), isLoading: false }); }
+  },
+
+  createSession: async (name) => {
+    const session = await req<ActiveSession>("POST", "/sessions", { name });
+    set((s) => ({ sessions: [session as unknown as SessionSummary, ...s.sessions], activeSession: session }));
+    return session;
+  },
+
+  deleteSession: async (id) => {
+    await req("DELETE", `/sessions/${id}`);
+    set((s) => ({ sessions: s.sessions.filter((se) => se.id !== id), activeSession: null }));
+  },
+
+  addCharacter: async (characterId, playerName) => {
+    const sid = get().activeSession?.id;
+    if (!sid) return;
+    await req("POST", `/sessions/${sid}/characters`, { characterId, playerName });
+    await get().loadSession(sid);
+  },
+
+  removeCharacter: async (characterId) => {
+    const sid = get().activeSession?.id;
+    if (!sid) return;
+    await req("DELETE", `/sessions/${sid}/characters/${characterId}`);
+    await get().loadSession(sid);
+  },
+
+  loadPartyChars: async () => {
+    const session = get().activeSession;
+    if (!session) return;
+    const ids = session.characters.filter((c) => c.isActive).map((c) => c.characterId);
+    const chars = await Promise.all(ids.map((id) => characterApi.get(id)));
+    set({ partyCharacters: chars });
+  },
+
+  startCombat: async (name, combatants) => {
+    const sid = get().activeSession?.id;
+    if (!sid) return;
+    const combat = await req<Combat>("POST", `/sessions/${sid}/combats`, { name, combatants });
+    set((s) => ({
+      activeCombat: combat,
+      activeSession: s.activeSession ? { ...s.activeSession, combats: [...s.activeSession.combats, combat] } : null,
+    }));
+    await get().refreshRolls();
+  },
+
+  endCombat: async () => {
+    const sid = get().activeSession?.id;
+    const cid = get().activeCombat?.id;
+    if (!sid || !cid) return;
+    await req("POST", `/sessions/${sid}/combats/${cid}/end`);
+    set({ activeCombat: null, rollSummary: null });
+  },
+
+  nextRound: async () => {
+    const sid = get().activeSession?.id;
+    const cid = get().activeCombat?.id;
+    if (!sid || !cid) return;
+    const updated = await req<Combat>("POST", `/sessions/${sid}/combats/${cid}/next-round`);
+    set({ activeCombat: updated });
+  },
+
+  damageCombatant: async (combatantId, amount) => {
+    const sid = get().activeSession?.id;
+    const cid = get().activeCombat?.id;
+    if (!sid || !cid) return;
+    await req("POST", `/sessions/${sid}/combats/${cid}/combatants/${combatantId}/damage`, { amount });
+    await get().loadSession(sid);
+  },
+
+  healCombatant: async (combatantId, amount) => {
+    const sid = get().activeSession?.id;
+    const cid = get().activeCombat?.id;
+    if (!sid || !cid) return;
+    await req("POST", `/sessions/${sid}/combats/${cid}/combatants/${combatantId}/heal`, { amount });
+    await get().loadSession(sid);
+  },
+
+  updateCombatant: async (combatantId, data) => {
+    const sid = get().activeSession?.id;
+    const cid = get().activeCombat?.id;
+    if (!sid || !cid) return;
+    await req("PATCH", `/sessions/${sid}/combats/${cid}/combatants/${combatantId}`, data);
+    await get().loadSession(sid);
+  },
+
+  refreshRolls: async () => {
+    const sid = get().activeSession?.id;
+    if (!sid) return;
+    try {
+      const summary = await req<RollSummary>("GET", `/sessions/${sid}/rolls`);
+      set({ rollSummary: summary });
+    } catch { /* non-critical */ }
+  },
+}));

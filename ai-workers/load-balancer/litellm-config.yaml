@@ -1,0 +1,19 @@
+# LiteLLM Load Balancer — managed by D&D app
+# Workers auto-update this file when they register via HTTP.
+
+model_list:
+
+  - model_name: dnd-generator
+    litellm_params:
+      model: ollama/qwen2.5:14b
+      api_base: http://192.168.5.14:11434
+      timeout: 1800
+
+router_settings:
+  routing_strategy: least-busy
+  num_retries: 2
+  timeout: 1800
+
+litellm_settings:
+  max_tokens: 8192
+  request_timeout: 1800

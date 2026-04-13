@@ -1,0 +1,37 @@
+{
+  "name": "dnd5e-backend",
+  "version": "1.0.0",
+  "description": "D&D 5e Companion API",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "prisma generate && tsc",
+    "start": "node dist/index.js",
+    "db:migrate": "prisma migrate deploy",
+    "db:push": "prisma db push",
+    "db:generate": "prisma generate",
+    "db:seed": "tsx prisma/seed.ts",
+    "sanity:subclasses": "node scripts/subclass-name-sanity.mjs",
+    "sanity:feature-choices": "node scripts/feature-choice-sanity.mjs",
+    "db:studio": "prisma studio",
+    "test": "node --import tsx --test src/services/multiclass.test.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.14.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "express-async-errors": "^3.1.1",
+    "helmet": "^7.1.0",
+    "morgan": "^1.10.0",
+    "node-fetch": "^3.3.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/morgan": "^1.9.9",
+    "@types/node": "^20.14.2",
+    "prisma": "^5.14.0",
+    "tsx": "^4.15.2",
+    "typescript": "^5.4.5"
+  }
+}

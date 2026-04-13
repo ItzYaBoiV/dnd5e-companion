@@ -1,0 +1,597 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// CHARACTER — Runtime data (changes during play)
+// ============================================================
+
+model Character {
+  id   String @id @default(cuid())
+  name String
+
+  // --- Core identity ---
+  raceSlug       String
+  subraceSlug    String?
+  classSlug      String
+  subclassSlug   String?
+  backgroundSlug String
+  alignment      Alignment @default(TRUE_NEUTRAL)
+  level          Int       @default(1)
+  experiencePoints Int     @default(0)
+
+  // --- Ability scores (raw values, modifiers computed via API) ---
+  strength     Int
+  dexterity    Int
+  constitution Int
+  intelligence Int
+  wisdom       Int
+  charisma     Int
+
+  // --- HP ---
+  maxHp       Int
+  currentHp   Int
+  temporaryHp Int @default(0)
+
+  // --- Hit dice ---
+  hitDieType  Int // e.g. 8 for d8
+  hitDiceMax  Int // = level
+  hitDiceUsed Int @default(0)
+
+  // --- Death saves ---
+  deathSaveSuccesses Int @default(0)
+  deathSaveFailures  Int @default(0)
+  isStabilized       Boolean @default(false)
+
+  // --- Combat ---
+  speed         Int
+  inspiration   Boolean @default(false)
+  // AC is computed: armor in inventory + shield + class features
+  // Initiative is computed: dex mod + any bonuses
+  initiativeBonus Int @default(0)
+  acBonus         Int @default(0) // magic / situational bonus
+
+  // --- Proficiencies (stored as slugs/keys) ---
+  savingThrowProficiencies  String[] // e.g. ["strength","wisdom"]
+  skillProficiencies        String[] // e.g. ["athletics","perception"]
+  skillExpertise            String[] // double proficiency
+  weaponProficiencies       String[] // slugs or categories e.g. "martial","handaxe"
+  armorProficiencies        String[] // "light","medium","heavy","shields"
+  toolProficiencies         String[]
+  languages                 String[]
+
+  // --- Personality ---
+  personalityTraits String @default("")
+  ideals            String @default("")
+  bonds             String @default("")
+  flaws             String @default("")
+  backstory         String @default("")
+  allies            String @default("")
+  appearance        String @default("")
+  age               String @default("")
+  height            String @default("")
+  weight            String @default("")
+  eyes              String @default("")
+  skin              String @default("")
+  hair              String @default("")
+
+  // --- Currency (in individual coins) ---
+  copper   Int @default(0)
+  silver   Int @default(0)
+  electrum Int @default(0)
+  gold     Int @default(0)
+  platinum Int @default(0)
+
+  // --- Spellcasting (if applicable) ---
+  spellcastingAbility String? // "intelligence" | "wisdom" | "charisma"
+  spellcastingFocus   String? // "arcane" | "druidic" | "holy"
+
+  // --- Relations ---
+  inventory       InventoryItem[]
+  spells          CharacterSpell[]
+  spellSlots      SpellSlot[]
+  features        CharacterFeature[]
+  conditions      CharacterCondition[]
+  notes           CharacterNote[]
+  /// Per-class levels (multiclass). Order matters for HP at creation; legacy chars get one row on first load.
+  classLevels     CharacterClassLevel[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CharacterClassLevel {
+  id             String    @id @default(cuid())
+  characterId    String
+  character      Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  classSlug      String
+  subclassSlug   String?
+  levels         Int       @default(1)
+  hitDiceUsed    Int       @default(0)
+  /// Lower = earlier level-up order (first segment = first character levels).
+  sortOrder      Int       @default(0)
+
+  @@unique([characterId, classSlug])
+  @@index([characterId])
+}
+
+enum Alignment {
+  LAWFUL_GOOD
+  NEUTRAL_GOOD
+  CHAOTIC_GOOD
+  LAWFUL_NEUTRAL
+  TRUE_NEUTRAL
+  CHAOTIC_NEUTRAL
+  LAWFUL_EVIL
+  NEUTRAL_EVIL
+  CHAOTIC_EVIL
+}
+
+model InventoryItem {
+  id          String  @id @default(cuid())
+  characterId String
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  itemSlug    String?  // null = custom item
+  customName  String?
+  quantity    Int     @default(1)
+  equipped    Boolean @default(false)
+  attuned     Boolean @default(false)
+  notes       String  @default("")
+
+  @@index([characterId])
+}
+
+model CharacterSpell {
+  id          String  @id @default(cuid())
+  characterId String
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  spellSlug   String
+  prepared    Boolean @default(false)
+  alwaysPrepared Boolean @default(false) // domain spells, oath spells, etc.
+
+  @@unique([characterId, spellSlug])
+  @@index([characterId])
+}
+
+model SpellSlot {
+  id          String    @id @default(cuid())
+  characterId String
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  level    Int // 1-9
+  total    Int // max slots for this level at current character level
+  used     Int @default(0)
+
+  @@unique([characterId, level])
+  @@index([characterId])
+}
+
+model CharacterFeature {
+  id          String    @id @default(cuid())
+  characterId String
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String
+  source      String  // "class", "race", "background", "feat", "custom"
+  uses        Int?    // null = unlimited or passive
+  usesMax     Int?
+  recharge    String? // "short_rest" | "long_rest" | "dawn" | "custom"
+
+  @@index([characterId])
+}
+
+model CharacterCondition {
+  id          String    @id @default(cuid())
+  characterId String
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  conditionSlug String
+  notes         String @default("")
+
+  @@index([characterId])
+}
+
+model CharacterNote {
+  id          String    @id @default(cuid())
+  characterId String
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  title     String
+  content   String
+  category  String @default("general") // "general" | "quest" | "npc" | "location"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([characterId])
+}
+
+// ============================================================
+// SRD REFERENCE DATA — Seeded once, read-only at runtime
+// ============================================================
+
+model Race {
+  slug            String @id
+  name            String
+  speed           Int
+  size            String // "Small" | "Medium" | "Large"
+  abilityBonuses  Json   // [{ ability: "strength", bonus: 2 }]
+  traits          RaceTrait[]
+  subraces        Subrace[]
+  languages       String[]
+  source          String @default("SRD")
+}
+
+model RaceTrait {
+  id          String @id @default(cuid())
+  raceSlug    String
+  race        Race   @relation(fields: [raceSlug], references: [slug], onDelete: Cascade)
+  name        String
+  description String
+
+  @@index([raceSlug])
+}
+
+model Subrace {
+  slug           String @id
+  raceSlug       String
+  race           Race   @relation(fields: [raceSlug], references: [slug], onDelete: Cascade)
+  name           String
+  abilityBonuses Json   // [{ ability: "intelligence", bonus: 1 }]
+  traits         SubraceTrait[]
+
+  @@index([raceSlug])
+}
+
+model SubraceTrait {
+  id          String  @id @default(cuid())
+  subraceSlug String
+  subrace     Subrace @relation(fields: [subraceSlug], references: [slug], onDelete: Cascade)
+  name        String
+  description String
+
+  @@index([subraceSlug])
+}
+
+model Class {
+  slug                   String @id
+  name                   String
+  hitDie                 Int
+  primaryAbility         String
+  savingThrows           String[]
+  armorProficiencies     String[]
+  weaponProficiencies    String[]
+  toolProficiencies      String[]
+  /// Open5e prose for 1st-level class gear (often lists a/b/c choices).
+  startingEquipment      String @default("")
+  skillChoices           String[] // available skills to choose from
+  skillChoiceCount       Int      // how many to pick
+  spellcastingAbility    String?  // null = non-caster
+  spellcastingType       String?  // "full" | "half" | "third" | "pact"
+  spellSlotsPerLevel     Json     // { 1: [2,0,...], 2: [3,0,...] } indexed by class level
+  cantripsKnown          Json?    // { 1: 3, 2: 3, ... } or null
+  spellsKnown            Json?    // { 1: null, ... } (null = prepared caster)
+  features               ClassFeature[]
+  subclasses             Subclass[]
+  source                 String @default("SRD")
+}
+
+model ClassFeature {
+  id          String @id @default(cuid())
+  classSlug   String
+  class       Class  @relation(fields: [classSlug], references: [slug], onDelete: Cascade)
+  name        String
+  level       Int    // character level when gained
+  description String
+  choices     Json?  // { choose: 1, from: [{...}] } for ASI, spells, etc.
+  usesFormula String? // e.g. "charisma_modifier" for per-day uses
+
+  @@index([classSlug, level])
+}
+
+model Subclass {
+  slug        String @id
+  classSlug   String
+  class       Class  @relation(fields: [classSlug], references: [slug], onDelete: Cascade)
+  name        String
+  features    SubclassFeature[]
+
+  @@index([classSlug])
+}
+
+model SubclassFeature {
+  id           String   @id @default(cuid())
+  subclassSlug String
+  subclass     Subclass @relation(fields: [subclassSlug], references: [slug], onDelete: Cascade)
+  name         String
+  level        Int
+  description  String
+
+  @@index([subclassSlug, level])
+}
+
+model Background {
+  slug             String @id
+  name             String
+  skillProficiencies String[]
+  toolProficiencies  String[]
+  languages          Int    // how many language choices
+  equipment          String
+  feature            Json   // { name, description }
+  suggestedTraits    String[]
+  suggestedIdeals    String[]
+  suggestedBonds     String[]
+  suggestedFlaws     String[]
+  source             String @default("SRD")
+}
+
+model Spell {
+  slug          String @id
+  name          String
+  level         Int    // 0 = cantrip
+  school        String // Evocation, Abjuration, etc.
+  castingTime   String
+  range         String
+  components    Json   // { verbal: bool, somatic: bool, material: bool, materials: string }
+  duration      String
+  concentration Boolean @default(false)
+  ritual        Boolean @default(false)
+  description   String
+  higherLevels  String?  // "At Higher Levels..." text
+  classes       String[] // which classes get this spell
+  source        String @default("SRD")
+
+  @@index([level])
+  @@index([school])
+}
+
+model Item {
+  slug         String @id
+  name         String
+  category     String  // "weapon" | "armor" | "gear" | "tool" | "magic" | "mount" | "vehicle"
+  subcategory  String? // "martial melee" | "simple ranged" | "light armor" | etc.
+  description  String  @default("")
+
+  // Weapon fields (null if not a weapon)
+  damageDice   String? // "1d6", "2d6", etc.
+  damageType   String? // "slashing", "piercing", "bludgeoning"
+  weaponRange  Json?   // { normal: 20, long: 60 } or null for melee
+  properties   String[] // "finesse", "light", "thrown", "two-handed", etc.
+
+  // Armor fields (null if not armor)
+  armorClass   Int?    // base AC
+  stealthDis   Boolean @default(false) // disadvantage on stealth
+  strengthReq  Int?    // minimum strength
+
+  // Both
+  weight       Float?
+  cost         Json?   // { quantity: 10, unit: "gp" }
+  magical      Boolean @default(false)
+  requiresAttunement Boolean @default(false)
+  attunementRequirement String? // "by a wizard", etc.
+
+  source       String @default("SRD")
+
+  @@index([category])
+  @@index([subcategory])
+}
+
+model Feat {
+  slug         String @id
+  name         String
+  prerequisite String?
+  description  String
+  source       String @default("SRD")
+}
+
+model Condition {
+  slug        String @id
+  name        String
+  description String
+}
+
+// ============================================================
+// MONSTERS — Full SRD stat blocks
+// ============================================================
+
+model Monster {
+  slug                String  @id
+  name                String
+  size                String
+  type                String
+  subtype             String?
+  alignment           String
+  armorClass          Int
+  armorDesc           String?
+  hitPoints           Int
+  hitDice             String
+  speed               Json
+  strength            Int
+  dexterity           Int
+  constitution        Int
+  intelligence        Int
+  wisdom              Int
+  charisma            Int
+  strengthSave        Int?
+  dexteritySave       Int?
+  constitutionSave    Int?
+  intelligenceSave    Int?
+  wisdomSave          Int?
+  charismaSave        Int?
+  skills              Json    // { perception: 5, stealth: 3 }
+  damageResistances   String?
+  damageImmunities    String?
+  conditionImmunities String?
+  senses              String
+  languages           String
+  challengeRating     String  // "1/4", "1", "20"
+  xp                  Int
+  specialAbilities    Json?
+  actions             Json
+  reactions           Json?
+  legendaryActions    Json?
+  source              String  @default("SRD")
+
+  @@index([type])
+  @@index([challengeRating])
+}
+
+// ============================================================
+// AI GENERATION JOBS — dungeon/story run in background; client polls
+// ============================================================
+
+model AiGenerationJob {
+  id        String   @id @default(cuid())
+  kind      String // dungeon | story
+  status    String   @default("pending") // pending | running | completed | failed
+  payload   Json
+  result    Json?
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
+// ============================================================
+// DUNGEONS — AI-generated dungeon layouts
+// ============================================================
+
+model Dungeon {
+  id          String        @id @default(cuid())
+  name        String
+  description String
+  theme       String
+  difficulty  String
+  levelMin    Int
+  levelMax    Int
+  story       String
+  npcs        Json
+  aiGenerated Boolean       @default(true)
+  /// Procedural layout RNG seed (unsigned 32-bit); null for AI-only dungeons.
+  mapSeed     Int?
+  rooms       DungeonRoom[]
+  createdAt   DateTime      @default(now())
+}
+
+model DungeonRoom {
+  id          String  @id @default(cuid())
+  dungeonId   String
+  dungeon     Dungeon @relation(fields: [dungeonId], references: [id], onDelete: Cascade)
+  /// Stable id from AI JSON (e.g. room_1) so exits.{n,e,s,w} can reference targets after save.
+  layoutId    String  @default("")
+  name        String
+  /// Shown in player UI / player map instead of `name` when set (avoids spoiling "trap room", etc.).
+  playerLabel String  @default("")
+  /// What the DM reads to players (no trap mechanics, no exact treasure).
+  playerDescription String @default("")
+  /// Full DM notes: tactics, hidden clues, mechanical detail.
+  description String
+  /// DM-only: hidden traps, secret doors, true loot, DCs — not shown in player view.
+  dmSecrets   String @default("")
+  x           Int
+  y           Int
+  width       Int     @default(4)
+  height      Int     @default(4)
+  type        String  // entrance|corridor|chamber|boss|treasure|trap
+  exits       Json    // { north: id|null, south: id|null, east: id|null, west: id|null }
+  monsters    Json    // [{ monsterSlug, count, notes }]
+  traps       Json?
+  treasures   Json?
+  /// Structured DM-only elements: secretDoors, hiddenStashes, pointsOfInterest (see app types).
+  features    Json?
+  notes       String  @default("")
+
+  @@index([dungeonId])
+}
+
+// ============================================================
+// STORIES — AI-generated adventure narratives
+// ============================================================
+
+model Story {
+  id          String   @id @default(cuid())
+  title       String
+  hook        String
+  plot        String
+  climax      String
+  npcs        Json
+  locations   Json
+  levelMin    Int
+  levelMax    Int
+  theme       String
+  ageRating   String   @default("all")   // "all" | "7+" | "10+"
+  dungeonIds  String[]
+  aiGenerated Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}
+
+// ============================================================
+// SESSIONS — Live DM play sessions
+// ============================================================
+
+model Session {
+  id        String             @id @default(cuid())
+  name      String
+  dungeonId String?
+  storyId   String?
+  status    String             @default("setup")
+  notes     String             @default("")
+  characters SessionCharacter[]
+  combats   Combat[]
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+}
+
+model SessionCharacter {
+  id          String  @id @default(cuid())
+  sessionId   String
+  session     Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  characterId String
+  playerName  String  @default("")
+  isActive    Boolean @default(true)
+
+  @@unique([sessionId, characterId])
+  @@index([sessionId])
+}
+
+model Combat {
+  id         String      @id @default(cuid())
+  sessionId  String
+  session    Session     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  name       String      @default("Combat")
+  status     String      @default("active")
+  round      Int         @default(1)
+  combatants Combatant[]
+  createdAt  DateTime    @default(now())
+
+  @@index([sessionId])
+}
+
+model Combatant {
+  id             String  @id @default(cuid())
+  combatId       String
+  combat         Combat  @relation(fields: [combatId], references: [id], onDelete: Cascade)
+  type           String  // "player" | "monster"
+  characterId    String?
+  monsterSlug    String?
+  label          String  // "Goblin 1", "Thorin", etc.
+  initiative     Int     @default(0)
+  currentHp      Int
+  maxHp          Int
+  temporaryHp    Int     @default(0)
+  armorClass     Int     @default(10)
+  conditions     String[]
+  isConcentrating Boolean @default(false)
+  isAlive        Boolean @default(true)
+  notes          String  @default("")
+
+  @@index([combatId])
+}

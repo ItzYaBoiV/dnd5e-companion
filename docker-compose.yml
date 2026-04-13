@@ -1,0 +1,92 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dnd5e_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Use $$ so expansion happens inside the container (matches POSTGRES_* there)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      dnd_internal:
+        # Ensures hostname `postgres` resolves (some stacks only registered container_name).
+        aliases:
+          - postgres
+    # Host-side Prisma / GUI clients (127.0.0.1 only). Change left port if 55432 is in use.
+    ports:
+      - "127.0.0.1:55432:5432"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dnd5e_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # DATABASE_URL is built in docker-entrypoint.sh with URL-encoded password (compose string breaks on @ : # in passwords).
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Default matches container_name, which always resolves on the internal network.
+      POSTGRES_HOST: ${POSTGRES_HOST:-dnd5e_postgres}
+      DATABASE_URL: ${DATABASE_URL:-}
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3001
+      SEED_ON_START: ${SEED_ON_START:-false}
+      AI_BASE_URL: ${AI_BASE_URL:-http://host.docker.internal:4000}
+      AI_MODEL: ${AI_MODEL:-dnd-generator}
+      # Long runs for local LLMs (dungeon JSON); nginx /api + LiteLLM YAML must match or exceed
+      AI_CHAT_TIMEOUT_MS: ${AI_CHAT_TIMEOUT_MS:-1800000}
+      AI_CHAT_STREAM_TIMEOUT_MS: ${AI_CHAT_STREAM_TIMEOUT_MS:-1800000}
+      LITELLM_CONFIG_PATH: /app/litellm-config.yaml
+      # Poll worker IPs; refresh LiteLLM when Ollama model tags change (ms). 0 = off.
+      WORKER_RECONCILE_MS: ${WORKER_RECONCILE_MS:-300000}
+      WORKER_RECONCILE_INITIAL_MS: ${WORKER_RECONCILE_INITIAL_MS:-20000}
+      # Host-visible logs for debugging (see ./logs/HOST_LOGS)
+      FILE_LOG_DIR: /app/logs
+    ports:
+      - "56791:3001"
+    volumes:
+      - ./logs/backend:/app/logs
+      - ./ai-workers/load-balancer/litellm-config.yaml:/app/litellm-config.yaml
+      - ./ai-workers/load-balancer/worker-registry.json:/app/worker-registry.json
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - dnd_internal
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dnd5e_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "56790:4173"
+    networks:
+      - dnd_internal
+
+volumes:
+  postgres_data:
+
+networks:
+  dnd_internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.0.201.0/24

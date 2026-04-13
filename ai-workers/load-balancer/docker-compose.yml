@@ -1,0 +1,23 @@
+services:
+  litellm:
+    # docker.io (not ghcr.io) — use this if ghcr.io DNS fails on your network.
+    image: docker.io/litellm/litellm:latest
+    container_name: dnd5e_litellm
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - litellm_internal
+
+networks:
+  litellm_internal:
+    driver: bridge
+    ipam:
+      config:
+        # Patched by deploy.sh (same discovery as root compose). Default avoids default-address-pool exhaustion.
+        - subnet: 10.0.203.0/24

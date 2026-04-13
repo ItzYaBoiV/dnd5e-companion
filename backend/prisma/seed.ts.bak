@@ -1,0 +1,329 @@
+/**
+ * seedService.ts
+ *
+ * Fetches all D&D 5e SRD data from the Open5e API (open5e.com)
+ * and inserts it into the local PostgreSQL database.
+ *
+ * Run once on first deployment via SEED_ON_START=true.
+ * Safe to re-run — uses upsert to avoid duplicates.
+ */
+
+import { prisma } from "../config/database";
+
+const BASE_URL = "https://api.open5e.com/v2";
+const DELAY_MS = 300; // Be polite to the API
+
+async function fetchAll(endpoint: string): Promise<any[]> {
+  const results: any[] = [];
+  let url: string | null = `${BASE_URL}/${endpoint}/?limit=100&format=json`;
+
+  while (url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
+    const data = await res.json();
+    results.push(...(data.results ?? []));
+    url = data.next ?? null;
+    if (url) await new Promise((r) => setTimeout(r, DELAY_MS));
+  }
+
+  console.log(`  Fetched ${results.length} items from /${endpoint}`);
+  return results;
+}
+
+// ── Slugify helper ────────────────────────────────────────────────
+function slug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+// ── Races ─────────────────────────────────────────────────────────
+async function seedRaces() {
+  console.log("Seeding races...");
+  const races = await fetchAll("races");
+
+  for (const r of races) {
+    const raceSlug = r.key ?? slug(r.name);
+
+    await prisma.race.upsert({
+      where: { slug: raceSlug },
+      create: {
+        slug: raceSlug,
+        name: r.name,
+        speed: r.speed?.walk ?? 30,
+        size: r.size ?? "Medium",
+        abilityBonuses: r.ability_score_bonuses ?? [],
+        languages: r.languages?.map((l: any) => l.name ?? l) ?? [],
+        traits: {
+          create: (r.traits ?? []).map((t: any) => ({
+            name:        t.name,
+            description: t.desc ?? "",
+          })),
+        },
+        subraces: {
+          create: (r.subraces ?? []).map((sub: any) => ({
+            slug: sub.key ?? slug(sub.name),
+            name: sub.name,
+            abilityBonuses: sub.ability_score_bonuses ?? [],
+            traits: {
+              create: (sub.traits ?? []).map((t: any) => ({
+                name:        t.name,
+                description: t.desc ?? "",
+              })),
+            },
+          })),
+        },
+      },
+      update: { name: r.name, speed: r.speed?.walk ?? 30 },
+    });
+  }
+}
+
+// ── Classes ───────────────────────────────────────────────────────
+async function seedClasses() {
+  console.log("Seeding classes...");
+  const classes = await fetchAll("classes");
+
+  for (const c of classes) {
+    const classSlug = c.key ?? slug(c.name);
+
+    await prisma.class.upsert({
+      where: { slug: classSlug },
+      create: {
+        slug:                classSlug,
+        name:                c.name,
+        hitDie:              c.hit_die ?? 8,
+        primaryAbility:      c.primary_ability ?? "",
+        savingThrows:        c.saving_throws?.map((s: any) => s.name ?? s) ?? [],
+        armorProficiencies:  c.prof_armor ?? [],
+        weaponProficiencies: c.prof_weapons ?? [],
+        toolProficiencies:   c.prof_tools ?? [],
+        skillChoices:        c.prof_skills ?? [],
+        skillChoiceCount:    c.prof_skill_num ?? 2,
+        spellcastingAbility: c.spellcasting_ability?.name ?? null,
+        spellcastingType:    c.spellcasting_type ?? null,
+        spellSlotsPerLevel:  c.spell_slots ?? {},
+        cantripsKnown:       c.cantrips_known ?? null,
+        spellsKnown:         c.spells_known ?? null,
+        features: {
+          create: (c.features ?? []).map((f: any) => ({
+            name:        f.name,
+            level:       f.required_level ?? 1,
+            description: f.desc ?? "",
+          })),
+        },
+      },
+      update: { name: c.name },
+    });
+  }
+}
+
+// ── Backgrounds ───────────────────────────────────────────────────
+async function seedBackgrounds() {
+  console.log("Seeding backgrounds...");
+  const backgrounds = await fetchAll("backgrounds");
+
+  for (const b of backgrounds) {
+    const bgSlug = b.key ?? slug(b.name);
+
+    await prisma.background.upsert({
+      where: { slug: bgSlug },
+      create: {
+        slug:              bgSlug,
+        name:              b.name,
+        skillProficiencies: b.skill_proficiencies?.map((s: any) => s.name ?? s) ?? [],
+        toolProficiencies:  b.tool_proficiencies?.map((t: any) => t.name ?? t) ?? [],
+        languages:          b.num_languages ?? 0,
+        equipment:          b.equipment ?? "",
+        feature: {
+          name:        b.feature?.name ?? "Feature",
+          description: b.feature?.desc ?? "",
+        },
+        suggestedTraits: b.personality_traits?.map((t: any) => t.description ?? t) ?? [],
+        suggestedIdeals: b.ideals?.map((i: any) => i.description ?? i) ?? [],
+        suggestedBonds:  b.bonds?.map((b: any) => b.description ?? b) ?? [],
+        suggestedFlaws:  b.flaws?.map((f: any) => f.description ?? f) ?? [],
+      },
+      update: { name: b.name },
+    });
+  }
+}
+
+// ── Spells ────────────────────────────────────────────────────────
+async function seedSpells() {
+  console.log("Seeding spells (this is the largest dataset)...");
+  const spells = await fetchAll("spells");
+
+  // Batch upserts in chunks to avoid overwhelming DB
+  const CHUNK = 50;
+  for (let i = 0; i < spells.length; i += CHUNK) {
+    const chunk = spells.slice(i, i + CHUNK);
+    await Promise.all(
+      chunk.map((s: any) => {
+        const spellSlug = s.key ?? slug(s.name);
+        return prisma.spell.upsert({
+          where: { slug: spellSlug },
+          create: {
+            slug:          spellSlug,
+            name:          s.name,
+            level:         s.spell_level ?? 0,
+            school:        s.school?.name ?? s.school ?? "Unknown",
+            castingTime:   s.casting_time ?? "1 action",
+            range:         s.range ?? "Self",
+            components: {
+              verbal:    s.verbal ?? false,
+              somatic:   s.somatic ?? false,
+              material:  s.material ?? false,
+              materials: s.material_specified ?? "",
+            },
+            duration:      s.duration ?? "Instantaneous",
+            concentration: s.concentration ?? false,
+            ritual:        s.ritual ?? false,
+            description:   s.desc ?? "",
+            higherLevels:  s.higher_level ?? null,
+            classes:       s.classes?.map((c: any) => c.name ? slug(c.name) : c) ?? [],
+          },
+          update: { name: s.name },
+        });
+      })
+    );
+    console.log(`  Spells: ${Math.min(i + CHUNK, spells.length)}/${spells.length}`);
+  }
+}
+
+// ── Items / Equipment ─────────────────────────────────────────────
+async function seedItems() {
+  console.log("Seeding items...");
+
+  const [weapons, armor, gear, magicItems] = await Promise.all([
+    fetchAll("weapons"),
+    fetchAll("armor"),
+    fetchAll("equipment"),
+    fetchAll("magicitems"),
+  ]);
+
+  const allItems = [
+    ...weapons.map((i: any) => ({ ...i, _category: "weapon" })),
+    ...armor.map((i: any) => ({ ...i, _category: "armor" })),
+    ...gear.map((i: any) => ({ ...i, _category: "gear" })),
+    ...magicItems.map((i: any) => ({ ...i, _category: "magic" })),
+  ];
+
+  const CHUNK = 50;
+  for (let i = 0; i < allItems.length; i += CHUNK) {
+    const chunk = allItems.slice(i, i + CHUNK);
+    await Promise.all(
+      chunk.map((item: any) => {
+        const itemSlug = item.key ?? slug(item.name);
+        return prisma.item.upsert({
+          where: { slug: itemSlug },
+          create: {
+            slug:        itemSlug,
+            name:        item.name,
+            category:    item._category,
+            subcategory: item.category ?? item.armor_class?.type ?? null,
+            description: item.desc ?? "",
+            damageDice:  item.damage?.damage_dice ?? null,
+            damageType:  item.damage?.damage_type?.name ?? null,
+            weaponRange: item.range
+              ? { normal: item.range.normal ?? 0, long: item.range.long ?? 0 }
+              : null,
+            properties: item.properties?.map((p: any) => p.name ?? p) ?? [],
+            armorClass:  item.armor_class?.base ?? null,
+            stealthDis:  item.stealth_disadvantage ?? false,
+            strengthReq: item.str_minimum ?? null,
+            weight:      parseFloat(item.weight) || null,
+            cost: item.cost
+              ? { quantity: item.cost.quantity, unit: item.cost.unit }
+              : null,
+            magical:              item._category === "magic",
+            requiresAttunement:   item.requires_attunement === "requires attunement" || false,
+            attunementRequirement: typeof item.requires_attunement === "string" &&
+              item.requires_attunement !== "requires attunement"
+              ? item.requires_attunement : null,
+          },
+          update: { name: item.name },
+        });
+      })
+    );
+  }
+}
+
+// ── Feats ─────────────────────────────────────────────────────────
+async function seedFeats() {
+  console.log("Seeding feats...");
+  const feats = await fetchAll("feats");
+
+  for (const f of feats) {
+    const featSlug = f.key ?? slug(f.name);
+    await prisma.feat.upsert({
+      where: { slug: featSlug },
+      create: {
+        slug:         featSlug,
+        name:         f.name,
+        prerequisite: f.prerequisite ?? null,
+        description:  f.desc ?? "",
+      },
+      update: { name: f.name },
+    });
+  }
+}
+
+// ── Conditions ────────────────────────────────────────────────────
+async function seedConditions() {
+  console.log("Seeding conditions...");
+
+  // Conditions are hardcoded from PHB p.290-292 as Open5e may not have them all
+  const conditions = [
+    { slug: "blinded",       name: "Blinded",       description: "A blinded creature can't see and automatically fails any ability check that requires sight. Attack rolls against the creature have advantage, and the creature's attack rolls have disadvantage." },
+    { slug: "charmed",       name: "Charmed",       description: "A charmed creature can't attack the charmer or target the charmer with harmful abilities or magical effects. The charmer has advantage on any ability check to interact socially with the creature." },
+    { slug: "deafened",      name: "Deafened",      description: "A deafened creature can't hear and automatically fails any ability check that requires hearing." },
+    { slug: "exhaustion",    name: "Exhaustion",    description: "Exhaustion is measured in six levels. Effects are cumulative: 1) Disadvantage on ability checks. 2) Speed halved. 3) Disadvantage on attack rolls and saving throws. 4) Hit point maximum halved. 5) Speed reduced to 0. 6) Death." },
+    { slug: "frightened",    name: "Frightened",    description: "A frightened creature has disadvantage on ability checks and attack rolls while the source of its fear is within line of sight. The creature can't willingly move closer to the source of its fear." },
+    { slug: "grappled",      name: "Grappled",      description: "A grappled creature's speed becomes 0, and it can't benefit from any bonus to its speed. The condition ends if the grappler is incapacitated. The condition also ends if an effect removes the grappled creature from the reach of the grappler." },
+    { slug: "incapacitated", name: "Incapacitated", description: "An incapacitated creature can't take actions or reactions." },
+    { slug: "invisible",     name: "Invisible",     description: "An invisible creature is impossible to see without the aid of magic or a special sense. The creature's location can be detected by noise or tracks. Attack rolls against the creature have disadvantage, and the creature's attack rolls have advantage." },
+    { slug: "paralyzed",     name: "Paralyzed",     description: "A paralyzed creature is incapacitated and can't move or speak. The creature automatically fails Strength and Dexterity saving throws. Attack rolls against the creature have advantage. Any attack that hits the creature is a critical hit if the attacker is within 5 feet." },
+    { slug: "petrified",     name: "Petrified",     description: "A petrified creature is transformed, along with any nonmagical object it is wearing or carrying, into a solid inanimate substance (usually stone). Its weight increases by a factor of ten, and it ceases aging. The creature is incapacitated, can't move or speak, and is unaware of its surroundings. Attack rolls against the creature have advantage. The creature automatically fails Strength and Dexterity saving throws. The creature has resistance to all damage. The creature is immune to poison and disease." },
+    { slug: "poisoned",      name: "Poisoned",      description: "A poisoned creature has disadvantage on attack rolls and ability checks." },
+    { slug: "prone",         name: "Prone",         description: "A prone creature's only movement option is to crawl. Standing up costs half its speed. The creature has disadvantage on attack rolls. Attack rolls against the creature have advantage if the attacker is within 5 feet, otherwise the attack roll has disadvantage." },
+    { slug: "restrained",    name: "Restrained",    description: "A restrained creature's speed becomes 0. Attack rolls against the creature have advantage, and the creature's attack rolls have disadvantage. The creature has disadvantage on Dexterity saving throws." },
+    { slug: "stunned",       name: "Stunned",       description: "A stunned creature is incapacitated, can't move, and can speak only falteringly. The creature automatically fails Strength and Dexterity saving throws. Attack rolls against the creature have advantage." },
+    { slug: "unconscious",   name: "Unconscious",   description: "An unconscious creature is incapacitated, can't move or speak, and is unaware of its surroundings. The creature drops whatever it's holding and falls prone. The creature automatically fails Strength and Dexterity saving throws. Attack rolls against the creature have advantage. Any attack that hits the creature is a critical hit if the attacker is within 5 feet." },
+  ];
+
+  for (const c of conditions) {
+    await prisma.condition.upsert({
+      where:  { slug: c.slug },
+      create: c,
+      update: { name: c.name, description: c.description },
+    });
+  }
+}
+
+// ── Main ──────────────────────────────────────────────────────────
+export async function runSeed() {
+  console.log("Starting D&D 5e SRD data seed...");
+  const start = Date.now();
+
+  try {
+    await seedRaces();
+    await seedClasses();
+    await seedBackgrounds();
+    await seedSpells();
+    await seedItems();
+    await seedFeats();
+    await seedConditions();
+
+    const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+    console.log(`Seed complete in ${elapsed}s`);
+  } catch (err) {
+    console.error("Seed failed:", err);
+    throw err;
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+// Allow running directly: tsx prisma/seed.ts
+if (require.main === module) {
+  runSeed().catch(console.error);
+}

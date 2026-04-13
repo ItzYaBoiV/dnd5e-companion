@@ -1,0 +1,188 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { @apply bg-dnd-darker text-stone-200 font-body; }
+
+  /* Softer tap feedback on touch devices (app-like, avoids default gray flash). */
+  @media (hover: none) and (pointer: coarse) {
+    button,
+    [role="button"],
+    label.cursor-pointer {
+      -webkit-tap-highlight-color: rgba(201, 168, 76, 0.12);
+    }
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { @apply bg-dnd-darker; }
+  ::-webkit-scrollbar-thumb { @apply bg-dnd-border/80 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-stone-600; }
+}
+
+@layer components {
+  .dnd-card {
+    @apply bg-dnd-dark border border-dnd-border/70 rounded-lg p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)];
+  }
+  .dnd-label {
+    @apply text-xs font-display tracking-widest uppercase text-stone-500;
+  }
+  .dnd-value {
+    @apply text-2xl font-bold font-display text-parchment;
+  }
+  .dnd-modifier {
+    @apply text-lg font-bold font-display;
+  }
+  .btn-primary {
+    @apply bg-dnd-red hover:bg-red-900/90 text-parchment font-display font-semibold
+           px-4 py-2.5 rounded transition-colors duration-150
+           min-h-11 inline-flex items-center justify-center gap-2 touch-manipulation active:opacity-90;
+  }
+  .btn-secondary {
+    @apply bg-stone-700 hover:bg-stone-600 text-parchment font-display font-semibold
+           px-4 py-2.5 rounded transition-colors duration-150
+           min-h-11 inline-flex items-center justify-center gap-2 touch-manipulation active:opacity-90;
+  }
+  .btn-ghost {
+    @apply hover:bg-dnd-panel text-stone-300 hover:text-parchment
+           px-3 py-2 rounded transition-colors duration-150
+           min-h-11 min-w-11 inline-flex items-center justify-center gap-1 touch-manipulation active:opacity-90;
+  }
+  .input-field {
+    @apply bg-dnd-panel border border-dnd-border rounded px-3 py-2.5 text-parchment
+           placeholder:text-stone-500 focus:outline-none focus:border-dnd-gold/60 transition-colors
+           min-h-11 touch-manipulation;
+  }
+  .proficiency-dot {
+    @apply w-3 h-3 rounded-full border-2 border-stone-600 flex-shrink-0;
+  }
+  .proficiency-dot.filled {
+    @apply bg-dnd-gold border-dnd-gold;
+  }
+  .expertise-dot {
+    @apply w-3 h-3 rounded-full bg-dnd-gold border-2 border-yellow-300 flex-shrink-0;
+  }
+  .hp-bar {
+    @apply h-3 rounded-full transition-all duration-300;
+  }
+  .spell-level-badge {
+    @apply inline-flex items-center justify-center w-6 h-6 rounded-full
+           text-xs font-bold font-display;
+  }
+
+  /* In-sheet 3D die toss (CharacterSheet app rolls) */
+  @keyframes sheet-die-toss {
+    0% {
+      transform: translate3d(72%, -120%, 0) rotateZ(-14deg) scale(0.55);
+      opacity: 0;
+    }
+    45% {
+      opacity: 1;
+    }
+    68% {
+      transform: translate3d(-6%, 10%, 0) rotateZ(4deg) scale(1.06);
+    }
+    100% {
+      transform: translate3d(0, 0, 0) rotateZ(0deg) scale(1);
+      opacity: 1;
+    }
+  }
+
+  @keyframes sheet-die-tumble {
+    from {
+      transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg);
+    }
+    to {
+      transform: rotateX(360deg) rotateY(540deg) rotateZ(180deg);
+    }
+  }
+
+  @keyframes sheet-die-settle {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    40% {
+      transform: translateY(-5px);
+    }
+  }
+
+  .sheet-die-toss {
+    animation: sheet-die-toss 0.88s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
+  .sheet-die-tumble {
+    animation: sheet-die-tumble 0.42s linear infinite;
+  }
+
+  .sheet-die-settle {
+    animation: sheet-die-settle 0.55s ease-out 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sheet-die-toss,
+    .sheet-die-tumble,
+    .sheet-die-settle {
+      animation: none !important;
+    }
+  }
+
+  /* Full-screen roll overlay: dice arc in from off-screen (BG3-adjacent feel) */
+  @keyframes roll-overlay-dice-throw {
+    0% {
+      transform: translate3d(38vw, -42vh, 0) rotateZ(26deg) rotateX(-12deg) scale(0.42);
+      opacity: 0;
+    }
+    50% {
+      opacity: 1;
+    }
+    68% {
+      transform: translate3d(-3%, 6%, 0) rotateZ(-4deg) rotateX(4deg) scale(1.06);
+    }
+    82% {
+      transform: translate3d(1.5%, -3%, 0) rotateZ(2deg) scale(0.97);
+    }
+    100% {
+      transform: translate3d(0, 0, 0) rotateZ(0deg) rotateX(0deg) scale(1);
+      opacity: 1;
+    }
+  }
+
+  .roll-overlay-dice-throw {
+    animation: roll-overlay-dice-throw 1.12s cubic-bezier(0.18, 0.82, 0.22, 1) forwards;
+  }
+
+  .roll-overlay-dice-throw-delayed {
+    animation: roll-overlay-dice-throw 1.12s cubic-bezier(0.18, 0.82, 0.22, 1) forwards;
+    animation-delay: 0.16s;
+    opacity: 0;
+  }
+
+  @keyframes roll-overlay-total-reveal {
+    from {
+      opacity: 0;
+      transform: translateY(12px) scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  .roll-overlay-total-reveal {
+    animation: roll-overlay-total-reveal 0.55s ease-out forwards;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .roll-overlay-dice-throw,
+    .roll-overlay-dice-throw-delayed,
+    .roll-overlay-total-reveal {
+      animation: none !important;
+      opacity: 1 !important;
+      transform: none !important;
+    }
+  }
+}

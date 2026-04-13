@@ -1,0 +1,28 @@
+# GPU Worker — runs on each Windows/Linux machine with an RTX 3080 Ti
+# The D&D server (192.168.5.7) will send generation requests here.
+#
+# Prerequisites on Linux:
+#   sudo apt install -y nvidia-container-toolkit
+#   sudo nvidia-ctk runtime configure --runtime=docker
+#   sudo systemctl restart docker
+#
+# Prerequisites on Windows:
+#   Docker Desktop with GPU support enabled in Settings → Resources
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: dnd5e_ollama_gpu
+    restart: unless-stopped
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - OLLAMA_HOST=0.0.0.0   # accept connections from 192.168.5.7
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+volumes:
+  ollama_data:
