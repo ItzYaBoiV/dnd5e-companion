@@ -286,24 +286,585 @@ const T={V:0,F:1,W:2,D:3,C:4,SD:5,SU:6,WA:7,P:8,ROAD:9};
 
 function getCR(lv){if(lv<=2)return 1;if(lv<=4)return 3;if(lv<=6)return 5;if(lv<=8)return 7;if(lv<=10)return 9;if(lv<=12)return 11;if(lv<=14)return 13;if(lv<=16)return 15;if(lv<=18)return 17;return 20;}
 
+function clamp(n,min,max){return Math.max(min,Math.min(max,n));}
+
+function findRoomAt(rooms,x,y){
+  return rooms.find(r=>x>=r.x&&x<r.x+r.w&&y>=r.y&&y<r.y+r.h) || null;
+}
+
+function nearestRoom(rooms,x,y){
+  if(!rooms.length) return null;
+  let best=rooms[0], bd=Infinity;
+  for(const r of rooms){
+    const d=Math.abs(r.cx-x)+Math.abs(r.cy-y);
+    if(d<bd){bd=d;best=r;}
+  }
+  return best;
+}
+
+function pickFloorCellInRoom(grid,rm,rng){
+  // For organic rooms (caves) the bounding box may include void tiles.
+  for(let i=0;i<40;i++){
+    const x=rI(rm.x,rm.x+rm.w-1,rng);
+    const y=rI(rm.y,rm.y+rm.h-1,rng);
+    if(grid[y]?.[x]===T.F || grid[y]?.[x]===T.C || grid[y]?.[x]===T.WA) return {x,y};
+  }
+  return {x:Math.floor(rm.x+rm.w/2), y:Math.floor(rm.y+rm.h/2)};
+}
+
+function placeStairsOnGrid({grid,rooms,stairUp,stairDown,stairUpTo,stairDownTo,rng}){
+  if(stairUp){
+    const rm=findRoomAt(rooms,stairUp.x,stairUp.y) || nearestRoom(rooms,stairUp.x,stairUp.y);
+    if(rm){
+      const minX=rm.x+1, maxX=rm.x+rm.w-2;
+      const minY=rm.y+1, maxY=rm.y+rm.h-2;
+      let sx=clamp(stairUp.x, minX, maxX);
+      let sy=clamp(stairUp.y, minY, maxY);
+      if(!(grid[sy]?.[sx]===T.F || grid[sy]?.[sx]===T.C || grid[sy]?.[sx]===T.WA)){
+        const p=pickFloorCellInRoom(grid,rm,rng); sx=p.x; sy=p.y;
+      }
+      grid[sy][sx]=T.SU;
+      rm.stairUpTo=stairUpTo;
+    }
+  }
+  if(stairDown){
+    const rm=findRoomAt(rooms,stairDown.x,stairDown.y) || nearestRoom(rooms,stairDown.x,stairDown.y);
+    if(rm){
+      const minX=rm.x+1, maxX=rm.x+rm.w-2;
+      const minY=rm.y+1, maxY=rm.y+rm.h-2;
+      let sx=clamp(stairDown.x, minX, maxX);
+      let sy=clamp(stairDown.y, minY, maxY);
+      if(!(grid[sy]?.[sx]===T.F || grid[sy]?.[sx]===T.C || grid[sy]?.[sx]===T.WA)){
+        const p=pickFloorCellInRoom(grid,rm,rng); sx=p.x; sy=p.y;
+      }
+      grid[sy][sx]=T.SD;
+      rm.stairDownTo=stairDownTo;
+    }
+  }
+}
+
+function generateTownLayout(cfg,rng){
+  const {width:W,height:H,roomCount}=cfg;
+  const grid=Array.from({length:H},()=>Array(W).fill(T.V));
+  const rooms=[];
+  const ROAD_W=3,BLOCK=14,STRIDE=ROAD_W+BLOCK;
+  const vX=[],hY=[];
+  for(let x=0;x+ROAD_W<=W;x+=STRIDE) vX.push(x);
+  for(let y=0;y+ROAD_W<=H;y+=STRIDE) hY.push(y);
+  for(const rx of vX) for(let y=0;y<H;y++) for(let d=0;d<ROAD_W;d++) grid[y][rx+d]=T.ROAD;
+  for(const ry of hY) for(let x=0;x<W;x++) for(let d=0;d<ROAD_W;d++) grid[ry+d][x]=T.ROAD;
+
+  const blocks=[];
+  const cxIdx=(vX.length-1)/2, cyIdx=(hY.length-1)/2;
+  for(let ci=0;ci<vX.length-1;ci++){
+    for(let ri=0;ri<hY.length-1;ri++){
+      const bx=vX[ci]+ROAD_W, by=hY[ri]+ROAD_W;
+      const bw=(vX[ci+1]??W)-bx, bh=(hY[ri+1]??H)-by;
+      if(bw<5||bh<5) continue;
+      const rx=bx+1, ry=by+1, rw=bw-2, rh=bh-2;
+      if(rw<3||rh<3) continue;
+      const dist=Math.abs(ci-cxIdx)+Math.abs(ri-cyIdx);
+      blocks.push({rx,ry,rw,rh,dist});
+    }
+  }
+  blocks.sort((a,b)=>a.dist-b.dist);
+
+  const typeQ=['Well Square','Tavern','Blacksmith','Market','Temple','Town Hall','Stable','Inn','Apothecary','General Store','Barracks','Library','Bakery','Guard Tower','House'];
+  const chosen=blocks.slice(0,Math.max(1,roomCount));
+  for(let i=0;i<chosen.length;i++){
+    const b=chosen[i];
+    const roomType=typeQ[i]||'House';
+    const label=roomType==='Tavern'?genTavernName(rng):roomType;
+    rooms.push({id:rooms.length+1,x:b.rx,y:b.ry,w:b.rw,h:b.rh,cx:Math.floor(b.rx+b.rw/2),cy:Math.floor(b.ry+b.rh/2),type:roomType,label});
+    for(let y=b.ry;y<b.ry+b.rh;y++) for(let x=b.rx;x<b.rx+b.rw;x++) grid[y][x]=T.F;
+    // Ring walls around building interior.
+    for(let y=b.ry-1;y<=b.ry+b.rh;y++){
+      for(let x=b.rx-1;x<=b.rx+b.rw;x++){
+        if(y>=0&&y<H&&x>=0&&x<W && grid[y][x]===T.V) grid[y][x]=T.W;
+      }
+    }
+    const mx=b.rx+Math.floor(b.rw/2), my=b.ry+Math.floor(b.rh/2);
+    if(grid[b.ry-1]?.[mx]===T.ROAD) grid[b.ry-1][mx]=T.D;
+    if(grid[b.ry+b.rh]?.[mx]===T.ROAD) grid[b.ry+b.rh][mx]=T.D;
+    if(grid[my]?.[b.rx-1]===T.ROAD) grid[my][b.rx-1]=T.D;
+    if(grid[my]?.[b.rx+b.rw]===T.ROAD) grid[my][b.rx+b.rw]=T.D;
+  }
+  return {grid,rooms};
+}
+
+function placeOrganicRoom(grid,cx,cy,minR,maxR,W,H,rng){
+  const cells=[];
+  const bf=Math.ceil(maxR)+2;
+  for(let dy=-bf;dy<=bf;dy++){
+    for(let dx=-bf;dx<=bf;dx++){
+      const nx=cx+dx, ny=cy+dy;
+      if(nx<=1||nx>=W-2||ny<=1||ny>=H-2) continue;
+      const d=Math.sqrt(dx*dx+dy*dy);
+      const wobble=(rng()-0.5)*1.8;
+      const thresh=minR+rng()*(maxR-minR)+wobble;
+      if(d<=thresh){
+        if(grid[ny][nx]!==T.F){
+          grid[ny][nx]=T.F;
+          cells.push({x:nx,y:ny});
+        }
+      }
+    }
+  }
+  if(!cells.length) return null;
+  const xs=cells.map(c=>c.x), ys=cells.map(c=>c.y);
+  const x=Math.min(...xs), y=Math.min(...ys);
+  const w=Math.max(...xs)-x+1, h=Math.max(...ys)-y+1;
+  return {x,y,w,h,cx,cy};
+}
+
+function placeWaterBlob(grid,cx,cy,rng){
+  const radius=rI(2,4,rng);
+  const bf=radius+3;
+  const H=grid.length, W=grid[0].length;
+  for(let dy=-bf;dy<=bf;dy++){
+    for(let dx=-bf;dx<=bf;dx++){
+      const nx=cx+dx, ny=cy+dy;
+      if(ny<1||ny>=H-1||nx<1||nx>=W-1) continue;
+      const d=Math.sqrt(dx*dx+dy*dy);
+      const thresh=radius+(rng()-0.5)*1.2;
+      if(d<=thresh && grid[ny][nx]===T.F) grid[ny][nx]=T.WA;
+    }
+  }
+}
+
+function carveWindingCorridor(grid,a,b,W,H,rng,widthTiles){
+  let x=a.cx,y=a.cy;
+  const tx=b.cx, ty=b.cy;
+  const maxSteps=W*H;
+  const rad=Math.max(0,Math.floor(widthTiles-1)); // width=2 => rad=1 => 3x3 brush
+  for(let steps=0;steps<maxSteps;steps++){
+    const dx=tx-x, dy=ty-y;
+    if(Math.abs(dx)+Math.abs(dy)<=1) break;
+    const preferX=Math.abs(dx)>=Math.abs(dy);
+    let sx=0, sy=0;
+    if(preferX){
+      sx=dx===0?0:(dx>0?1:-1);
+      sy=rng()<0.25 ? (dy>0?1:-1) : 0;
+    }else{
+      sy=dy===0?0:(dy>0?1:-1);
+      sx=rng()<0.25 ? (dx>0?1:-1) : 0;
+    }
+    x=clamp(x+sx,1,W-2); y=clamp(y+sy,1,H-2);
+    for(let oy=-rad;oy<=rad;oy++){
+      for(let ox=-rad;ox<=rad;ox++){
+        const nx=x+ox, ny=y+oy;
+        if(ny<0||ny>=H||nx<0||nx>=W) continue;
+        const t=grid[ny][nx];
+        if(t===T.V || t===T.W || t===T.F) grid[ny][nx]=T.C;
+      }
+    }
+  }
+}
+
+function generateCaveLayout(cfg,rng){
+  const {width:W,height:H,roomCount,locationType}=cfg;
+  const grid=Array.from({length:H},()=>Array(W).fill(T.V));
+  const rooms=[];
+  const centers=[];
+  const minR=3,maxR=7;
+
+  let att=0;
+  while(rooms.length<roomCount && att<roomCount*200){
+    att++;
+    const cx=rI(4,W-5,rng), cy=rI(4,H-5,rng);
+    let ok=true;
+    for(const c of centers){
+      const d=Math.abs(c.x-cx)+Math.abs(c.y-cy);
+      if(d<minR*2){ok=false;break;}
+    }
+    if(!ok) continue;
+    const rm=placeOrganicRoom(grid,cx,cy,minR,maxR,W,H,rng);
+    if(!rm) continue;
+    const roomType=pickRoomType(LOCATIONS.cave,locationType,rng);
+    rooms.push({id:rooms.length+1,x:rm.x,y:rm.y,w:rm.w,h:rm.h,cx:rm.cx,cy:rm.cy,type:roomType,label:roomType});
+    centers.push({x:cx,y:cy});
+    if(roomType==="Underground Lake" || roomType==="Crystal Chamber") placeWaterBlob(grid,cx,cy,rng);
+  }
+
+  if(!useCustomLayout&&rooms.length>1){
+    const conn=new Set([0]);const unconn=new Set(rooms.map((_,i)=>i).filter(i=>i>0));
+    while(unconn.size>0){
+      let bd=Infinity,ba=-1,bb=-1;
+      for(const a of conn)for(const b of unconn){
+        const d=Math.abs(rooms[a].cx-rooms[b].cx)+Math.abs(rooms[a].cy-rooms[b].cy);
+        if(d<bd){bd=d;ba=a;bb=b;}
+      }
+      if(ba<0) break;
+      carveWindingCorridor(grid,rooms[ba],rooms[bb],W,H,rng,2);
+      conn.add(bb);unconn.delete(bb);
+    }
+  }
+
+  // Ring floors so void becomes walls.
+  for(let y=0;y<H;y++){
+    for(let x=0;x<W;x++){
+      const t=grid[y][x];
+      if(t!==T.F && t!==T.C && t!==T.WA) continue;
+      for(const[dy,dx] of [[-1,0],[1,0],[0,-1],[0,1]]){
+        const ny=y+dy,nx=x+dx;
+        if(ny>=0&&ny<H&&nx>=0&&nx<W && grid[ny][nx]===T.V) grid[ny][nx]=T.W;
+      }
+    }
+  }
+  return {grid,rooms};
+}
+
+function generateGraveyardLayout(cfg,rng){
+  const {width:W,height:H,roomCount,locationType}=cfg;
+  const grid=Array.from({length:H},()=>Array(W).fill(T.V));
+  const rooms=[];
+  // Open yard (interior floor), fenced borders.
+  for(let y=0;y<H;y++){
+    for(let x=0;x<W;x++){
+      if(x===0||x===W-1||y===0||y===H-1) grid[y][x]=T.W;
+      else grid[y][x]=T.F;
+    }
+  }
+  // Entrance gate (2 tiles) on south perimeter wall.
+  const gcx=Math.floor(W/2);
+  grid[H-1][gcx]=T.D;
+  if(gcx+1<W) grid[H-1][gcx+1]=T.D;
+
+  const mausMinR=7, mausMaxR=12;
+  const mausMinH=5, mausMaxH=9;
+  let att=0;
+  while(rooms.length<roomCount && att<roomCount*140){
+    att++;
+    const rw=rI(mausMinR,mausMaxR,rng);
+    const rh=rI(mausMinH,mausMaxH,rng);
+    const rx=rI(2,W-rw-3,rng), ry=rI(2,H-rh-3,rng);
+    let overlap=false;
+    for(const r of rooms){
+      if(rx<r.x+r.w+2&&rx+rw+2>r.x&&ry<r.y+r.h+2&&ry+rh+2>r.y){overlap=true;break;}
+    }
+    if(overlap) continue;
+
+    const roomType=pickRoomType(LOCATIONS.graveyard,locationType,rng);
+    const room={id:rooms.length+1,x:rx,y:ry,w:rw,h:rh,cx:Math.floor(rx+rw/2),cy:Math.floor(ry+rh/2),type:roomType,label:roomType};
+    rooms.push(room);
+
+    // Ring mausoleum walls around interior.
+    for(let y=ry;y<ry+rh;y++) for(let x=rx;x<rx+rw;x++) grid[y][x]=T.F;
+    for(let y=ry-1;y<=ry+rh;y++){
+      for(let x=rx-1;x<=rx+rw;x++){
+        if(y>=0&&y<H&&x>=0&&x<W && grid[y][x]===T.F) grid[y][x]=T.W;
+      }
+    }
+    // Restore interior after ring.
+    for(let y=ry;y<ry+rh;y++) for(let x=rx;x<rx+rw;x++) grid[y][x]=T.F;
+
+    // Door on one wall side, facing the yard.
+    const sides=["N","S","W","E"];
+    const s=pick(sides,rng);
+    const dX=rx+Math.floor(rw/2), dY=ry+Math.floor(rh/2);
+    if(s==="N" && grid[ry-1]?.[dX]===T.W) grid[ry-1][dX]=T.D;
+    if(s==="S" && grid[ry+rh]?.[dX]===T.W) grid[ry+rh][dX]=T.D;
+    if(s==="W" && grid[dY]?.[rx-1]===T.W) grid[dY][rx-1]=T.D;
+    if(s==="E" && grid[dY]?.[rx+rw]===T.W) grid[dY][rx+rw]=T.D;
+  }
+
+  // Carve T.C paths from mausoleum doors to the gate.
+  const isWallDoor=(x,y)=>grid[y]?.[x]===T.D;
+  const gatePt={cx:gcx,cy:H-2};
+  for(const rm of rooms){
+    let doorPos=null;
+    // Scan edge ring for door.
+    for(let x=rm.x;x<rm.x+rm.w && !doorPos;x++){
+      if(isWallDoor(x,rm.y-1)) doorPos={x,y:rm.y-1};
+      if(isWallDoor(x,rm.y+rm.h)) doorPos={x,y:rm.y+rm.h};
+    }
+    for(let y=rm.y;y<rm.y+rm.h && !doorPos;y++){
+      if(isWallDoor(rm.x-1,y)) doorPos={x:rm.x-1,y};
+      if(isWallDoor(rm.x+rm.w,y)) doorPos={x:rm.x+rm.w,y};
+    }
+    if(!doorPos) continue;
+    carvePath(grid,{cx:doorPos.x,cy:doorPos.y},gatePt,W,H,rng,false);
+  }
+
+  return {grid,rooms};
+}
+
+function generateCastleLayout(cfg,rng){
+  const {width:W,height:H,roomCount}=cfg;
+  const grid=Array.from({length:H},()=>Array(W).fill(T.V));
+  const rooms=[];
+  const WALL=3;
+  // Outer thick wall; inner courtyard.
+  for(let y=0;y<H;y++){
+    for(let x=0;x<W;x++){
+      if(x<WALL||x>=W-WALL||y<WALL||y>=H-WALL) grid[y][x]=T.W;
+      else grid[y][x]=T.F;
+    }
+  }
+  // South gate opening (5 tiles).
+  const gX=Math.floor(W/2)-2;
+  for(let dx=0;dx<5;dx++){
+    for(let dy=0;dy<WALL;dy++){
+      const yy=H-WALL+dy;
+      grid[yy][gX+dx]=T.D;
+    }
+  }
+
+  const addRoom=(rx,ry,rw,rh,type,label)=>{
+    for(let y=ry;y<ry+rh;y++) for(let x=rx;x<rx+rw;x++) grid[y][x]=T.F;
+    for(let y=ry-1;y<=ry+rh;y++){
+      for(let x=rx-1;x<=rx+rw;x++){
+        if(y>=0&&y<H&&x>=0&&x<W) grid[y][x]=T.W;
+      }
+    }
+    // Restore interior.
+    for(let y=ry;y<ry+rh;y++) for(let x=rx;x<rx+rw;x++) grid[y][x]=T.F;
+    rooms.push({id:rooms.length+1,x:rx,y:ry,w:rw,h:rh,cx:Math.floor(rx+rw/2),cy:Math.floor(ry+rh/2),type,label:label||type});
+  };
+
+  // Corner towers.
+  addRoom(WALL,WALL,5,5,'Tower Room','NW Tower');
+  addRoom(W-WALL-5,WALL,5,5,'Tower Room','NE Tower');
+  addRoom(WALL,H-WALL-5,5,5,'Tower Room','SW Tower');
+  addRoom(W-WALL-5,H-WALL-5,5,5,'Tower Room','SE Tower');
+
+  // Gatehouse.
+  addRoom(Math.floor(W/2)-4,H-WALL-7,9,6,'Guard Room','Gatehouse');
+  // Keep.
+  addRoom(Math.floor(W/2)-7,Math.floor(H/2)-5,14,10,'Throne Room','The Keep');
+
+  // Side rooms in wings.
+  const sideTypes=['Armory','Chapel','Kitchen','Barracks','Library','War Room','Servant Quarters','Gallery','Vault'];
+  let placed=rooms.length;
+  let att=0;
+  while(placed<Math.max(roomCount,rooms.length) && att<roomCount*180){
+    att++;
+    const wing=rng()<0.5?'L':'R';
+    const rw=rI(6,10,rng), rh=rI(5,8,rng);
+    const rx=wing==='L'
+      ? rI(WALL+1,Math.floor(W/2)-rw-2,rng)
+      : rI(Math.floor(W/2)+2,W-WALL-rw-1,rng);
+    const ry=rI(WALL+1,H-WALL-rh-3,rng);
+    let overlap=false;
+    for(const r of rooms){
+      if(rx<r.x+r.w+2&&rx+rw+2>r.x&&ry<r.y+r.h+2&&ry+rh+2>r.y){overlap=true;break;}
+    }
+    if(overlap) continue;
+    const type=pick(sideTypes,rng);
+    addRoom(rx,ry,rw,rh,type,type);
+    placed++;
+  }
+
+  // Connect rooms with corridors.
+  if(!useCustomLayout&&rooms.length>1){
+    const conn=new Set([0]);const unconn=new Set(rooms.map((_,i)=>i).filter(i=>i>0));
+    while(unconn.size>0){
+      let bd=Infinity,ba=-1,bb=-1;
+      for(const a of conn)for(const b of unconn){
+        const d=Math.abs(rooms[a].cx-rooms[b].cx)+Math.abs(rooms[a].cy-rooms[b].cy);
+        if(d<bd){bd=d;ba=a;bb=b;}
+      }
+      if(ba<0) break;
+      carvePath(grid,rooms[ba],rooms[bb],W,H,rng,false);
+      conn.add(bb);unconn.delete(bb);
+    }
+  }
+
+  return {grid,rooms};
+}
+
+function generateSewerLayout(cfg,rng){
+  const {width:W,height:H,roomCount,locationType}=cfg;
+  const grid=Array.from({length:H},()=>Array(W).fill(T.V));
+  const rooms=[];
+  const hTrunks=[Math.floor(H/3),Math.floor(2*H/3)];
+  const vTrunks=[Math.floor(W/4),Math.floor(W/2),Math.floor(3*W/4)];
+
+  // Trunks: top walkway (F), center channel (WA), bottom walkway (F).
+  for(const ty of hTrunks){
+    for(let x=2;x<W-2;x++){
+      grid[ty-1][x]=T.F;
+      grid[ty][x]=T.WA;
+      grid[ty+1][x]=T.F;
+    }
+  }
+  for(const tx of vTrunks){
+    for(let y=2;y<H-2;y++){
+      grid[y][tx-1]=T.F;
+      grid[y][tx]=T.WA;
+      grid[y][tx+1]=T.F;
+    }
+  }
+
+  // Junction rooms 8x8 at intersections (use floor, not water in center).
+  const junctions=[];
+  for(const ty of hTrunks) for(const tx of vTrunks) junctions.push({tx,ty});
+  junctions.sort((a,b)=>Math.abs(a.tx-W/2)+Math.abs(a.ty-H/2)- (Math.abs(b.tx-W/2)+Math.abs(b.ty-H/2)));
+  const maxJ=Math.min(roomCount, junctions.length);
+  for(let i=0;i<maxJ;i++){
+    const {tx,ty}=junctions[i];
+    const rx=tx-4, ry=ty-4;
+    if(rx<1||ry<1||rx+8>=W-1||ry+8>=H-1) continue;
+    for(let y=ry;y<ry+8;y++) for(let x=rx;x<rx+8;x++) grid[y][x]=T.F;
+    rooms.push({id:rooms.length+1,x:rx,y:ry,w:8,h:8,cx:tx,cy:ty,type:'Junction',label:'Junction'});
+  }
+
+  // Side rooms.
+  const sideTypes=['Cistern','Rat Nest','Smuggler Den','Overflow','Drain Room','Fungal Chamber'];
+  let att=0;
+  while(rooms.length<roomCount && att<roomCount*220){
+    att++;
+    const isH=rng()<0.5;
+    const roomType=sideTypes[rooms.length%sideTypes.length];
+    const rw=8,rh=6;
+    if(isH){
+      const ty=pick(hTrunks,rng);
+      const y=ty + (rng()<0.5 ? -rh-2 : 2);
+      const x=rI(2,W-rw-3,rng);
+      let overlap=false;
+      for(const r of rooms){
+        if(x<r.x+r.w+2&&x+rw+2>r.x&&y<r.y+r.h+2&&y+rh+2>r.y){overlap=true;break;}
+      }
+      if(overlap||y<1||y+rh>=H-1||x<1||x+rw>=W-1) continue;
+      for(let yy=y;yy<y+rh;yy++) for(let xx=x;xx<x+rw;xx++) grid[yy][xx]=T.F;
+      rooms.push({id:rooms.length+1,x,y,w:rw,h:rh,cx:x+Math.floor(rw/2),cy:y+Math.floor(rh/2),type:roomType,label:roomType});
+    }else{
+      const tx=pick(vTrunks,rng);
+      const x=tx + (rng()<0.5 ? -rw-2 : 2);
+      const y=rI(2,H-rh-3,rng);
+      let overlap=false;
+      for(const r of rooms){
+        if(x<r.x+r.w+2&&x+rw+2>r.x&&y<r.y+r.h+2&&y+rh+2>r.y){overlap=true;break;}
+      }
+      if(overlap||x<1||x+rw>=W-1||y<1||y+rh>=H-1) continue;
+      for(let yy=y;yy<y+rh;yy++) for(let xx=x;xx<x+rw;xx++) grid[yy][xx]=T.F;
+      rooms.push({id:rooms.length+1,x,y,w:rw,h:rh,cx:x+Math.floor(rw/2),cy:y+Math.floor(rh/2),type:roomType,label:roomType});
+    }
+  }
+
+  // Wall all void tiles adjacent to floor or water.
+  for(let y=1;y<H-1;y++){
+    for(let x=1;x<W-1;x++){
+      if(grid[y][x]!==T.V) continue;
+      for(const[dy,dx] of [[-1,0],[1,0],[0,-1],[0,1]]){
+        const t=grid[y+dy][x+dx];
+        if(t===T.F || t===T.WA){grid[y][x]=T.W;break;}
+      }
+    }
+  }
+
+  return {grid,rooms};
+}
+
+function generateSwampLayout(cfg,rng){
+  const {width:W,height:H,roomCount,locationType}=cfg;
+  const grid=Array.from({length:H},()=>Array(W).fill(T.WA));
+  const rooms=[];
+
+  let att=0;
+  while(rooms.length<roomCount && att<roomCount*200){
+    att++;
+    const rw=rI(5,11,rng), rh=rI(4,8,rng);
+    const rx=rI(2,W-rw-3,rng), ry=rI(2,H-rh-3,rng);
+    let overlap=false;
+    for(const r of rooms){
+      if(rx<r.x+r.w+2&&rx+rw+2>r.x&&ry<r.y+r.h+2&&ry+rh+2>r.y){overlap=true;break;}
+    }
+    if(overlap) continue;
+
+    for(let y=ry;y<ry+rh;y++) for(let x=rx;x<rx+rw;x++) grid[y][x]=T.F;
+    // Shoreline reeds: water => wall around island.
+    for(let y=ry-1;y<=ry+rh;y++){
+      for(let x=rx-1;x<=rx+rw;x++){
+        if(y>=0&&y<H&&x>=0&&x<W && grid[y][x]===T.WA) grid[y][x]=T.W;
+      }
+    }
+    // Ensure interior is floor.
+    for(let y=ry;y<ry+rh;y++) for(let x=rx;x<rx+rw;x++) grid[y][x]=T.F;
+
+    const roomType=pickRoomType(LOCATIONS.swamp,locationType,rng);
+    rooms.push({id:rooms.length+1,x:rx,y:ry,w:rw,h:rh,cx:Math.floor(rx+rw/2),cy:Math.floor(ry+rh/2),type:roomType,label:roomType});
+
+    // Water pools inside larger islands.
+    if(rw*rh>35 && rng()<0.8){
+      const poolW=rng()<0.5?2:3, poolH=2;
+      const px=rx+1+rI(0,Math.max(0,rw-poolW-2),rng);
+      const py=ry+1+rI(0,Math.max(0,rh-poolH-2),rng);
+      for(let y=py;y<py+poolH;y++) for(let x=px;x<px+poolW;x++) grid[y][x]=T.WA;
+    }
+  }
+
+  // Bridges: carve T.F paths through water.
+  const carveBridge=(a,b)=>{
+    let x=a.cx,y=a.cy;
+    const tx=b.cx,ty=b.cy;
+    const maxSteps=W*H;
+    for(let steps=0;steps<maxSteps;steps++){
+      const dx=tx-x, dy=ty-y;
+      if(Math.abs(dx)+Math.abs(dy)<=1) break;
+      const preferX=Math.abs(dx)>=Math.abs(dy);
+      let nx=x, ny=y;
+      if(preferX) nx=x + (dx>0?1:-1);
+      else ny=y + (dy>0?1:-1);
+      if(rng()<0.2){ // detour
+        if(preferX) ny=y + (rng()<0.5?(dy>0?1:-1):0);
+        else nx=x + (rng()<0.5?(dx>0?1:-1):0);
+      }
+      x=clamp(nx,1,W-2); y=clamp(ny,1,H-2);
+      if(grid[y][x]===T.WA) grid[y][x]=T.F;
+      // Surround bridge tile with shoreline walls where adjacent is water.
+      for(const[dy2,dx2] of [[-1,0],[1,0],[0,-1],[0,1]]){
+        const ay=y+dy2, ax=x+dx2;
+        if(ay>=0&&ay<H&&ax>=0&&ax<W && grid[ay][ax]===T.WA) grid[ay][ax]=T.W;
+      }
+    }
+  };
+
+  if(rooms.length>1){
+    const conn=new Set([0]);const unconn=new Set(rooms.map((_,i)=>i).filter(i=>i>0));
+    while(unconn.size>0){
+      let bd=Infinity,ba=-1,bb=-1;
+      for(const a of conn)for(const b of unconn){
+        const d=Math.abs(rooms[a].cx-rooms[b].cx)+Math.abs(rooms[a].cy-rooms[b].cy);
+        if(d<bd){bd=d;ba=a;bb=b;}
+      }
+      if(ba<0) break;
+      carveBridge(rooms[ba],rooms[bb]);
+      conn.add(bb);unconn.delete(bb);
+    }
+  }
+
+  return {grid,rooms};
+}
+
 // ── Generation ───────────────────────────────────────────────────────
 function generateMap(cfg) {
-  const {width:W,height:H,roomCount,depth,level,trapsOn,itemsOn,monstersOn,rng,locationType}=cfg;
+  const {width:W,height:H,roomCount,depth,level,trapsOn,itemsOn,monstersOn,rng,locationType,stairDown,stairUp,stairDownTo,stairUpTo}=cfg;
   const loc=LOCATIONS[locationType];
-  const grid=Array.from({length:H},()=>Array(W).fill(T.V));
-  const rooms=[];const entities=[];const decoOverlay=[];
+  let grid=Array.from({length:H},()=>Array(W).fill(T.V));
+  let rooms=[];const entities=[];const decoOverlay=[];
   const mapName=loc.genName?loc.genName(rng):null;
   const tavernName=loc.usesRoads?genTavernName(rng):null;
 
-  let att=0;
-  while(rooms.length<roomCount&&att<roomCount*100){
-    att++;
-    const rw=rI(5,Math.min(14,Math.floor(W/3)),rng);
-    const rh=rI(5,Math.min(12,Math.floor(H/3)),rng);
-    const rx=rI(1,W-rw-1,rng), ry=rI(1,H-rh-1,rng);
-    let overlap=false;
-    for(const r of rooms){if(rx<r.x+r.w+2&&rx+rw+2>r.x&&ry<r.y+r.h+2&&ry+rh+2>r.y){overlap=true;break;}}
-    if(overlap)continue;
+  const useCustomLayout=(locationType==="town"||locationType==="cave"||locationType==="graveyard"||locationType==="castle"||locationType==="sewer"||locationType==="swamp");
+  if(useCustomLayout){
+    if(locationType==="town") ({grid,rooms}=generateTownLayout(cfg,rng));
+    else if(locationType==="cave") ({grid,rooms}=generateCaveLayout(cfg,rng));
+    else if(locationType==="graveyard") ({grid,rooms}=generateGraveyardLayout(cfg,rng));
+    else if(locationType==="castle") ({grid,rooms}=generateCastleLayout(cfg,rng));
+    else if(locationType==="sewer") ({grid,rooms}=generateSewerLayout(cfg,rng));
+    else if(locationType==="swamp") ({grid,rooms}=generateSwampLayout(cfg,rng));
+  }
+  if(!useCustomLayout){
+    let att=0;
+    while(rooms.length<roomCount&&att<roomCount*100){
+      att++;
+      const rw=rI(5,Math.min(14,Math.floor(W/3)),rng);
+      const rh=rI(5,Math.min(12,Math.floor(H/3)),rng);
+      const rx=rI(1,W-rw-1,rng), ry=rI(1,H-rh-1,rng);
+      let overlap=false;
+      for(const r of rooms){if(rx<r.x+r.w+2&&rx+rw+2>r.x&&ry<r.y+r.h+2&&ry+rh+2>r.y){overlap=true;break;}}
+      if(overlap)continue;
 
     let roomType=pickRoomType(loc,locationType,rng);
     if(loc.usesRoads&&rooms.length===0) roomType="Well Square";
@@ -314,6 +875,7 @@ function generateMap(cfg) {
     for(let y=ry;y<ry+rh;y++)for(let x=rx;x<rx+rw;x++) grid[y][x]=T.F;
     for(let y=ry-1;y<=ry+rh;y++)for(let x=rx-1;x<=rx+rw;x++)
       if(y>=0&&y<H&&x>=0&&x<W&&grid[y][x]===T.V) grid[y][x]=T.W;
+    }
   }
 
   if(rooms.length>1){
@@ -331,7 +893,7 @@ function generateMap(cfg) {
     }
   }
 
-  if(!loc.usesRoads){
+  if(!useCustomLayout&&!loc.usesRoads){
     for(const room of rooms){
       const edges=[];
       for(let x=room.x;x<room.x+room.w;x++){edges.push({x,y:room.y-1});edges.push({x,y:room.y+room.h});}
@@ -341,61 +903,108 @@ function generateMap(cfg) {
     }
   }
 
-  if(rooms.length>=2){
-    const en=rooms[0];
-    const ex2=rI(en.x+1,en.x+en.w-2,rng),ey2=rI(en.y+1,en.y+en.h-2,rng);
-    if(grid[ey2][ex2]===T.F) grid[ey2][ex2]=T.SU;
-    if(depth>1&&rooms.length>=2){
-      const ex=rooms[rooms.length-1];
-      const sx=rI(ex.x+1,ex.x+ex.w-2,rng),sy=rI(ex.y+1,ex.y+ex.h-2,rng);
-      if(grid[sy][sx]===T.F) grid[sy][sx]=T.SD;
-    }
-  }
+  // Place stairs (MF1) using pre-computed anchors.
+  placeStairsOnGrid({grid,rooms,stairUp,stairDown,stairUpTo,stairDownTo,rng});
 
-  // Place decorations
+  // Place decorations (optional)
   const usedCells=new Set();
-  for(const room of rooms){
-    let decoPool=loc.decos[room.type]||loc.decos[loc.rooms[0]]||["rubble","barrel","crate"];
-    if(locationType==="dungeon"||locationType==="graveyard"||locationType==="sewer"){
-      decoPool=[...decoPool,"bones","skull","blood_sm","deadbody","corpse_beast","splatter","bone_heap","web","rubble"];
-    }
-    if(locationType==="swamp")decoPool=[...decoPool,"deadbody","bones","mushroom","vine","swamp_pool","blood_sm"];
-    if(locationType==="temple")decoPool=[...decoPool,"bones","coffin","statue","blood_sm","altar"];
-    const numDecos=rI(4,Math.min(14,Math.floor((room.w*room.h)/6)+6),rng);
-    const chosen=[];for(let i=0;i<numDecos;i++) chosen.push(pick(decoPool,rng));
+  if(cfg.showDecos){
+    for(const room of rooms){
+      let decoPool=loc.decos[room.type]||loc.decos[loc.rooms[0]]||["rubble","barrel","crate"];
+      if(locationType==="dungeon"||locationType==="graveyard"||locationType==="sewer"){
+        decoPool=[...decoPool,"bones","skull","blood_sm","deadbody","corpse_beast","splatter","bone_heap","web","rubble"];
+      }
+      if(locationType==="swamp")decoPool=[...decoPool,"deadbody","bones","mushroom","vine","swamp_pool","blood_sm"];
+      if(locationType==="temple")decoPool=[...decoPool,"bones","coffin","statue","blood_sm","altar"];
+      const numDecos=rI(1,Math.min(5,Math.floor((room.w*room.h)/14)+2),rng);
+      const chosen=[];for(let i=0;i<numDecos;i++) chosen.push(pick(decoPool,rng));
 
-    for(const decoKey of chosen){
-      const stamp=S_[decoKey];if(!stamp)continue;
-      const sw=Math.max(...stamp.rows.map(r=>r.length));
-      const sh=stamp.rows.length;
-      if(sw+2>room.w||sh+2>room.h)continue;
+      for(const decoKey of chosen){
+        const stamp=S_[decoKey];if(!stamp)continue;
+        const sw=Math.max(...stamp.rows.map(r=>r.length));
+        const sh=stamp.rows.length;
+        if(sw+2>room.w||sh+2>room.h)continue;
 
-      let placed=false;
-      for(let tryN=0;tryN<20&&!placed;tryN++){
-        const px=rI(room.x+1,room.x+room.w-sw-1,rng);
-        const py=rI(room.y+1,room.y+room.h-sh-1,rng);
-        let ok=true;
-        for(let dy=0;dy<sh&&ok;dy++){
-          for(let dx=0;dx<sw&&ok;dx++){
-            const ch=stamp.rows[dy]?.[dx];
-            if(ch&&ch!==" "){
-              const k=`${px+dx},${py+dy}`;
-              if(usedCells.has(k)||grid[py+dy]?.[px+dx]!==T.F) ok=false;
-            }
-          }
-        }
-        if(ok){
-          for(let dy=0;dy<sh;dy++){
-            for(let dx=0;dx<stamp.rows[dy].length;dx++){
-              const ch=stamp.rows[dy][dx];
+        let placed=false;
+        for(let tryN=0;tryN<20&&!placed;tryN++){
+          const px=rI(room.x+1,room.x+room.w-sw-1,rng);
+          const py=rI(room.y+1,room.y+room.h-sh-1,rng);
+          let ok=true;
+          for(let dy=0;dy<sh&&ok;dy++){
+            for(let dx=0;dx<sw&&ok;dx++){
+              const ch=stamp.rows[dy]?.[dx];
               if(ch&&ch!==" "){
-                const k=`${px+dx},${py+dy}`;
-                usedCells.add(k);
-                decoOverlay.push({x:px+dx,y:py+dy,ch,fg:stamp.fg,name:stamp.n,roomId:room.id,decoKey});
+                const xx=px+dx, yy=py+dy;
+                const k=`${xx},${yy}`;
+                if(usedCells.has(k)||grid[yy]?.[xx]!==T.F) ok=false;
               }
             }
           }
-          placed=true;
+          if(ok){
+            for(let dy=0;dy<sh;dy++){
+              for(let dx=0;dx<stamp.rows[dy].length;dx++){
+                const ch=stamp.rows[dy][dx];
+                if(ch&&ch!==" "){
+                  const xx=px+dx, yy=py+dy;
+                  const k=`${xx},${yy}`;
+                  usedCells.add(k);
+                  decoOverlay.push({x:xx,y:yy,ch,fg:stamp.fg,name:stamp.n,roomId:room.id,decoKey});
+                }
+              }
+            }
+            placed=true;
+          }
+        }
+      }
+    }
+
+    // Yard grave clusters (LG3): not room-scoped.
+    if(locationType==="graveyard"){
+      const graveKeys=["grave1","grave2","grave3"];
+      const isInRoom=(x,y)=>rooms.some(r=>x>=r.x&&x<r.x+r.w&&y>=r.y&&y<r.y+r.h);
+      for(let ry=1;ry<H-1;ry+=6){
+        for(let rx=1;rx<W-1;rx+=8){
+          if(rng()<0.65) continue;
+          const kCount=rI(1,3,rng);
+          for(let i=0;i<kCount;i++){
+            const decoKey=pick(graveKeys,rng);
+            const stamp=S_[decoKey];if(!stamp)continue;
+            const sw=Math.max(...stamp.rows.map(r=>r.length));
+            const sh=stamp.rows.length;
+            if(sw+2>8||sh+2>6) continue;
+
+            let placed=false;
+            for(let tryN=0;tryN<20&&!placed;tryN++){
+              const px=rI(rx,Math.min(rx+8,W-sw-2),rng);
+              const py=rI(ry,Math.min(ry+6,H-sh-2),rng);
+              let ok=true;
+              for(let dy=0;dy<sh&&ok;dy++){
+                for(let dx=0;dx<sw&&ok;dx++){
+                  const ch=stamp.rows[dy]?.[dx];
+                  if(ch&&ch!==" "){
+                    const xx=px+dx, yy=py+dy;
+                    const tile=grid[yy]?.[xx];
+                    if(tile!==T.F) ok=false;
+                    if(isInRoom(xx,yy)) ok=false;
+                    if(usedCells.has(`${xx},${yy}`)) ok=false;
+                  }
+                }
+              }
+              if(ok){
+                for(let dy=0;dy<sh;dy++){
+                  for(let dx=0;dx<stamp.rows[dy].length;dx++){
+                    const ch=stamp.rows[dy][dx];
+                    if(ch&&ch!==" "){
+                      const xx=px+dx, yy=py+dy;
+                      usedCells.add(`${xx},${yy}`);
+                      decoOverlay.push({x:xx,y:yy,ch,fg:stamp.fg,name:stamp.n,roomId:null,decoKey});
+                    }
+                  }
+                }
+                placed=true;
+              }
+            }
+          }
         }
       }
     }
@@ -434,10 +1043,11 @@ function generateMap(cfg) {
 
 function carvePath(grid,a,b,W,H,rng,isRoad){
   let x=a.cx,y=a.cy;const goH=rng()<0.5;const tileType=isRoad?T.ROAD:T.C;
+  const canCarve=(t)=>t===T.V||t===T.W||t===T.F;
   const carve=(cx,cy)=>{
     if(cy>=0&&cy<H&&cx>=0&&cx<W){
-      if(grid[cy][cx]===T.V||grid[cy][cx]===T.W) grid[cy][cx]=tileType;
-      if(isRoad){for(const d of[-1,1]){if(cy+d>=0&&cy+d<H&&grid[cy+d][cx]===T.V)grid[cy+d][cx]=tileType;if(cx+d>=0&&cx+d<W&&grid[cy][cx+d]===T.V)grid[cy][cx+d]=tileType;}}
+      if(canCarve(grid[cy][cx])) grid[cy][cx]=tileType;
+      if(isRoad){for(const d of[-1,1]){if(cy+d>=0&&cy+d<H&&canCarve(grid[cy+d][cx]))grid[cy+d][cx]=tileType;if(cx+d>=0&&cx+d<W&&canCarve(grid[cy][cx+d]))grid[cy][cx+d]=tileType;}}
       for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const ny=cy+dy,nx=cx+dx;if(ny>=0&&ny<H&&nx>=0&&nx<W&&grid[ny][nx]===T.V)grid[ny][nx]=T.W;}
     }
   };
@@ -618,15 +1228,41 @@ function renderCanvas(dg,style,options={}){
 
 // ── Component ────────────────────────────────────────────────────────
 export default function DungeonForge(){
-  const [cfg,setCfg]=useState({roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:"terminal",seed:Math.floor(Math.random()*999999),locationType:"dungeon",hiRes:true,hiResExport:true});
+  const [cfg,setCfg]=useState({roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:"terminal",seed:Math.floor(Math.random()*999999),locationType:"dungeon",hiRes:true,hiResExport:true,compactCells:false,showDecos:true});
   const [dg,setDg]=useState(null);const [selRoom,setSelRoom]=useState(null);const [curFloor,setCurFloor]=useState(1);
   const [floors,setFloors]=useState([]);const [hovered,setHovered]=useState(null);const [legend,setLegend]=useState(false);
   const [view,setView]=useState("dm");const [revealed,setRevealed]=useState(new Set([1]));
   const mapViewportRef=useRef(null);const [vpSize,setVpSize]=useState({w:0,h:0});
+  const [isMobile,setIsMobile]=useState(false);
   useEffect(()=>{const el=mapViewportRef.current;if(!el)return;const ro=new ResizeObserver(()=>setVpSize({w:el.clientWidth,h:el.clientHeight}));ro.observe(el);setVpSize({w:el.clientWidth,h:el.clientHeight});return()=>ro.disconnect();},[]);
+  useEffect(()=>{
+    const mq=window.matchMedia("(max-width: 767px)");
+    const apply=()=>setIsMobile(!!mq.matches);
+    apply();
+    // Safari fallback for older event APIs.
+    if("addEventListener" in mq) mq.addEventListener("change",apply);
+    else mq.addListener(apply);
+    return ()=>{
+      if("removeEventListener" in mq) mq.removeEventListener("change",apply);
+      else mq.removeListener(apply);
+    };
+  },[]);
 
   const generate=useCallback(()=>{
-    const all=[];for(let f=0;f<cfg.depth;f++){const rng=seededRNG(cfg.seed+f*7919);const d=generateMap({...cfg,rng});d.floor=f+1;d.seed=cfg.seed;all.push(d);}
+    // Pre-compute stair anchor points so stairs connect between floors.
+    const anchorRng=seededRNG(cfg.seed+99991);
+    const anchors=Array.from({length:Math.max(0,cfg.depth-1)},()=>({
+      x:rI(Math.floor(cfg.width*0.2),Math.floor(cfg.width*0.8),anchorRng),
+      y:rI(Math.floor(cfg.height*0.2),Math.floor(cfg.height*0.8),anchorRng),
+    }));
+    const all=[];
+    for(let f=0;f<cfg.depth;f++){
+      const rng=seededRNG(cfg.seed+f*7919);
+      const stairDown=f<cfg.depth-1 ? anchors[f] : null;
+      const stairUp=f>0 ? anchors[f-1] : null;
+      const d=generateMap({...cfg,rng,stairDown,stairUp,stairDownTo:f+2,stairUpTo:f});
+      d.floor=f+1;d.seed=cfg.seed;all.push(d);
+    }
     setFloors(all);setDg(all[0]);setCurFloor(1);setSelRoom(null);setRevealed(new Set([1]));
   },[cfg]);
 
@@ -636,7 +1272,8 @@ export default function DungeonForge(){
   const rg=dg?buildRenderGrid(dg):null;const S=STY[cfg.style];const isP=view==="player";
   const Wm=dg?dg.width:1;const Hm=dg?dg.height:1;const pad=24;
   const baseCs=cfg.style==="terminal"?12:cfg.style==="rogue"?13:14;
-  const maxCs=cfg.hiRes?56:36,minCell=cfg.hiRes?14:10;
+  const maxCs=cfg.compactCells?24:(cfg.hiRes?56:36);
+  const minCell=cfg.compactCells?6:(cfg.hiRes?14:10);
   const fitCs=vpSize.w>48&&vpSize.h>48?Math.max(minCell,Math.min(maxCs,Math.floor(Math.min((vpSize.w-pad)/Wm,(vpSize.h-pad)/Hm)))):0;
   const cs=fitCs>0?fitCs:baseCs;
   const rooms=dg?dg.rooms:[];const ents=dg?dg.entities:[];const decos=dg?dg.decoOverlay:[];
@@ -657,8 +1294,8 @@ export default function DungeonForge(){
           ))}
         </div>
       </div>
-      <div style={{display:"flex",flexWrap:"wrap"}}>
-        <div style={{width:258,minWidth:258,padding:"8px 10px",borderRight:`1px solid ${S.panelBorder}`,background:S.panelBg,display:"flex",flexDirection:"column",gap:6,maxHeight:"min(70vh, calc(100dvh - 200px))",overflowY:"auto"}}>
+      <div style={{display:"flex",flexWrap:"nowrap"}}>
+        <div style={{width:258,minWidth:0,padding:"8px 10px",borderRight:`1px solid ${S.panelBorder}`,background:S.panelBg,display:"flex",flexDirection:"column",gap:6,maxHeight:"min(70vh, calc(100dvh - 200px))",overflowY:"auto",overflow:"hidden"}}>
           <LB S={S}>LOCATION</LB>
           <select value={cfg.locationType} onChange={e=>u("locationType",e.target.value)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
             {Object.entries(LOCATIONS).map(([k,v])=><option key={k} value={k}>{v.name}</option>)}
@@ -676,12 +1313,15 @@ export default function DungeonForge(){
           <LB S={S}>DISPLAY</LB>
           <Tg l="Large cells (fill view)" on={cfg.hiRes} S={S} f={()=>u("hiRes",!cfg.hiRes)}/>
           <Tg l="2x PNG export" on={cfg.hiResExport} S={S} f={()=>u("hiResExport",!cfg.hiResExport)}/>
+          <Tg l="Compact cells" on={cfg.compactCells} S={S} f={()=>u("compactCells",!cfg.compactCells)}/>
+          <Tg l="Show scenery" on={cfg.showDecos} S={S} f={()=>u("showDecos",!cfg.showDecos)}/>
           <LB S={S}>SEED</LB>
           <div style={{display:"flex",gap:2}}>
             <input type="number" value={cfg.seed} onChange={e=>u("seed",parseInt(e.target.value)||0)} style={{flex:1,padding:"2px 3px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:30}}/>
             <button onClick={()=>u("seed",Math.floor(Math.random()*999999))} style={{padding:"2px 5px",fontSize:14,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>RNG</button>
           </div>
-          <button onClick={generate} style={{marginTop:3,padding:"6px 0",fontSize:16,fontWeight:"bold",fontFamily:"'Courier New',monospace",letterSpacing:2,background:S.inputBg,color:S.btnFg,border:`1px solid ${S.btnBorder}`,borderRadius:2,cursor:"pointer"}}>GENERATE</button>
+          <button onClick={()=>u("seed",Math.floor(Math.random()*999999))} style={{marginTop:3,padding:"6px 0",fontSize:16,fontWeight:"bold",fontFamily:"'Courier New',monospace",letterSpacing:2,background:S.inputBg,color:S.btnFg,border:`1px solid ${S.btnBorder}`,borderRadius:2,cursor:"pointer"}}>NEW MAP</button>
+          <button onClick={generate} style={{marginTop:3,padding:"6px 0",fontSize:16,fontWeight:"bold",fontFamily:"'Courier New',monospace",letterSpacing:2,background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>RE-RUN</button>
           <LB S={S}>VIEW</LB>
           <div style={{display:"flex",gap:2}}>
             {[["dm","DM"],["player","PLAYER"]].map(([k,l])=>(
@@ -712,8 +1352,8 @@ export default function DungeonForge(){
           </div>
         </div>
 
-        <div style={{flex:1,minWidth:0,minHeight:0,display:"flex",flexDirection:"column"}}>
-          <div ref={mapViewportRef} style={{overflow:"auto",padding:4,flex:1,minHeight:0}}>
+        <div style={{flex:1,minWidth:0,minHeight:0,display:"flex",flexDirection:isMobile?"column":"row"}}>
+          <div ref={mapViewportRef} style={{overflow:"auto",padding:4,flex:1,minHeight:0,minWidth:0}}>
             {rg&&<div style={{display:"inline-block",border:`1px solid ${S.panelBorder}`,background:S.bg,padding:1,lineHeight:0}}>
               {rg.map((row,y)=>(<div key={y} style={{display:"flex",height:cs}}>
                 {row.map((cell,x)=>{
@@ -723,23 +1363,39 @@ export default function DungeonForge(){
                   const bg=room&&selRoom===room.id?S.selectedBg:(hide?(cfg.style==="grid"?S.floorBg:S.bg):c.bg);const fg=hide?S.floorFg:c.fg;
                   const tt=cell.eType==="deco"?cell.eName:(!isP&&cell.extra?.type==="monster")?`${cell.extra.name} x${cell.extra.count} (CR ${cell.extra.cr})`:(!isP&&cell.extra?.type==="trap")?`${cell.extra.name} - ${cell.extra.dmg}`:(!isP&&cell.extra?.type==="item")?`${cell.extra.name} (${cell.extra.r})`:room?`Room ${room.id}: ${room.label||room.type}`:"";
                   return(<span key={x} title={tt} onClick={()=>{if(room)setSelRoom(room.id===selRoom?null:room.id);}} onMouseEnter={()=>{if(cell.extra&&cell.eType!=="deco"&&!isP)setHovered(cell.extra);}} onMouseLeave={()=>setHovered(null)}
-                    style={{display:"inline-block",width:cs,height:cs,backgroundColor:bg,color:fg,fontSize:Math.max(12,Math.min(30,cs-2)),fontFamily:"ui-monospace,'Cascadia Code','Courier New',monospace",fontWeight:(cell.eType&&cell.eType!=="label"&&cell.eType!=="deco")?"bold":"normal",textAlign:"center",lineHeight:`${cs}px`,cursor:room?"pointer":"default",imageRendering:"crisp-edges",borderRight:cfg.style==="grid"&&cell.tile!==T.V?"1px solid rgba(0,0,0,0.05)":"none",borderBottom:cfg.style==="grid"&&cell.tile!==T.V?"1px solid rgba(0,0,0,0.05)":"none"}}>
+                    style={{display:"inline-block",width:cs,height:cs,backgroundColor:bg,color:fg,fontSize:cell.eType==="label"?Math.max(10,cs-2):Math.max(cfg.compactCells?5:9,Math.min(cfg.compactCells?18:28,cs-2)),fontFamily:"ui-monospace,'Cascadia Code','Courier New',monospace",fontWeight:(cell.eType&&cell.eType!=="label"&&cell.eType!=="deco")?"bold":"normal",textAlign:"center",lineHeight:`${cs}px`,cursor:room?"pointer":"default",imageRendering:"crisp-edges",borderRight:cfg.style==="grid"&&cell.tile!==T.V?"1px solid rgba(0,0,0,0.05)":"none",borderBottom:cfg.style==="grid"&&cell.tile!==T.V?"1px solid rgba(0,0,0,0.05)":"none"}}>
                     {hide?".":(cell.ch.length>1?cell.ch[0]:cell.ch)}</span>);
                 })}</div>))}
             </div>}
           </div>
-          {hovered&&<div style={{position:"fixed",bottom:10,left:"50%",transform:"translateX(-50%)",background:S.panelBg,color:S.textColor,border:`1px solid ${S.panelBorder}`,padding:"5px 14px",fontSize:13,fontFamily:"'Courier New',monospace",borderRadius:2,zIndex:100,pointerEvents:"none",whiteSpace:"nowrap"}}>
+          {hovered&&isMobile&&<div style={{position:"fixed",bottom:10,left:"50%",transform:"translateX(-50%)",background:S.panelBg,color:S.textColor,border:`1px solid ${S.panelBorder}`,padding:"5px 14px",fontSize:13,fontFamily:"'Courier New',monospace",borderRadius:2,zIndex:100,pointerEvents:"none",whiteSpace:"nowrap"}}>
             {hovered.type==="monster"&&<><b style={{color:S.monsterFg}}>{hovered.name}</b> x{hovered.count} (CR {hovered.cr})</>}
             {hovered.type==="trap"&&<><b style={{color:S.trapFg}}>{hovered.name}</b> — {hovered.dmg}</>}
             {hovered.type==="item"&&<><b style={{color:RM[hovered.r]||S.itemFg}}>{hovered.name}</b> ({hovered.r})</>}
           </div>}
-          <div style={{borderTop:`1px solid ${S.panelBorder}`,background:S.panelBg,padding:"8px 10px",maxHeight:240,overflowY:"auto"}}>
+          <div style={{
+            borderTop:isMobile?`1px solid ${S.panelBorder}`:"none",
+            borderLeft:!isMobile?`1px solid ${S.panelBorder}`:"none",
+            background:S.panelBg,
+            padding:"8px 10px",
+            maxHeight:isMobile?180:undefined,
+            overflowY:"auto",
+            width:!isMobile?272:"auto",
+            minWidth:!isMobile?272:0
+          }}>
+            {!isMobile&&hovered&&<div style={{position:"sticky",top:0,zIndex:5,marginBottom:6,background:S.panelBg,padding:"5px 10px",border:`1px solid ${S.panelBorder}`,borderRadius:2,whiteSpace:"nowrap"}}>
+              {hovered.type==="monster"&&<><b style={{color:S.monsterFg}}>{hovered.name}</b> x{hovered.count} (CR {hovered.cr})</>}
+              {hovered.type==="trap"&&<><b style={{color:S.trapFg}}>{hovered.name}</b> — {hovered.dmg}</>}
+              {hovered.type==="item"&&<><b style={{color:RM[hovered.r]||S.itemFg}}>{hovered.name}</b> ({hovered.r})</>}
+            </div>}
             {selRoom?(()=>{const rm=rooms.find(r=>r.id===selRoom);if(!rm)return null;const re=ents.filter(e=>e.roomId===selRoom);const rd=decos.filter(d=>d.roomId===selRoom);const decoNames=[...new Set(rd.map(d=>d.name))];
               return(<div>
                 <div style={{fontSize:14,fontWeight:"bold",marginBottom:4,color:S.accent,display:"flex",alignItems:"center",gap:5}}>
                   Room {rm.id}: {rm.label||rm.type}<span style={{fontSize:10,fontWeight:"normal",color:S.dimText}}>{rm.w}x{rm.h}</span>
                   {isP&&<button onClick={()=>{const n=new Set(revealed);if(n.has(rm.id))n.delete(rm.id);else n.add(rm.id);setRevealed(n);}} style={{marginLeft:"auto",padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:revealed.has(rm.id)?S.accentAlt:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>{revealed.has(rm.id)?"HIDE":"REVEAL"}</button>}
                 </div>
+                {!isP&&rm.stairDownTo&&<div style={{fontSize:12,color:S.dimText,marginBottom:2}}>▼ Stair down → Floor {rm.stairDownTo}</div>}
+                {!isP&&rm.stairUpTo&&<div style={{fontSize:12,color:S.dimText,marginBottom:2}}>▲ Stair up → Floor {rm.stairUpTo}</div>}
                 {!isP&&decoNames.length>0&&<div style={{fontSize:12,color:S.dimText,marginBottom:2}}>Scenery: {decoNames.join(", ")}</div>}
                 {isP?<div style={{fontSize:12,fontStyle:"italic",color:S.dimText}}>Entities hidden in player view</div>:
                   re.length===0?<div style={{fontSize:12,fontStyle:"italic",color:S.dimText}}>No encounters</div>:
@@ -748,6 +1404,57 @@ export default function DungeonForge(){
                       <span style={{fontWeight:"bold",color:e.type==="monster"?S.monsterFg:e.type==="trap"?S.trapFg:S.itemFg,minWidth:16}}>{e.type==="monster"?"[M]":e.type==="trap"?"[T]":"[I]"}</span>
                       <b>{e.name}</b>{e.type==="monster"&&<span> x{e.count} (CR {e.cr})</span>}{e.type==="trap"&&<span> — {e.dmg}</span>}{e.type==="item"&&<span style={{color:RM[e.r]||S.itemFg}}> ({e.r})</span>}
                     </div>))}
+                    {!isP&&re.some(e=>e.type==="monster")&&(
+                      <div style={{display:"flex",gap:4,marginTop:8}}>
+                        <button
+                          onClick={()=>{
+                            const payload={
+                              v:1,
+                              savedAt:new Date().toISOString(),
+                              source:"dungeon-forge",
+                              config:{
+                                seed:cfg.seed,
+                                locationType:cfg.locationType,
+                                level:cfg.level,
+                                roomCount:cfg.roomCount,
+                                depth:cfg.depth,
+                              },
+                              floors:floors.map(f=>({
+                                floor:f.floor,
+                                seed:cfg.seed,
+                                mapName:f.mapName||dg?.mapName,
+                                locationType:cfg.locationType,
+                                width:f.width||dg?.width,
+                                height:f.height||dg?.height,
+                                rooms:f.rooms,
+                                entities:f.entities,
+                              })),
+                            };
+                            sessionStorage.setItem("dnd5e_gm_encounter", JSON.stringify(payload));
+                            window.location.href="/play";
+                          }}
+                          style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}
+                        >
+                          SEND TO GM BATTLE
+                        </button>
+                        <button
+                          onClick={()=>{
+                            const monsters=re.filter(e=>e.type==="monster").map(e=>({name:e.name,count:e.count,cr:e.cr}));
+                            const payload={
+                              version:1,
+                              roomName:rm.label||rm.type,
+                              floor:curFloor,
+                              monsters,
+                            };
+                            sessionStorage.setItem("dnd5e-gm-hub-encounter-import-v1", JSON.stringify(payload));
+                            window.location.href="/play";
+                          }}
+                          style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}
+                        >
+                          SEND TO PLAY (DM)
+                        </button>
+                      </div>
+                    )}
                   </div>}
               </div>);})():(<div>
               <div style={{fontSize:12,marginBottom:2,color:S.dimText,fontStyle:"italic"}}>Click a room to inspect{isP?" / toggle fog":""}</div>

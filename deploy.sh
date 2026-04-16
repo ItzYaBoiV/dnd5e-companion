@@ -92,7 +92,7 @@ ok "Using subnets: app $FREE, LiteLLM $FREE_LITELLM"
 step "Database Configuration"
 
 if [ -f .env ]; then
-  ok "Using existing .env (no prompts — edit the file manually if you need to change DB credentials)"
+  ok "Using existing .env (docker compose loads it automatically from this directory; we will also source it for shell/psql)"
 else
   ask "No .env found — create one now (first-time setup)."
   ask "PostgreSQL username [dnd5e_user]:"
@@ -131,6 +131,10 @@ if [ -f .env ]; then
   # shellcheck disable=SC1091
   source .env
   set +a
+fi
+# Same values docker compose will inject into postgres/backend — must be non-empty.
+if [ -z "${POSTGRES_USER:-}" ] || [ -z "${POSTGRES_DB:-}" ] || [ -z "${POSTGRES_PASSWORD:-}" ]; then
+  fail "Set non-empty POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB in .env. Deploy never hardcodes DB passwords."
 fi
 
 # ── Sync Dungeon Forge (source: repo-root dungeon-generator.jsx → frontend bundle) ──
@@ -331,7 +335,7 @@ CLASS_FEAT_N=0
 
 if docker compose exec -T postgres pg_isready -q 2>/dev/null; then
   RAW="$(
-    docker compose exec -T postgres psql -U "$PGU" -d "$PGD" -tAc \
+    docker compose exec -T -e PGPASSWORD="$POSTGRES_PASSWORD" postgres psql -U "$PGU" -d "$PGD" -tAc \
       "SELECT concat_ws(',', (SELECT COUNT(*)::text FROM \"Spell\"), (SELECT COUNT(*)::text FROM \"Monster\"), (SELECT COUNT(*)::text FROM \"Race\"), (SELECT COUNT(*)::text FROM \"ClassFeature\"));" \
       2>/dev/null | tr -d ' \r' || true
   )"

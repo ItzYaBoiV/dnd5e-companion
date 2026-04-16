@@ -1,0 +1,16 @@
+# If your restored schema.prisma is missing encounter-pool tagging, merge this into model Monster { ... }
+# and add the LocationMonster model after the Monster block (before AiGenerationJob).
+#
+# Inside model Monster, add:
+#   locationTags LocationMonster[]
+#
+# Then add:
+#
+# model LocationMonster {
+#   id          String  @id @default(cuid())
+#   locationKey String
+#   monsterSlug String
+#   weight      Int     @default(1)
+#   monster     Monster @relation(fields: [monsterSlug], references: [slug], onDelete: Cascade)
+#   @@index([locationKey])
+# }

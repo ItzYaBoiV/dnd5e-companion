@@ -56,7 +56,7 @@ export default function PlayPage() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto p-4">
+      <div className="flex-1 overflow-auto p-4 pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:pb-0">
         {!activeSession ? (
           <SessionPicker
             sessions={sessions}
@@ -221,6 +221,15 @@ function StartCombatPanel() {
     }
   };
 
+  const autoRollPlayerInitiatives = () => {
+    const next: Record<string, number> = {};
+    for (const char of partyCharacters) {
+      const dex = char.computed?.modifiers?.dexterity ?? 0;
+      next[char.id] = Math.floor(Math.random() * 20) + 1 + dex;
+    }
+    setInitiatives(next);
+  };
+
   const handleStart = async () => {
     const combatants = [
       ...partyCharacters.map((char) => ({
@@ -251,7 +260,12 @@ function StartCombatPanel() {
 
       {/* Player initiatives */}
       <div>
-        <p className="dnd-label mb-2">Player Initiatives (roll d20 + DEX mod)</p>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="dnd-label">Player Initiatives (roll d20 + DEX mod)</p>
+          <button onClick={autoRollPlayerInitiatives} className="btn-ghost text-xs px-2 py-1 min-h-0">
+            Auto-roll all
+          </button>
+        </div>
         <div className="grid grid-cols-2 gap-2">
           {partyCharacters.map((char) => (
             <div key={char.id} className="flex items-center gap-2">
@@ -301,6 +315,15 @@ function StartCombatPanel() {
         )}
         {monsters.length > 0 && (
           <div className="mt-2 space-y-1">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="dnd-label">Selected Monsters ({monsters.length})</span>
+              <button
+                onClick={() => setMonsters([])}
+                className="btn-ghost text-xs px-2 py-1 min-h-0 text-red-300 hover:text-red-200"
+              >
+                Clear all
+              </button>
+            </div>
             {monsters.map((m, i) => (
               <div key={i} className="flex items-center gap-2 text-sm">
                 <span className="text-red-300 flex-1">{m.label}</span>
@@ -327,6 +350,8 @@ function StartCombatPanel() {
 function CombatTab() {
   const { activeCombat, nextRound, endCombat, damageCombatant, healCombatant, updateCombatant } = useSessionStore();
   const [dmgInputs, setDmgInputs] = useState<Record<string, string>>({});
+  const [selectedCombatantId, setSelectedCombatantId] = useState<string | null>(null);
+  const [collapsedMonsterGroups, setCollapsedMonsterGroups] = useState<Record<string, boolean>>({});
 
   if (!activeCombat) {
     return (
@@ -338,64 +363,168 @@ function CombatTab() {
   }
 
   const sorted = [...activeCombat.combatants].sort((a, b) => b.initiative - a.initiative);
+  const alive = sorted.filter((c) => c.isAlive);
+  const alivePlayers = alive.filter((c) => c.type === "player").length;
+  const aliveMonsters = alive.filter((c) => c.type === "monster").length;
+  const current = sorted[0] ?? null;
+  const selectedCombatant = sorted.find((c) => c.id === selectedCombatantId) ?? null;
+
+  const groupKeyFor = (c: Combatant) => {
+    if (c.type !== "monster") return null;
+    if (c.monsterSlug) return `slug:${c.monsterSlug}`;
+    const normalized = c.label.replace(/\s+\d+$/, "").trim().toLowerCase();
+    return `label:${normalized}`;
+  };
+
+  useEffect(() => {
+    if (!current) return;
+    setSelectedCombatantId((prev) => prev ?? current.id);
+  }, [current?.id]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      const inEditable = !!target && (target.isContentEditable || tag === "input" || tag === "textarea" || tag === "select");
+      if (inEditable) return;
+      if (!selectedCombatant) return;
+
+      if (e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        void nextRound();
+        return;
+      }
+      if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        void damageCombatant(selectedCombatant.id, 5);
+        return;
+      }
+      if (e.key === "+" || e.key === "=") {
+        e.preventDefault();
+        void healCombatant(selectedCombatant.id, 5);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedCombatant, nextRound, damageCombatant, healCombatant]);
 
   return (
     <div className="max-w-3xl space-y-4">
-      {/* Round counter */}
-      <div className="dnd-card flex items-center justify-between">
-        <div>
-          <span className="dnd-label">Round</span>
-          <span className="font-display font-bold text-3xl text-dnd-gold ml-3">{activeCombat.round}</span>
+      <div className="sticky top-0 z-20 bg-dnd-darker/90 backdrop-blur-sm py-2 space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <div className="dnd-card py-2 px-3">
+            <p className="dnd-label">Current Turn</p>
+            <p className="font-display text-sm text-white truncate">{current?.label ?? "—"}</p>
+          </div>
+          <div className="dnd-card py-2 px-3">
+            <p className="dnd-label">Players Alive</p>
+            <p className="font-display text-sm text-blue-300">{alivePlayers}</p>
+          </div>
+          <div className="dnd-card py-2 px-3">
+            <p className="dnd-label">Monsters Alive</p>
+            <p className="font-display text-sm text-red-300">{aliveMonsters}</p>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <button onClick={nextRound} className="btn-primary flex items-center gap-2">
-            <SkipForward size={15} /> Next Round
-          </button>
-          <button onClick={endCombat} className="btn-secondary flex items-center gap-2 text-sm">
-            End Combat
-          </button>
+
+        {/* Round counter */}
+        <div className="dnd-card flex items-center justify-between">
+          <div>
+            <span className="dnd-label">Round</span>
+            <span className="font-display font-bold text-3xl text-dnd-gold ml-3">{activeCombat.round}</span>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={nextRound} className="btn-primary flex items-center gap-2">
+              <SkipForward size={15} /> Next Round
+            </button>
+            <button onClick={endCombat} className="btn-secondary flex items-center gap-2 text-sm">
+              End Combat
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Turn order */}
       <div className="space-y-2">
-        {sorted.map((c, idx) => (
-          <CombatantRow
-            key={c.id}
-            combatant={c}
-            isFirst={idx === 0}
-            dmgInput={dmgInputs[c.id] ?? ""}
-            onDmgChange={(v) => setDmgInputs((p) => ({ ...p, [c.id]: v }))}
-            onDamage={() => { damageCombatant(c.id, parseInt(dmgInputs[c.id] ?? "0", 10) || 0); setDmgInputs((p) => ({ ...p, [c.id]: "" })); }}
-            onHeal={() => { healCombatant(c.id, parseInt(dmgInputs[c.id] ?? "0", 10) || 0); setDmgInputs((p) => ({ ...p, [c.id]: "" })); }}
-            onToggleCondition={(cond) => {
-              const has = c.conditions.includes(cond);
-              updateCombatant(c.id, { conditions: has ? c.conditions.filter((x) => x !== cond) : [...c.conditions, cond] });
-            }}
-          />
-        ))}
+        {sorted.map((c, idx) => {
+          const gk = groupKeyFor(c);
+          const prev = idx > 0 ? sorted[idx - 1] : null;
+          const prevGk = prev ? groupKeyFor(prev) : null;
+          const firstInGroup = gk !== null && gk !== prevGk;
+          const groupMembers = gk ? sorted.filter((x) => groupKeyFor(x) === gk) : [];
+          const collapsed = gk ? !!collapsedMonsterGroups[gk] : false;
+
+          if (gk && !firstInGroup && collapsed) return null;
+
+          return (
+            <div key={c.id} className="space-y-1">
+              {firstInGroup && groupMembers.length > 1 && (
+                <button
+                  onClick={() => setCollapsedMonsterGroups((p) => ({ ...p, [gk]: !collapsed }))}
+                  className="w-full text-left px-2 py-1 text-xs rounded border border-gray-800 bg-dnd-dark text-gray-400 hover:text-gray-200"
+                >
+                  {collapsed ? "▶" : "▼"} {c.monsterSlug ?? c.label.replace(/\s+\d+$/, "")} ({groupMembers.length})
+                </button>
+              )}
+              {(collapsed && firstInGroup) ? null : (
+                <CombatantRow
+                  combatant={c}
+                  isFirst={idx === 0}
+                  isSelected={selectedCombatantId === c.id}
+                  onSelect={() => setSelectedCombatantId(c.id)}
+                  dmgInput={dmgInputs[c.id] ?? ""}
+                  onDmgChange={(v) => setDmgInputs((p) => ({ ...p, [c.id]: v }))}
+                  onDamage={(forcedAmount) => {
+                    const amount = forcedAmount ?? (parseInt(dmgInputs[c.id] ?? "0", 10) || 0);
+                    if (amount <= 0) return;
+                    damageCombatant(c.id, amount);
+                    setDmgInputs((p) => ({ ...p, [c.id]: "" }));
+                  }}
+                  onHeal={(forcedAmount) => {
+                    const amount = forcedAmount ?? (parseInt(dmgInputs[c.id] ?? "0", 10) || 0);
+                    if (amount <= 0) return;
+                    healCombatant(c.id, amount);
+                    setDmgInputs((p) => ({ ...p, [c.id]: "" }));
+                  }}
+                  onToggleCondition={(cond) => {
+                    const has = c.conditions.includes(cond);
+                    updateCombatant(c.id, { conditions: has ? c.conditions.filter((x) => x !== cond) : [...c.conditions, cond] });
+                  }}
+                />
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function CombatantRow({ combatant: c, isFirst, dmgInput, onDmgChange, onDamage, onHeal, onToggleCondition }: {
+function CombatantRow({ combatant: c, isFirst, isSelected, onSelect, dmgInput, onDmgChange, onDamage, onHeal, onToggleCondition }: {
   combatant: Combatant; isFirst: boolean;
+  isSelected: boolean;
+  onSelect: () => void;
   dmgInput: string; onDmgChange: (v: string) => void;
-  onDamage: () => void; onHeal: () => void;
+  onDamage: (amount?: number) => void; onHeal: (amount?: number) => void;
   onToggleCondition: (c: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(isFirst);
   const hpPct = Math.round((c.currentHp / c.maxHp) * 100);
   const CONDITIONS = ["blinded","charmed","frightened","grappled","incapacitated","paralyzed","poisoned","prone","restrained","stunned"];
+  const amount = parseInt(dmgInput || "0", 10) || 0;
+  const applyQuickDamage = (n: number) => onDamage(n);
+  const applyQuickHeal = (n: number) => onHeal(n);
 
   return (
     <div className={clsx(
       "border rounded-lg overflow-hidden transition-all",
       isFirst ? "border-dnd-gold shadow-[0_0_8px_rgba(212,172,13,0.2)]" : "border-gray-700",
+      isSelected && "ring-1 ring-blue-500/40",
       !c.isAlive && "opacity-50"
-    )}>
-      <div className="flex items-center gap-3 px-3 py-2 bg-dnd-dark">
+    )} onClick={onSelect}>
+      <div className={clsx(
+        "flex items-center gap-3 px-3 py-2",
+        isFirst ? "bg-dnd-dark/90 ring-1 ring-dnd-gold/20" : "bg-dnd-dark"
+      )}>
         {/* Initiative */}
         <span className={clsx(
           "w-8 h-8 rounded-full flex items-center justify-center font-display font-bold text-sm flex-shrink-0",
@@ -409,6 +538,7 @@ function CombatantRow({ combatant: c, isFirst, dmgInput, onDmgChange, onDamage, 
           <div className="flex items-center gap-2">
             <span className="font-display font-bold text-white truncate">{c.label}</span>
             {c.type === "monster" && <Skull size={12} className="text-red-400 flex-shrink-0" />}
+            {isFirst && <span className="text-[10px] px-1.5 py-0.5 rounded bg-dnd-gold/20 border border-dnd-gold/40 text-dnd-gold">TURN</span>}
             {c.isConcentrating && <span title="Concentrating"><Zap size={12} className="text-yellow-400" /></span>}
             {c.conditions.map((cond) => (
               <span key={cond} className="text-xs px-1.5 py-0.5 bg-red-950 border border-red-800 text-red-300 rounded font-display">
@@ -435,13 +565,13 @@ function CombatantRow({ combatant: c, isFirst, dmgInput, onDmgChange, onDamage, 
         {/* Damage/Heal */}
         <input type="number" min="0" value={dmgInput}
           onChange={(e) => onDmgChange(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") onDamage(); }}
+          onKeyDown={(e) => { if (e.key === "Enter") amount >= 0 && onDamage(); }}
           className="input-field w-16 text-center text-sm flex-shrink-0" placeholder="amt" />
-        <button onClick={onDamage} title="Damage"
+        <button onClick={() => onDamage()} title="Damage"
           className="w-7 h-7 bg-red-950 hover:bg-red-900 border border-red-800 text-red-300 rounded text-sm font-bold flex-shrink-0">
           −
         </button>
-        <button onClick={onHeal} title="Heal"
+        <button onClick={() => onHeal()} title="Heal"
           className="w-7 h-7 bg-green-950 hover:bg-green-900 border border-green-800 text-green-300 rounded text-sm font-bold flex-shrink-0">
           +
         </button>
@@ -453,6 +583,13 @@ function CombatantRow({ combatant: c, isFirst, dmgInput, onDmgChange, onDamage, 
 
       {expanded && (
         <div className="px-3 pb-2 pt-1 bg-gray-900 border-t border-gray-800">
+          <div className="mb-2 flex flex-wrap gap-1">
+            <button onClick={() => applyQuickDamage(1)} className="text-xs px-2 py-0.5 rounded border border-red-900 text-red-300 hover:bg-red-950">-1</button>
+            <button onClick={() => applyQuickDamage(5)} className="text-xs px-2 py-0.5 rounded border border-red-900 text-red-300 hover:bg-red-950">-5</button>
+            <button onClick={() => applyQuickDamage(10)} className="text-xs px-2 py-0.5 rounded border border-red-900 text-red-300 hover:bg-red-950">-10</button>
+            <button onClick={() => applyQuickHeal(5)} className="text-xs px-2 py-0.5 rounded border border-green-900 text-green-300 hover:bg-green-950">+5</button>
+            <button onClick={() => applyQuickHeal(10)} className="text-xs px-2 py-0.5 rounded border border-green-900 text-green-300 hover:bg-green-950">+10</button>
+          </div>
           <p className="dnd-label mb-1">Conditions</p>
           <div className="flex flex-wrap gap-1">
             {CONDITIONS.map((cond) => (

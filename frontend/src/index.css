@@ -21,6 +21,15 @@
   ::-webkit-scrollbar-track { @apply bg-dnd-darker; }
   ::-webkit-scrollbar-thumb { @apply bg-dnd-border/80 rounded-full; }
   ::-webkit-scrollbar-thumb:hover { @apply bg-stone-600; }
+
+  /* iOS Safari: prevent auto-zoom on small text inputs */
+  @media screen and (max-width: 767px) {
+    input, select, textarea { font-size: 16px !important; }
+  }
+
+  /* iOS Safari: prevent overscroll bounce from triggering refresh */
+  html { overscroll-behavior: none; }
+  body { overscroll-behavior: none; }
 }
 
 @layer components {

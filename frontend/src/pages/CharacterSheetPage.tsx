@@ -103,7 +103,7 @@ export default function CharacterSheetPage() {
       </div>
 
       {/* Sheet content */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:pb-0">
         <CharacterSheet character={activeCharacter} activeTab={activeTab} />
       </div>
     </div>

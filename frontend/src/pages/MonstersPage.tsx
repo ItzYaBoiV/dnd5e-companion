@@ -78,7 +78,7 @@ export default function MonstersPage() {
         </div>
 
         {/* List */}
-        <div className="flex-1 overflow-auto">
+        <div className="flex-1 overflow-auto pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:pb-0">
           {loading ? <LoadingSpinner /> : (
             <div>
               {monsters.map((m) => (
@@ -104,7 +104,7 @@ export default function MonstersPage() {
 
       {/* Stat block detail */}
       {selected && (
-        <div className="flex-1 overflow-auto p-4">
+        <div className="flex-1 overflow-auto p-4 pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:pb-0">
           {loadingDetail ? <LoadingSpinner /> : <MonsterStatBlock monster={selected} onClose={() => setSelected(null)} />}
         </div>
       )}
