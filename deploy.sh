@@ -137,13 +137,13 @@ if [ -z "${POSTGRES_USER:-}" ] || [ -z "${POSTGRES_DB:-}" ] || [ -z "${POSTGRES_
   fail "Set non-empty POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB in .env. Deploy never hardcodes DB passwords."
 fi
 
-# ── Sync Dungeon Forge (source: repo-root dungeon-generator.jsx → frontend bundle) ──
-step "Syncing Dungeon Forge into frontend"
+# ── Dungeon Forge (source: frontend/src/components/dungeon-forge/DungeonForgeImpl.jsx) ──
+step "Dungeon Forge build hook"
 if [ -f scripts/build-dungeon-forge.mjs ]; then
-  node scripts/build-dungeon-forge.mjs || fail "Dungeon Forge sync failed (scripts/build-dungeon-forge.mjs)"
-  ok "DungeonForgeImpl.jsx refreshed from dungeon-generator.jsx"
+  node scripts/build-dungeon-forge.mjs || fail "Dungeon Forge hook failed (scripts/build-dungeon-forge.mjs)"
+  ok "Dungeon Forge hook OK (impl is DungeonForgeImpl.jsx in-repo)"
 else
-  warn "scripts/build-dungeon-forge.mjs not found — skipping (ensure DungeonForgeImpl.jsx is up to date)"
+  warn "scripts/build-dungeon-forge.mjs not found — skipping"
 fi
 
 # ── Build containers ──────────────────────────────────────────────

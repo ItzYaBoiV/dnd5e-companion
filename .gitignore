@@ -16,6 +16,9 @@ build/
 *.db
 *.db-journal
 
+# Editor / backup cruft
+*.bak
+
 # Logs
 *.log
 logs/
