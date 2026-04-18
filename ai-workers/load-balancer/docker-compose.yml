@@ -20,4 +20,4 @@ networks:
     ipam:
       config:
         # Patched by deploy.sh (same discovery as root compose). Default avoids default-address-pool exhaustion.
-        - subnet: 172.27.0.0/24
+        - subnet: 172.21.0.0/24

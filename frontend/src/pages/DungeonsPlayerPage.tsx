@@ -159,6 +159,8 @@ export default function DungeonsPlayerPage() {
     }
 
     const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const w = window.innerWidth;
+    const h = window.innerHeight;
 
     const cellPx = Math.max(
       2,
