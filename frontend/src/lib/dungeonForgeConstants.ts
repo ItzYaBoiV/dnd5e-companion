@@ -10,6 +10,8 @@ export const DUNGEON_T = {
   WA: 7,
   P: 8,
   ROAD: 9,
+  BRIDGE: 10,
+  LAVA: 11,
 } as const;
 
 export type DungeonTileId = (typeof DUNGEON_T)[keyof typeof DUNGEON_T];

@@ -11,7 +11,7 @@ import { MonsterStatCard } from "@/components/dungeon-forge/MonsterStatCard";
 import { useSessionStore } from "@/store/sessionStore";
 import { DUNGEON_T as T } from "@/lib/dungeonForgeConstants";
 import { buildRenderGrid } from "@/lib/dungeonForgeRenderGrid";
-import { computeVisibleCellsForPlayer, inferStartingRoomId } from "@/lib/dungeonForgeFog";
+import { computeVisibleCellsForPlayer, inferStartingRoomId, isOpenFloorLocation } from "@/lib/dungeonForgeFog";
 
 /* ═══════════════════════════════════════════════════════════════════════
    D&D 5e DUNGEON FORGE v3 — Location-Aware Procedural Map Generator
@@ -128,10 +128,9 @@ const LOCATION_GLYPHS={
   cave:{floor:".",wall:"#",corr:"·",water:"~",road:"·",stairsU:"<",stairsD:">",voidCh:" "},
   temple:{floor:":",wall:"║",corr:"·",water:"~",road:":",stairsU:"<",stairsD:">",voidCh:" "},
   sewer:{floor:"·",wall:"=",corr:"·",water:"≈",road:"·",stairsU:"<",stairsD:">",voidCh:" "},
-  shipwreck:{floor:".",wall:"|",corr:".",water:"~",road:".",stairsU:"<",stairsD:">",voidCh:" "},
+  road:{floor:",",wall:"†",corr:",",water:"~",road:":",stairsU:"<",stairsD:">",voidCh:" "},
   volcanic_lair:{floor:".",wall:"*",corr:"·",water:"≈",road:"·",stairsU:"<",stairsD:">",voidCh:" "},
   fey_forest:{floor:",",wall:"#",corr:"'",water:"~",road:",",stairsU:"<",stairsD:">",voidCh:" "},
-  undercity:{floor:"·",wall:"#",corr:"·",water:"≈",road:"=",stairsU:"<",stairsD:">",voidCh:" "},
 };
 
 const LOCATION_DESCRIPTIONS={
@@ -143,10 +142,9 @@ const LOCATION_DESCRIPTIONS={
   cave:"Organic caverns with stalagmites and lakes",
   temple:"Symmetrical sanctuary with pillar colonnades",
   sewer:"Trunk channels, cisterns, smuggler dens",
-  shipwreck:"Splintered decks, flooded holds, barnacle hulls in open sea",
+  road:"Open track between settlements — camps, bridges, and roadside hazards",
   volcanic_lair:"Magma tubes, obsidian bridges, ashen vents and lava lakes",
   fey_forest:"Moss rings, mushroom glades, thorn arches and moonlit pools",
-  undercity:"Stacked slums, canal markets, buried temples under the surface city",
 };
 
 const ROOM_LABEL={
@@ -158,10 +156,9 @@ const ROOM_LABEL={
   cave:"Caverns",
   temple:"Chambers",
   sewer:"Sections",
-  shipwreck:"Holds",
+  road:"Stops",
   volcanic_lair:"Chambers",
   fey_forest:"Groves",
-  undercity:"Wards",
 };
 
 /** Merge into STY[style] for floor/wall/water accents per location. */
@@ -174,10 +171,9 @@ const LOCATION_STYLE_OVERRIDE = {
   sewer:     { floorFg:"#2e4235", waterFg:"#0a5545", wallFg:"#3a4a3a", doorFg:"#5a8060" },
   castle:    { wallFg:"#8a8278", floorFg:"#a89880", doorFg:"#7a5a20", roadFg:"#6a6050" },
   town:      { floorFg:"#7a6a50", wallFg:"#5a4a38", roadFg:"#8a7a5a", doorFg:"#a07020" },
-  shipwreck: { floorFg:"#5a3a1a", wallFg:"#3a2010", waterFg:"#0a2a5a", doorFg:"#6a4a20" },
+  road:      { floorFg:"#3a4a30", wallFg:"#2a3828", waterFg:"#1a4060", doorFg:"#a87830", roadFg:"#4a5838" },
   volcano:   { floorFg:"#6a2010", waterFg:"#cc3300", wallFg:"#4a1808", doorFg:"#aa4400" },
   feyforest: { floorFg:"#1a4a20", wallFg:"#0a2a10", waterFg:"#1a6a4a", doorFg:"#8844cc" },
-  undercity: { floorFg:"#3a3045", wallFg:"#2a2035", doorFg:"#8844aa", roadFg:"#4a3858" },
   // Keep canonical internal keys mapped too.
   volcanic_lair: { floorFg:"#6a2010", waterFg:"#cc3300", wallFg:"#4a1808", doorFg:"#aa4400" },
   fey_forest: { floorFg:"#1a4a20", wallFg:"#0a2a10", waterFg:"#1a6a4a", doorFg:"#8844cc" },
@@ -196,7 +192,7 @@ function applyLocationSpecialFeatures(grid,rooms,locationType,rng,W,H){
       for(let x=1;x<W-1;x++){
         if(grid[y][x]!==T.F) continue;
         const adj=[[0,1],[0,-1],[1,0],[-1,0]].filter(([dy,dx])=>grid[y+dy]?.[x+dx]===T.WA).length;
-        if(adj>=3&&rng()<0.035) grid[y][x]=T.WA;
+        if(adj>=4&&rng()<0.02) grid[y][x]=T.WA;
       }
     }
   }
@@ -223,14 +219,9 @@ function applyLocationSpecialFeatures(grid,rooms,locationType,rng,W,H){
       if(grid[battleRow]?.[x]===T.F) grid[battleRow][x]=T.P;
       if(grid[H-battleRow-1]?.[x]===T.F) grid[H-battleRow-1][x]=T.P;
     }
-  }
-  if(locationType==="shipwreck"){
-    for(let y=0;y<H;y++){
-      for(let x=0;x<W;x++){
-        if(grid[y][x]!==T.V) continue;
-        const near=x<5||x>W-6||y<5||y>H-6;
-        if(near&&rng()<0.9) grid[y][x]=T.WA;
-      }
+    for(let y=battleRow;y<H-battleRow;y+=4){
+      if(grid[y]?.[battleRow]===T.F) grid[y][battleRow]=T.P;
+      if(grid[y]?.[W-battleRow-1]===T.F) grid[y][W-battleRow-1]=T.P;
     }
   }
   if(locationType==="volcanic_lair"){
@@ -240,19 +231,16 @@ function applyLocationSpecialFeatures(grid,rooms,locationType,rng,W,H){
         if(grid[y][x]===T.F&&rng()<0.035) grid[y][x]=T.P;
       }
     }
+    for(let y=1;y<H-1;y++){
+      for(let x=1;x<W-1;x++){
+        if(grid[y][x]===T.WA&&rng()<0.52) grid[y][x]=T.LAVA;
+      }
+    }
   }
   if(locationType==="fey_forest"){
     for(let y=1;y<H-1;y++){
       for(let x=1;x<W-1;x++){
         if(grid[y][x]===T.F&&rng()<0.05) grid[y][x]=T.P;
-      }
-    }
-  }
-  if(locationType==="undercity"){
-    for(let y=1;y<H-1;y++){
-      for(let x=1;x<W-1;x++){
-        if(grid[y][x]===T.C&&rng()<0.22) grid[y][x]=T.WA;
-        if(grid[y][x]===T.F&&rng()<0.03) grid[y][x]=T.P;
       }
     }
   }
@@ -269,10 +257,9 @@ function pickRoomType(loc,locationType,rng){
     temple:["Catacombs","Inner Sanctum","Reliquary","Sanctuary","Altar Room","Narthex","Vestry","Lamp Room"],
     castle:["Dungeon Cell","Vault","Armory","Treasury","War Room","Gatehouse","Wine Cellar","Murder Hole","Watchtower"],
     town:["Tavern","Market","Temple","Docks","Warehouse","Guild Hall","Jeweler"],
-    shipwreck:["Bilge","Brig","Captain's Cabin","Orlop","Galley","Cargo Hold","Chain Locker","Powder Room","Chart House","Breached Hull"],
     volcanic_lair:["Magma Vent","Obsidian Hall","Ash Tomb","Fire Shrine","Ember Pit","Scoria Bridge","Lava Tube","Cinder Nest"],
     fey_forest:["Moss Ring","Mushroom Circle","Thorn Arch","Moon Pool","Hollow Oak","Pixie Dell","Glimmer Grove","Fey Crossing"],
-    undercity:["Smuggler Den","Black Market","Cistern","Buried Chapel","Rat Warren","Forgotten Vault","Canal House","Ash Alley"],
+    road:["Wayside Inn","Merchant Camp","Bridge","Crossroads","Watch Post","Bandit Lair","Roadside Shrine"],
   };
   const pref=skew[locationType];
   if(pref&&pref.length&&rng()<0.7){
@@ -479,26 +466,21 @@ const LOCATIONS = {
       "Bone Sump":["bones","bone_heap","skull","pool","rubble","deadbody"],
     },
   },
-  shipwreck: {
-    name: "Shipwreck",
-    genName: (r)=>pick(["The Barnacle","The Splintered","The Drowned","The Rusted","The Salvaged","The Broken"],r)+" "+pick(["Hulk","Wreck","Galleon","Argosy","Bark","Frigate","Hull"],r),
-    rooms: ["Bilge","Brig","Captain's Cabin","Orlop","Galley","Cargo Hold","Chain Locker","Powder Room","Chart House","Breached Hull","Gun Deck","Fo'c'sle","Sterncastle","Ballast","Chain Room"],
+  road: {
+    name: "Wilderness Road",
+    genName: (r)=>pick(["The Old","The King's","The Pilgrim","The Coast","The Highland"],r)+" "+pick(["Road","Track","Way","March"],r),
+    rooms: ["Wayside Inn","Merchant Camp","Bridge","Crossroads","Watch Post","Ruined Tower","Roadside Shrine","Bandit Lair","Ferry Landing","Toll Station"],
     decos: {
-      "Bilge":["pool","barrel","crate","chains","bones","rubble"],
-      "Brig":["cage","chains","bones","skull","bench","torch_w"],
-      "Captain's Cabin":["table_h","bookshelf","chest","rug","chair","banner"],
-      "Orlop":["crate","barrel","crate_stack","chains","table_h"],
-      "Galley":["cauldron","barrel_row","table_h","crate","barrel"],
-      "Cargo Hold":["crate_stack","crate","barrel_row","chest","crate"],
-      "Chain Locker":["chains","chains","crate","barrel","weapon_rack"],
-      "Powder Room":["crate","barrel","chains","sign_post","torch_w"],
-      "Chart House":["table_h","bookshelf","chair","torch_w","crate"],
-      "Breached Hull":["rubble","rubble","bones","splatter","barrel","crate"],
-      "Gun Deck":["weapon_rack","crate","barrel","bench","torch_w"],
-      "Fo'c'sle":["bed","crate","chains","barrel","bench"],
-      "Sterncastle":["banner","bench","weapon_rack","torch_w","crate"],
-      "Ballast":["barrel","barrel","crate","rubble","bones"],
-      "Chain Room":["chains","chains","anvil","crate","barrel"],
+      "Wayside Inn":["bed","table_h","bench","barrel","crate","torch_w","sign_post"],
+      "Merchant Camp":["cart","stall","crate","chest","rug","bench"],
+      "Bridge":["rubble","crate","sign_post"],
+      "Crossroads":["sign_post","bench","well","cart"],
+      "Watch Post":["weapon_rack","barrel","bench","torch_w"],
+      "Ruined Tower":["rubble","pillar_f","bones","web"],
+      "Roadside Shrine":["altar","bench","statue","bones"],
+      "Bandit Lair":["chest","cage","chains","deadbody","crate"],
+      "Ferry Landing":["barrel","crate","sign_post"],
+      "Toll Station":["crate","iron_gate","sign_post","chest"],
     },
   },
   volcanic_lair: {
@@ -539,25 +521,6 @@ const LOCATIONS = {
       "Dreamspring":["fountain","pool","altar","statue","mushroom","crystal"],
     },
   },
-  undercity: {
-    name: "Undercity",
-    genName: (r)=>pick(["Dusk","Black","Deep","Lower","Murk","Ash","Iron"],r)+" "+pick(["Warren","Ward","Market","Catacombs","Tangle","Sprawl","Depths"],r),
-    rooms: ["Smuggler Den","Black Market","Cistern","Buried Chapel","Rat Warren","Forgotten Vault","Canal House","Ash Alley","Foundry Row","Bone Court","Lantern Bazaar","Sump Chapel"],
-    decos: {
-      "Smuggler Den":["crate_stack","barrel_row","chest","table_h","bed","torch_w"],
-      "Black Market":["stall","stall","chest","crate","sign_post","rug"],
-      "Cistern":["pool","pool","rubble","vine","mushroom","chains"],
-      "Buried Chapel":["altar","bench","banner","statue","bones","coffin"],
-      "Rat Warren":["bones","deadbody","rubble","mushroom","web","blood_sm"],
-      "Forgotten Vault":["chest","chest","crate_stack","statue","chains","pillar_f"],
-      "Canal House":["bed","table_h","crate","barrel","torch_w","chair"],
-      "Ash Alley":["rubble","barrel","crate","sign_post","bones","splatter"],
-      "Foundry Row":["anvil","forge","barrel","weapon_rack","crate_stack","bench"],
-      "Bone Court":["skull","bones","pillar_f","rubble","torch_w","statue"],
-      "Lantern Bazaar":["stall","torch_w","torch_w","cart","crate","barrel_row"],
-      "Sump Chapel":["altar","bench","bones","web","pool","pillar_f"],
-    },
-  },
 };
 
 function getCR(lv){if(lv<=2)return 1;if(lv<=4)return 3;if(lv<=6)return 5;if(lv<=8)return 7;if(lv<=10)return 9;if(lv<=12)return 11;if(lv<=14)return 13;if(lv<=16)return 15;if(lv<=18)return 17;return 20;}
@@ -583,7 +546,8 @@ function pickFloorCellInRoom(grid,rm,rng){
   for(let i=0;i<40;i++){
     const x=rI(rm.x,rm.x+rm.w-1,rng);
     const y=rI(rm.y,rm.y+rm.h-1,rng);
-    if(grid[y]?.[x]===T.F || grid[y]?.[x]===T.C || grid[y]?.[x]===T.WA) return {x,y};
+    const t=grid[y]?.[x];
+    if(t===T.F||t===T.C||t===T.WA||t===T.ROAD||t===T.BRIDGE||t===T.LAVA) return {x,y};
   }
   return {x:Math.floor(rm.x+rm.w/2), y:Math.floor(rm.y+rm.h/2)};
 }
@@ -596,7 +560,8 @@ function placeStairsOnGrid({grid,rooms,stairUp,stairDown,stairUpTo,stairDownTo,r
       const minY=rm.y+1, maxY=rm.y+rm.h-2;
       let sx=clamp(stairUp.x, minX, maxX);
       let sy=clamp(stairUp.y, minY, maxY);
-      if(!(grid[sy]?.[sx]===T.F || grid[sy]?.[sx]===T.C || grid[sy]?.[sx]===T.WA)){
+      const ok=t=>t===T.F||t===T.C||t===T.WA||t===T.ROAD||t===T.BRIDGE||t===T.LAVA;
+      if(!ok(grid[sy]?.[sx])){
         const p=pickFloorCellInRoom(grid,rm,rng); sx=p.x; sy=p.y;
       }
       grid[sy][sx]=T.SU;
@@ -610,7 +575,8 @@ function placeStairsOnGrid({grid,rooms,stairUp,stairDown,stairUpTo,stairDownTo,r
       const minY=rm.y+1, maxY=rm.y+rm.h-2;
       let sx=clamp(stairDown.x, minX, maxX);
       let sy=clamp(stairDown.y, minY, maxY);
-      if(!(grid[sy]?.[sx]===T.F || grid[sy]?.[sx]===T.C || grid[sy]?.[sx]===T.WA)){
+      const ok=t=>t===T.F||t===T.C||t===T.WA||t===T.ROAD||t===T.BRIDGE||t===T.LAVA;
+      if(!ok(grid[sy]?.[sx])){
         const p=pickFloorCellInRoom(grid,rm,rng); sx=p.x; sy=p.y;
       }
       grid[sy][sx]=T.SD;
@@ -939,23 +905,8 @@ function generateGraveyardLayout(cfg,rng){
     if(s==="E" && grid[dY]?.[rx+rw]===T.W) grid[dY][rx+rw]=T.D;
   }
 
-  // Carve T.C paths from mausoleum doors to the gate.
-  const isWallDoor=(x,y)=>grid[y]?.[x]===T.D;
-  const gatePt={cx:gcx,cy:H-2};
-  for(const rm of rooms){
-    let doorPos=null;
-    // Scan edge ring for door.
-    for(let x=rm.x;x<rm.x+rm.w && !doorPos;x++){
-      if(isWallDoor(x,rm.y-1)) doorPos={x,y:rm.y-1};
-      if(isWallDoor(x,rm.y+rm.h)) doorPos={x,y:rm.y+rm.h};
-    }
-    for(let y=rm.y;y<rm.y+rm.h && !doorPos;y++){
-      if(isWallDoor(rm.x-1,y)) doorPos={x:rm.x-1,y};
-      if(isWallDoor(rm.x+rm.w,y)) doorPos={x:rm.x+rm.w,y};
-    }
-    if(!doorPos) continue;
-    carvePath(grid,{cx:doorPos.x,cy:doorPos.y},gatePt,W,H,rng,false);
-  }
+  // Graveyard is open yard: no carved corridors. The T.F interior connects every
+  // mausoleum door to the south gate directly. (Corridor tiles would read as dark "roads".)
 
   return {grid,rooms};
 }
@@ -1084,24 +1035,21 @@ function generateSewerLayout(cfg,rng){
   for(const ty of hTrunks) for(const tx of vTrunks) junctions.push({tx,ty});
   junctions.sort((a,b)=>Math.abs(a.tx-W/2)+Math.abs(a.ty-H/2)- (Math.abs(b.tx-W/2)+Math.abs(b.ty-H/2)));
   const maxJ=Math.min(roomCount, junctions.length);
-  const isUnder=locationType==="undercity";
-  const hubLoc=isUnder?LOCATIONS.undercity:LOCATIONS.sewer;
   for(let i=0;i<maxJ;i++){
     const {tx,ty}=junctions[i];
     const rx=tx-4, ry=ty-4;
     if(rx<1||ry<1||rx+8>=W-1||ry+8>=H-1) continue;
     for(let y=ry;y<ry+8;y++) for(let x=rx;x<rx+8;x++) grid[y][x]=T.F;
-    const hubType=isUnder?pickRoomType(hubLoc,"undercity",rng):"Junction";
-    rooms.push({id:rooms.length+1,x:rx,y:ry,w:8,h:8,cx:tx,cy:ty,type:hubType,label:hubType});
+    rooms.push({id:rooms.length+1,x:rx,y:ry,w:8,h:8,cx:tx,cy:ty,type:"Junction",label:"Junction"});
   }
 
   // Side rooms.
-  const sideTypes=isUnder?["Smuggler Den","Black Market","Cistern","Rat Warren","Canal House","Forgotten Vault","Ash Alley","Lantern Bazaar"]:["Cistern","Rat Nest","Smuggler Den","Overflow","Drain Room","Fungal Chamber"];
+  const sideTypes=["Cistern","Rat Nest","Smuggler Den","Overflow","Drain Room","Fungal Chamber"];
   let att=0;
   while(rooms.length<roomCount && att<roomCount*220){
     att++;
     const isH=rng()<0.5;
-    const roomType=isUnder?pick(hubLoc.rooms,rng):sideTypes[rooms.length%sideTypes.length];
+    const roomType=sideTypes[rooms.length%sideTypes.length];
     const rw=8,rh=6;
     if(isH){
       const ty=pick(hTrunks,rng);
@@ -1197,7 +1145,7 @@ function generateSwampLayout(cfg,rng){
         else nx=x + (rng()<0.5?(dx>0?1:-1):0);
       }
       x=clamp(nx,1,W-2); y=clamp(ny,1,H-2);
-      if(grid[y][x]===T.WA) grid[y][x]=T.F;
+      if(grid[y][x]===T.WA) grid[y][x]=T.BRIDGE;
       // Surround bridge tile with shoreline walls where adjacent is water.
       for(const[dy2,dx2] of [[-1,0],[1,0],[0,-1],[0,1]]){
         const ay=y+dy2, ax=x+dx2;
@@ -1223,63 +1171,59 @@ function generateSwampLayout(cfg,rng){
   return {grid,rooms};
 }
 
-/** Flooded deck inside a wooden hull ring; holds placed as carved rooms. */
-function generateShipwreckLayout(cfg,rng){
+/** Linear road spine with roadside lots — session travel / encounter strips. */
+function generateRoadLayout(cfg,rng){
   const {width:W,height:H,roomCount}=cfg;
-  const grid=Array.from({length:H},()=>Array(W).fill(T.WA));
-  const m=5;
-  for(let y=m;y<H-m;y++)for(let x=m;x<W-m;x++)grid[y][x]=T.F;
-  for(let y=m;y<H-m;y++)for(let x=m;x<W-m;x++){
-    if(y===m||y===H-m-1||x===m||x===W-m-1)grid[y][x]=T.W;
-  }
-  for(let y=m+1;y<H-m-1;y++)for(let x=m+1;x<W-m-1;x++)grid[y][x]=T.F;
-
+  const grid=Array.from({length:H},()=>Array(W).fill(T.V));
+  const mid=Math.floor(H/2);
+  const hubLoc=LOCATIONS.road;
   const rooms=[];
-  const loc=LOCATIONS.shipwreck;
-  const target=Math.max(6,Math.min(roomCount,16));
-  let att=0;
-  while(rooms.length<target&&att<target*220){
-    att++;
-    const rw=rI(4,Math.min(10,Math.max(4,W-2*m-6)),rng);
-    const rh=rI(4,Math.min(9,Math.max(4,H-2*m-6)),rng);
-    const rx=rI(m+1,W-m-rw-1,rng);
-    const ry=rI(m+1,H-m-rh-1,rng);
+  for(let x=2;x<W-2;x++){
+    grid[mid][x]=T.ROAD;
+    if(mid-1>=0) grid[mid-1][x]=T.F;
+    if(mid+1<H) grid[mid+1][x]=T.F;
+  }
+  const n=Math.min(roomCount,Math.max(2,Math.floor(W/22)));
+  for(let i=0;i<n;i++){
+    const cx=8+Math.floor(((i+1)/(n+1))*(W-16));
+    const rw=rI(6,10,rng), rh=rI(4,7,rng);
+    const rx=clamp(cx-Math.floor(rw/2),3,W-rw-3);
+    const north=rng()<0.5;
+    const ry=north?mid-rh-2:mid+2;
+    if(ry<2||ry+rh>=H-2) continue;
     let bad=false;
-    for(let y=ry;y<ry+rh;y++){
-      for(let x=rx;x<rx+rw;x++){
-        if(grid[y][x]!==T.F){bad=true;break;}
-      }
-      if(bad)break;
-    }
-    if(bad)continue;
     for(const r of rooms){
-      if(rx<r.x+r.w+2&&rx+rw+2>r.x&&ry<r.y+r.h+2&&ry+rh+2>r.y){bad=true;break;}
+      if(rx<r.x+r.w+3&&rx+rw+3>r.x&&ry<r.y+r.h+3&&ry+rh+3>r.y){bad=true;break;}
     }
-    if(bad)continue;
-    const roomType=pickRoomType(loc,"shipwreck",rng);
-    for(let y=ry;y<ry+rh;y++)for(let x=rx;x<rx+rw;x++)grid[y][x]=T.F;
+    if(bad) continue;
+    for(let y=ry;y<ry+rh;y++)for(let x=rx;x<rx+rw;x++) grid[y][x]=T.F;
     for(let y=ry-1;y<=ry+rh;y++)for(let x=rx-1;x<=rx+rw;x++){
-      if(y>=0&&y<H&&x>=0&&x<W&&grid[y][x]!==T.WA)grid[y][x]=T.W;
+      if(y>=0&&y<H&&x>=0&&x<W&&grid[y][x]===T.V) grid[y][x]=T.W;
     }
-    for(let y=ry;y<ry+rh;y++)for(let x=rx;x<rx+rw;x++)grid[y][x]=T.F;
-    rooms.push({id:rooms.length+1,x:rx,y:ry,w:rw,h:rh,cx:Math.floor(rx+rw/2),cy:Math.floor(ry+rh/2),type:roomType,label:roomType});
+    for(let y=ry;y<ry+rh;y++)for(let x=rx;x<rx+rw;x++) grid[y][x]=T.F;
+    const roomType=pickRoomType(hubLoc,"road",rng);
+    const rm={id:rooms.length+1,x:rx,y:ry,w:rw,h:rh,cx:Math.floor(rx+rw/2),cy:Math.floor(ry+rh/2),type:roomType,label:roomType};
+    rooms.push(rm);
+    const linkCy=north?mid+1:mid-1;
+    carvePath(grid,rm,{cx:rm.cx,cy:linkCy},W,H,rng,false);
+    if(rooms.length>1) carvePath(grid,rooms[rooms.length-2],rm,W,H,rng,false);
   }
   if(rooms.length===0){
-    const rx=Math.floor(W/2)-6,ry=Math.floor(H/2)-4,rw=12,rh=8;
-    for(let y=ry;y<ry+rh;y++)for(let x=rx;x<rx+rw;x++)if(y>=m+1&&y<H-m-1&&x>=m+1&&x<W-m-1)grid[y][x]=T.F;
-    rooms.push({id:1,x:rx,y:ry,w:rw,h:rh,cx:Math.floor(rx+rw/2),cy:Math.floor(ry+rh/2),type:"Cargo Hold",label:"Cargo Hold"});
+    const rw=12,rh=6;
+    const rx=Math.floor((W-rw)/2), ry=mid-rh-3;
+    for(let y=ry;y<ry+rh;y++)for(let x=rx;x<rx+rw;x++) if(y>1&&y<H-2&&x>1&&x<W-2) grid[y][x]=T.F;
+    for(let y=ry-1;y<=ry+rh;y++)for(let x=rx-1;x<=rx+rw;x++) if(y>=0&&y<H&&x>=0&&x<W&&grid[y][x]===T.V) grid[y][x]=T.W;
+    for(let y=ry;y<ry+rh;y++)for(let x=rx;x<rx+rw;x++) grid[y][x]=T.F;
+    rooms.push({id:1,x:rx,y:ry,w:rw,h:rh,cx:Math.floor(rx+rw/2),cy:Math.floor(ry+rh/2),type:"Crossroads",label:"Crossroads"});
+    carvePath(grid,rooms[0],{cx:rooms[0].cx,cy:mid+1},W,H,rng,false);
   }
-  if(rooms.length>1){
-    const conn=new Set([0]);const unconn=new Set(rooms.map((_,i)=>i).filter(i=>i>0));
-    while(unconn.size>0){
-      let bd=Infinity,ba=-1,bb=-1;
-      for(const a of conn)for(const b of unconn){
-        const d=Math.abs(rooms[a].cx-rooms[b].cx)+Math.abs(rooms[a].cy-rooms[b].cy);
-        if(d<bd){bd=d;ba=a;bb=b;}
+  for(let y=1;y<H-1;y++){
+    for(let x=1;x<W-1;x++){
+      if(grid[y][x]!==T.V) continue;
+      for(const[dy,dx] of [[-1,0],[1,0],[0,-1],[0,1]]){
+        const t=grid[y+dy]?.[x+dx];
+        if(t===T.F||t===T.ROAD||t===T.WA){ grid[y][x]=T.W; break; }
       }
-      if(ba<0)break;
-      carvePath(grid,rooms[ba],rooms[bb],W,H,rng,false);
-      conn.add(bb);unconn.delete(bb);
     }
   }
   return {grid,rooms};
@@ -1294,15 +1238,15 @@ function generateMap(cfg) {
   const mapName=loc?.genName?loc.genName(rng):null;
   const tavernName=loc?.usesRoads?genTavernName(rng):null;
 
-  const useCustomLayout=(locationType==="town"||locationType==="cave"||locationType==="graveyard"||locationType==="castle"||locationType==="sewer"||locationType==="swamp"||locationType==="shipwreck"||locationType==="volcanic_lair"||locationType==="fey_forest"||locationType==="undercity");
+  const useCustomLayout=(locationType==="town"||locationType==="cave"||locationType==="graveyard"||locationType==="castle"||locationType==="sewer"||locationType==="swamp"||locationType==="road"||locationType==="volcanic_lair"||locationType==="fey_forest");
   if(useCustomLayout){
     if(locationType==="town") ({grid,rooms}=generateTownLayout(cfg,rng));
     else if(locationType==="cave") ({grid,rooms}=generateCaveLayout(cfg,rng));
     else if(locationType==="graveyard") ({grid,rooms}=generateGraveyardLayout(cfg,rng));
     else if(locationType==="castle") ({grid,rooms}=generateCastleLayout(cfg,rng));
-    else if(locationType==="sewer"||locationType==="undercity") ({grid,rooms}=generateSewerLayout(cfg,rng));
+    else if(locationType==="sewer") ({grid,rooms}=generateSewerLayout(cfg,rng));
     else if(locationType==="swamp") ({grid,rooms}=generateSwampLayout(cfg,rng));
-    else if(locationType==="shipwreck") ({grid,rooms}=generateShipwreckLayout(cfg,rng));
+    else if(locationType==="road") ({grid,rooms}=generateRoadLayout(cfg,rng));
     else if(locationType==="volcanic_lair"||locationType==="fey_forest") ({grid,rooms}=generateCaveLayout(cfg,rng));
   }
   if(!useCustomLayout){
@@ -1363,14 +1307,14 @@ function generateMap(cfg) {
   if(cfg.showDecos){
     for(const room of rooms){
       let decoPool=loc.decos[room.type]||loc.decos[loc.rooms[0]]||["rubble","barrel","crate"];
-      if(locationType==="dungeon"||locationType==="graveyard"||locationType==="sewer"||locationType==="undercity"||locationType==="volcanic_lair"){
+      if(locationType==="dungeon"||locationType==="graveyard"||locationType==="sewer"||locationType==="volcanic_lair"){
         decoPool=[...decoPool,"bones","skull","blood_sm","deadbody","corpse_beast","splatter","bone_heap","web","rubble"];
       }
       if(locationType==="volcanic_lair")decoPool=[...decoPool,"crystal","stalagmite","boulder","campfire","torch_w"];
       if(locationType==="swamp")decoPool=[...decoPool,"deadbody","bones","mushroom","vine","swamp_pool","blood_sm"];
       if(locationType==="temple")decoPool=[...decoPool,"bones","coffin","statue","blood_sm","altar"];
       if(locationType==="fey_forest")decoPool=[...decoPool,"mushroom","vine","pool","log","bush","tree","web","fountain","campfire"];
-      if(locationType==="shipwreck")decoPool=[...decoPool,"chains","crate_stack","sign_post","splatter","deadbody","barrel_row"];
+      if(locationType==="road")decoPool=[...decoPool,"cart","sign_post","bench","well","splatter","deadbody","barrel_row"];
       const numDecos=rI(1,Math.min(5,Math.floor((room.w*room.h)/14)+2),rng);
       const chosen=[];for(let i=0;i<numDecos;i++) chosen.push(pick(decoPool,rng));
 
@@ -1388,7 +1332,7 @@ function generateMap(cfg) {
           for(let dy=0;dy<sh&&ok;dy++){
             for(let dx=0;dx<sw&&ok;dx++){
               const ch=stamp.rows[dy]?.[dx];
-              if(ch&&ch!==" "){
+              if(ch&&String(ch).trim()!==""){
                 const xx=px+dx, yy=py+dy;
                 const k=`${xx},${yy}`;
                 if(usedCells.has(k)||grid[yy]?.[xx]!==T.F) ok=false;
@@ -1399,7 +1343,7 @@ function generateMap(cfg) {
             for(let dy=0;dy<sh;dy++){
               for(let dx=0;dx<stamp.rows[dy].length;dx++){
                 const ch=stamp.rows[dy][dx];
-                if(ch&&ch!==" "){
+                if(ch&&String(ch).trim()!==""){
                   const xx=px+dx, yy=py+dy;
                   const k=`${xx},${yy}`;
                   usedCells.add(k);
@@ -1436,7 +1380,7 @@ function generateMap(cfg) {
               for(let dy=0;dy<sh&&ok;dy++){
                 for(let dx=0;dx<sw&&ok;dx++){
                   const ch=stamp.rows[dy]?.[dx];
-                  if(ch&&ch!==" "){
+                  if(ch&&String(ch).trim()!==""){
                     const xx=px+dx, yy=py+dy;
                     const tile=grid[yy]?.[xx];
                     if(tile!==T.F) ok=false;
@@ -1449,7 +1393,7 @@ function generateMap(cfg) {
                 for(let dy=0;dy<sh;dy++){
                   for(let dx=0;dx<stamp.rows[dy].length;dx++){
                     const ch=stamp.rows[dy][dx];
-                    if(ch&&ch!==" "){
+                    if(ch&&String(ch).trim()!==""){
                       const xx=px+dx, yy=py+dy;
                       usedCells.add(`${xx},${yy}`);
                       decoOverlay.push({x:xx,y:yy,ch,fg:stamp.fg,name:stamp.n,roomId:null,decoKey});
@@ -1530,8 +1474,7 @@ function enrichForgeRoomMeta(rooms,rng,locationType){
     else if(/throne|vault|cache|shrine|reliquary|sanctum|moon pool|dreamspring|black market|forge depths|breached hull|inner sanctum/i.test(String(r.label||"")))theme=pick(["treasure","lore","puzzle"],rng);
     else if(locationType==="volcanic_lair"&&/magma|ember|lava|volcanic|scoria|cinder|sulfur|glass lake|ash tomb|fire shrine/i.test(String(r.type||"")))theme=pick(["boss","trap","treasure"],rng);
     else if(locationType==="fey_forest"&&/fey|pixie|glimmer|willow|moss ring|thorn|grove|dell|moon pool|dreamspring|fungal vale/i.test(String(r.type||"")))theme=pick(["lore","puzzle","rest","treasure"],rng);
-    else if(locationType==="shipwreck"&&/bilge|brig|hold|wreck|hulk|orlop|galley|powder|cargo|breached hull/i.test(String(r.type||"")))theme=pick(["trap","guard","treasure"],rng);
-    else if(locationType==="undercity"&&/canal|bazaar|sump|warren|ash alley|black market|forgotten vault|lantern|rat warren|bone court|foundry/i.test(String(r.type||"")))theme=pick(["guard","trap","lore","treasure"],rng);
+    else if(locationType==="road"&&/inn|camp|bridge|crossroads|watch|shrine|bandit|ferry|toll|merchant/i.test(String(r.type||"")))theme=pick(["guard","trap","lore","treasure"],rng);
     else if(depth>=6)theme=pick(["guard","trap","treasure","boss"],rng);
     else theme=pick(["guard","lore","puzzle","rest","treasure","trap"],rng);
     const namedRoom=rng()<0.38?`${pick(["Ash","Tallow","Salt","Raven","Iron","Hollow"],rng)} ${pick(["Hall","Vault","Den","Sanctum","Gallery","Pit"],rng)}`:null;
@@ -1620,6 +1563,8 @@ function cellColor(cell,style,ov={}){
     case T.WA:return{bg:isG?"#a8d4e6":(style==="terminal"?"#000008":"#0a1428"),fg:s.waterFg};
     case T.P:return{bg:isG?"#b8b0a0":bg0,fg:s.pillarFg};
     case T.ROAD:return{bg:isG?s.roadBg:bg0,fg:s.roadFg};
+    case T.BRIDGE:return{bg:isG?s.floorBg:bg0,fg:s.corrFg??s.floorFg};
+    case T.LAVA:return{bg:isG?"#4a1808":bg0,fg:s.waterFg};
     default:return{bg:s.void,fg:s.void};
   }
 }
@@ -1656,6 +1601,8 @@ function cellColorPrint(cell){
     case T.WA:return{bg:"#e8f4fc",fg:"#003366"};
     case T.P:return{bg:"#ffffff",fg:"#444444"};
     case T.ROAD:return{bg:"#ffffff",fg:"#555555"};
+    case T.BRIDGE:return{bg:"#ffffff",fg:"#444444"};
+    case T.LAVA:return{bg:"#fff0e8",fg:"#aa2200"};
     default:return{bg:"#f5f5f5",fg:"#d0d0d0"};
   }
 }
@@ -1813,7 +1760,12 @@ export default function DungeonForge(){
   const [view,setView]=useState("dm");const [revealed,setRevealed]=useState(()=>new Set());
   const [statCard,setStatCard]=useState(null);
   const cfgSaveTimer=useRef(null);
-  const mapViewportRef=useRef(null);const draggingRef=useRef(null);
+  const mapViewportRef=useRef(null);const mapPanRef=useRef(null);
+  const draggingRef=useRef(null);
+  const hoverRafRef=useRef(0);
+  const pendingHoverRef=useRef(null);
+  const fogCellsForHoverRef=useRef(null);
+  const lastAppliedHoverSigRef=useRef("");
   const [vpSize,setVpSize]=useState({w:0,h:0});
   const [zoom,setZoom]=useState(1);const [pan,setPan]=useState({x:0,y:0});const [dragging,setDragging]=useState(null);
   const [tvRoom,setTvRoom]=useState(null);
@@ -1953,12 +1905,32 @@ export default function DungeonForge(){
     return n;
   },[vpSize.w,vpSize.h,Wm,Hm,cfg.cellPx]);
   const rooms=dg?dg.rooms:[];const ents=dg?dg.entities:[];const decos=dg?dg.decoOverlay:[];
-  const mapFogCells=isP&&dg&&revealed?computeVisibleCellsForPlayer(revealed,dg,doorOpen):null;
+  const fogOpenFloor=useMemo(()=>isOpenFloorLocation(cfg.locationType),[cfg.locationType]);
+  const mapFogCells=useMemo(()=>{
+    if(!isP||!dg||!revealed)return null;
+    return computeVisibleCellsForPlayer(revealed,dg,doorOpen,null,{openFloor:fogOpenFloor});
+  },[isP,dg,revealed,doorOpen,fogOpenFloor]);
+  useEffect(()=>{fogCellsForHoverRef.current=mapFogCells;},[mapFogCells]);
+  useEffect(()=>{lastAppliedHoverSigRef.current="";},[dg]);
   const highlightRoom=useMemo(()=>{
     if(selRoom==null||!dg)return null;
     const rm=dg.rooms.find(r=>r.id===selRoom);
     return rm?{x:rm.x,y:rm.y,w:rm.w,h:rm.h}:null;
   },[selRoom,dg]);
+  const revealableDoors=useMemo(()=>{
+    if(!isP||!dg||!mapFogCells)return[];
+    const result=[];
+    for(let y=0;y<dg.height;y++){
+      for(let x=0;x<dg.width;x++){
+        if(dg.grid[y][x]!==T.D)continue;
+        const k=`${x},${y}`;
+        if(!mapFogCells.has(k))continue;
+        const adj=dg.rooms.filter((r)=>x>=r.x-1&&x<=r.x+r.w&&y>=r.y-1&&y<=r.y+r.h);
+        if(adj.some((r)=>!revealed.has(r.id))) result.push({x,y});
+      }
+    }
+    return result;
+  },[isP,dg,mapFogCells,revealed]);
   const loc=LOCATIONS[cfg.locationType];
   const asciiExport=useMemo(()=>{
     if(!dg)return null;
@@ -1984,7 +1956,10 @@ export default function DungeonForge(){
     return renderRoomCanvas(dg,tvRoom,cfg.style,cfg.locationType,tvForgeCfg,{cellPx:32,dpr:2,fontPx:24}).toDataURL("image/png");
   },[tvRoom,dg,cfg.style,cfg.locationType,tvForgeCfg]);
 
-  useEffect(()=>{setZoom(1);setPan({x:0,y:0});},[cfg.cellPx]);
+  useEffect(()=>{
+    setZoom(1);setPan({x:0,y:0});
+    try{mapPanRef.current?.style.removeProperty("transform");}catch(_){/* noop */}
+  },[cfg.cellPx]);
 
   useEffect(()=>{
     const el=mapViewportRef.current;
@@ -2007,11 +1982,31 @@ export default function DungeonForge(){
   },[dg]);
 
   useEffect(()=>{
-    if(tvRoom==null)return;
-    const onKey=(e)=>{if(e.key==="Escape"){e.preventDefault();setTvRoom(null);}};
+    const onKey=(e)=>{
+      if(e.key!=="Escape")return;
+      if(tvRoom!=null){e.preventDefault();setTvRoom(null);return;}
+      if(selRoom!=null){e.preventDefault();setSelRoom(null);}
+    };
     window.addEventListener("keydown",onKey);
     return()=>window.removeEventListener("keydown",onKey);
-  },[tvRoom]);
+  },[tvRoom,selRoom]);
+
+  const flushHoverRaf=useCallback(()=>{
+    hoverRafRef.current=0;
+    const p=pendingHoverRef.current;
+    pendingHoverRef.current=null;
+    if(!p)return;
+    if(p.sig===lastAppliedHoverSigRef.current)return;
+    lastAppliedHoverSigRef.current=p.sig;
+    setHovered(p.hovered);
+    setMapHoverTip(p.tip);
+  },[]);
+  const scheduleHover=useCallback((payload)=>{
+    pendingHoverRef.current=payload;
+    if(hoverRafRef.current!==0)return;
+    hoverRafRef.current=requestAnimationFrame(flushHoverRaf);
+  },[flushHoverRaf]);
+  useEffect(()=>()=>{if(hoverRafRef.current)cancelAnimationFrame(hoverRafRef.current);},[]);
 
   const onCanvasPointerDown=(e)=>{
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -2021,7 +2016,13 @@ export default function DungeonForge(){
   };
   const onCanvasPointerMove=(e)=>{
     const d=draggingRef.current;
-    if(d){setPan({x:e.clientX-d.ax,y:e.clientY-d.ay});return;}
+    if(d){
+      const nx=e.clientX-d.ax;
+      const ny=e.clientY-d.ay;
+      const pel=mapPanRef.current;
+      if(pel)pel.style.transform=`translate(${nx}px,${ny}px) scale(${zoom})`;
+      return;
+    }
     if(!rg||!dg)return;
     const rect=mapViewportRef.current?.getBoundingClientRect();
     if(!rect)return;
@@ -2029,22 +2030,41 @@ export default function DungeonForge(){
     const relY=e.clientY-rect.top-pan.y;
     const gx=Math.floor(relX/zoom/cs);
     const gy=Math.floor(relY/zoom/cs);
-    if(gx<0||gy<0||gx>=dg.width||gy>=dg.height){setHovered(null);setMapHoverTip(null);return;}
-    const cell=rg[gy][gx];
-    if(isP&&revealed){
-      const fogCells=computeVisibleCellsForPlayer(revealed,dg,doorOpen);
-      if(!fogCells.has(`${gx},${gy}`)){setHovered(null);setMapHoverTip(null);return;}
+    if(gx<0||gy<0||gx>=dg.width||gy>=dg.height){
+      const fullSig="__oob__";
+      if(fullSig===lastAppliedHoverSigRef.current)return;
+      scheduleHover({sig:fullSig,hovered:null,tip:null});
+      return;
     }
-    if(cell.extra&&cell.eType!=="deco"&&!isP)setHovered(cell.extra);
-    else setHovered(null);
+    const cell=rg[gy][gx];
+    const fogCells=fogCellsForHoverRef.current;
+    if(isP&&revealed&&fogCells&&!fogCells.has(`${gx},${gy}`)){
+      const fullSig=`fog:${gx},${gy}`;
+      if(fullSig===lastAppliedHoverSigRef.current)return;
+      scheduleHover({sig:fullSig,hovered:null,tip:null});
+      return;
+    }
+    const hoveredNext=cell.extra&&cell.eType!=="deco"&&!isP?cell.extra:null;
     const ex=cell.extra;
     const nm=cell.eName??(ex&&typeof ex==="object"&&"name" in ex?ex.name:null);
+    let tip=null;
     if(nm||cell.eType==="deco"){
       const detail=ex&&typeof ex==="object"&&"cr" in ex&&ex.cr!=null?` (CR ${ex.cr})`:ex&&ex.dmg?` — ${ex.dmg}`:ex&&ex.r?` [${ex.r}]`:"";
-      setMapHoverTip(nm?`${nm}${detail}`:cell.eName?`${cell.eName}`:null);
-    }else setMapHoverTip(null);
+      tip=nm?`${nm}${detail}`:cell.eName?`${cell.eName}`:null;
+    }
+    const slug=hoveredNext&&typeof hoveredNext==="object"&&"slug" in hoveredNext?String(hoveredNext.slug??""):"";
+    const fullSig=`${gx},${gy}|${tip??""}|${slug}`;
+    if(fullSig===lastAppliedHoverSigRef.current)return;
+    scheduleHover({sig:fullSig,hovered:hoveredNext,tip});
   };
   const onCanvasPointerUp=(e)=>{
+    const d=draggingRef.current;
+    if(d){
+      const nx=e.clientX-d.ax;
+      const ny=e.clientY-d.ay;
+      setPan({x:nx,y:ny});
+      try{mapPanRef.current?.style.removeProperty("transform");}catch(_){/* noop */}
+    }
     draggingRef.current=null;
     setDragging(null);
     try{e.currentTarget.releasePointerCapture(e.pointerId);}catch(_){/* noop */}
@@ -2052,19 +2072,35 @@ export default function DungeonForge(){
   const handleMapCellClick=(gx,gy,cell)=>{
     if(!dg||!rg)return;
     if(gx<0||gy<0||gx>=dg.width||gy>=dg.height)return;
-    if(isP&&revealed){
-      const fogCells=computeVisibleCellsForPlayer(revealed,dg,doorOpen);
-      if(!fogCells.has(`${gx},${gy}`))return;
-    }
-    if(!isP&&cell.extra?.type==="monster"&&cell.extra.slug){setStatCard({slug:cell.extra.slug,view:"dm"});return;}
     const tile=dg.grid?.[gy]?.[gx];
-    if(!isP&&tile===T.D){
-      const key=`${gx},${gy}`;
-      setDoorOpen((prev)=>{const next=new Set(prev);if(next.has(key))next.delete(key);else next.add(key);return next;});
+    const key=`${gx},${gy}`;
+    if(!isP&&cell.extra?.type==="monster"&&cell.extra.slug){setStatCard({slug:cell.extra.slug,view:"dm"});return;}
+    if(tile===T.D){
+      if(!isP){
+        setDoorOpen((prev)=>{const next=new Set(prev);if(next.has(key))next.delete(key);else next.add(key);return next;});
+        return;
+      }
+      if(mapFogCells?.has(key)){
+        setDoorOpen((p)=>new Set(p).add(key));
+        const adj=dg.rooms.filter((r)=>gx>=r.x-1&&gx<=r.x+r.w&&gy>=r.y-1&&gy<=r.y+r.h);
+        if(adj.length){
+          setRevealed((prev)=>{const n=new Set(prev);adj.forEach((r)=>n.add(r.id));return n;});
+        }
+        return;
+      }
       return;
     }
-    const rm=dg.rooms.find(r=>gx>=r.x&&gx<r.x+r.w&&gy>=r.y&&gy<r.y+r.h);
-    if(rm)setSelRoom(rm.id===selRoom?null:rm.id);
+    const rm=dg.rooms.find((r)=>gx>=r.x&&gx<r.x+r.w&&gy>=r.y&&gy<r.y+r.h);
+    if(!rm)return;
+    if(isP){
+      if(!revealed.has(rm.id)){
+        setSelRoom(rm.id);
+        return;
+      }
+      setSelRoom(selRoom===rm.id?null:rm.id);
+      return;
+    }
+    setSelRoom(selRoom===rm.id?null:rm.id);
   };
   const onMapContextMenu=(e)=>{
     if(!dg||!rg||isP)return;
@@ -2083,7 +2119,7 @@ export default function DungeonForge(){
     if(!dg)return;
     const mergedRevealed=overrides.revealed!=null?new Set(overrides.revealed):revealed;
     const mergedDoorOpen=overrides.doorOpen!=null?new Set(overrides.doorOpen):doorOpen;
-    const revealedCells=[...computeVisibleCellsForPlayer(mergedRevealed,dg,mergedDoorOpen)];
+    const revealedCells=[...computeVisibleCellsForPlayer(mergedRevealed,dg,mergedDoorOpen,null,{openFloor:isOpenFloorLocation(dg.locationType??cfg.locationType)})];
     const state={
       dungeonData:{
         grid:dg.grid,
@@ -2117,7 +2153,7 @@ export default function DungeonForge(){
   const exportPNG=(mode,{ink=false}={})=>{
     if(!dg)return;
     const isDm=mode==="dm";
-    const fogCells=!isDm?computeVisibleCellsForPlayer(revealed,dg,doorOpen):null;
+    const fogCells=!isDm?computeVisibleCellsForPlayer(revealed,dg,doorOpen,null,{openFloor:isOpenFloorLocation(dg.locationType??cfg.locationType)}):null;
     const cellPx=Math.max(cfg.exportCellPx??32,cfg.cellPx??18);
     const dpr=ink?1:2;
     const fc={...cfg,showThemes:!!cfg.showThemes&&isDm};
@@ -2196,6 +2232,7 @@ export default function DungeonForge(){
         ["--forge-bg"]:S.bg,
       }}
     >
+      <style>{`@keyframes forge-pulse { 0%,100%{opacity:0.35;} 50%{opacity:1;} }`}</style>
       <div style={{padding:"7px 12px",borderBottom:`1px solid ${S.panelBorder}`,background:S.headerBg,display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:4}}>
         <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
           <span style={{fontSize:17,fontWeight:"bold",color:S.accent,letterSpacing:3}}>DUNGEON FORGE</span>
@@ -2380,6 +2417,7 @@ export default function DungeonForge(){
                   }}
                 >
                   <div
+                    ref={mapPanRef}
                     style={{
                       position:"absolute",
                       left:0,
@@ -2389,18 +2427,38 @@ export default function DungeonForge(){
                       willChange:"transform",
                     }}
                   >
-                    <DungeonMapCanvas
-                      grid={rg}
-                      cellPx={cs}
-                      palette={LOCATION_PALETTE[dg.locationType]??DEFAULT_PALETTE}
-                      entities={ENTITY_PALETTE}
-                      fogCells={mapFogCells}
-                      doorOpen={doorOpen}
-                      showEnts={!isP}
-                      playerSanitize={false}
-                      highlightRoom={highlightRoom}
-                      onCellClick={handleMapCellClick}
-                    />
+                    <div style={{position:"relative",display:"inline-block",verticalAlign:"top"}}>
+                      <DungeonMapCanvas
+                        grid={rg}
+                        cellPx={cs}
+                        palette={LOCATION_PALETTE[dg.locationType]??DEFAULT_PALETTE}
+                        entities={ENTITY_PALETTE}
+                        fogCells={mapFogCells}
+                        doorOpen={doorOpen}
+                        showEnts={!isP}
+                        playerSanitize={false}
+                        highlightRoom={highlightRoom}
+                        onCellClick={handleMapCellClick}
+                      />
+                      {isP&&revealableDoors.map(({x,y})=>(
+                        <div
+                          key={`rd-${x}-${y}`}
+                          style={{
+                            position:"absolute",
+                            left:x*cs,
+                            top:y*cs,
+                            width:cs,
+                            height:cs,
+                            border:`2px solid ${S.accent}`,
+                            boxShadow:`0 0 ${Math.max(4,cs/2)}px ${S.accent}`,
+                            animation:"forge-pulse 1.4s ease-in-out infinite",
+                            pointerEvents:"none",
+                            borderRadius:2,
+                            zIndex:2,
+                          }}
+                        />
+                      ))}
+                    </div>
                   </div>
                   {mapHoverTip&&(
                     <div
@@ -2507,7 +2565,8 @@ export default function DungeonForge(){
                   <span style={{fontSize:10,fontWeight:"normal",color:S.dimText}}>{rm.w}x{rm.h}</span>
                   {!isP&&rm.theme&&<span style={{fontSize:10,fontWeight:"normal",color:S.accentAlt}}>theme {rm.theme}</span>}
                   {!isP&&typeof rm.depth==="number"&&<span style={{fontSize:10,fontWeight:"normal",color:S.dimText}}>depth {rm.depth}</span>}
-                  {isP&&<button onClick={()=>{const n=new Set(revealed);if(n.has(rm.id))n.delete(rm.id);else n.add(rm.id);setRevealed(n);}} style={{marginLeft:"auto",padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:revealed.has(rm.id)?S.accentAlt:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>{revealed.has(rm.id)?"HIDE":"REVEAL"}</button>}
+                  {isP&&<button onClick={()=>{const n=new Set(revealed);if(n.has(rm.id))n.delete(rm.id);else n.add(rm.id);setRevealed(n);}} style={{marginLeft:"auto",padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:revealed.has(rm.id)?S.accentAlt:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>{revealed.has(rm.id)?"HIDE":"REVEAL ROOM"}</button>}
+                  <button type="button" onClick={()=>setSelRoom(null)} style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>✕ Clear</button>
                   {!isP&&<button type="button" onClick={()=>setRevealed(new Set([rm.id]))} style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Set as Start Room</button>}
                   <button type="button" onClick={()=>setTvRoom(rm.id)} style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>📺 TV</button>
                 </div>
@@ -2658,12 +2717,17 @@ export default function DungeonForge(){
                   <button type="button" onClick={()=>setTvRoom(rm.id)} style={{width:"100%",padding:"6px 8px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>POP OUT ROOM</button>
                 </div>
               </div>);})():(<div>
+              {isP&&(
+                <div style={{fontSize:11,marginBottom:4,color:S.accent}}>
+                  Select a room on the map or list, then press REVEAL ROOM. Paths from rooms you already revealed stay visible.
+                </div>
+              )}
               <div style={{fontSize:12,marginBottom:2,color:S.dimText,fontStyle:"italic"}}>Click a room to inspect{isP?" / toggle fog":""}</div>
               <div style={{display:"flex",flexWrap:"wrap",gap:2,alignItems:"center"}}>
                 {rooms.map(r=>{const re=ents.filter(e=>e.roomId===r.id);const vis=revealed.has(r.id);
                   return(
                     <div key={r.id} style={{display:"flex",alignItems:"stretch",gap:2}}>
-                      <button type="button" onClick={()=>setSelRoom(r.id)} style={{padding:"3px 6px",fontSize:10,fontFamily:"'Courier New',monospace",background:"rgba(255,255,255,0.03)",color:isP&&!vis?S.dimText:S.textColor,border:`1px solid ${S.panelBorder}`,borderRadius:2,cursor:"pointer",display:"flex",alignItems:"center",gap:3,opacity:isP&&!vis?0.4:1}}>
+                      <button type="button" onClick={()=>setSelRoom((prev)=>prev===r.id?null:r.id)} style={{padding:"3px 6px",fontSize:10,fontFamily:"'Courier New',monospace",background:"rgba(255,255,255,0.03)",color:isP&&!vis?S.dimText:S.textColor,border:`1px solid ${S.panelBorder}`,borderRadius:2,cursor:"pointer",display:"flex",alignItems:"center",gap:3,opacity:isP&&!vis?0.4:1}}>
                         <b>{r.id}</b><span style={{fontSize:9}}>{r.label||r.type}</span>
                         {!isP&&re.some(e=>e.type==="monster")&&<span style={{color:S.monsterFg,fontSize:8}}>M</span>}
                         {!isP&&re.some(e=>e.type==="trap")&&<span style={{color:S.trapFg,fontSize:8}}>T</span>}

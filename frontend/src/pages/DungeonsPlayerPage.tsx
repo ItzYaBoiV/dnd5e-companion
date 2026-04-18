@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { buildRenderGrid } from "@/lib/dungeonForgeRenderGrid";
-import { computeVisibleCellsForPlayer } from "@/lib/dungeonForgeFog";
+import { computeVisibleCellsForPlayer, isOpenFloorLocation } from "@/lib/dungeonForgeFog";
 import { renderDungeonToCanvas } from "@/lib/dungeonTileRenderer";
 import { DEFAULT_PALETTE, ENTITY_PALETTE, LOCATION_PALETTE } from "@/lib/dungeonTilePalettes";
 
@@ -65,8 +65,14 @@ function cellKeysBBox(
 export default function DungeonsPlayerPage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [mapState, setMapState] = useState<PlayerState | null>(null);
+  const [animPhase, setAnimPhase] = useState(0);
   const mapStateRef = useRef<PlayerState | null>(null);
   mapStateRef.current = mapState;
+
+  useEffect(() => {
+    const id = window.setInterval(() => setAnimPhase((p) => (p + 0.06) % 1), 160);
+    return () => window.clearInterval(id);
+  }, []);
 
   useEffect(() => {
     const pull = () => {
@@ -127,7 +133,10 @@ export default function DungeonsPlayerPage() {
 
     const revealed = new Set(mapState?.revealed ?? []);
     const doorOpen = new Set(mapState?.doorOpen ?? []);
-    const fogCells = computeVisibleCellsForPlayer(revealed, dg, doorOpen);
+    const locType = dg.locationType ?? "dungeon";
+    const fogCells = computeVisibleCellsForPlayer(revealed, dg, doorOpen, null, {
+      openFloor: isOpenFloorLocation(locType),
+    });
 
     const loc = dg.locationType ?? "dungeon";
     const palette = LOCATION_PALETTE[loc] ?? DEFAULT_PALETTE;
@@ -189,11 +198,12 @@ export default function DungeonsPlayerPage() {
       dpr,
       fogCells: fogAdj,
       doorOpen,
+      animPhase,
       showEnts: false,
       playerSanitize: true,
       inkSaver: false,
     });
-  }, [mapState]);
+  }, [mapState, animPhase]);
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black">

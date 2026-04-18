@@ -1,6 +1,30 @@
 import { DUNGEON_T as T } from "@/lib/dungeonForgeConstants";
 import type { RenderCell } from "@/lib/dungeonTileRenderer";
 
+export function trapGlyph(name: string | undefined): string {
+  const s = String(name || "").toLowerCase();
+  if (/pit|hole|shaft/.test(s)) return "⌄";
+  if (/dart|needle|bolt/.test(s)) return "➷";
+  if (/blade|swing|scythe/.test(s)) return "†";
+  if (/fire|flame|jet|burn/.test(s)) return "※";
+  if (/ceiling|collapse|rock/.test(s)) return "△";
+  if (/acid|pool|slime/.test(s)) return "≋";
+  if (/lightning|rune|shock|spark/.test(s)) return "⚡";
+  if (/spike/.test(s)) return "▼";
+  return "^";
+}
+
+export function itemGlyph(name: string | undefined): string {
+  const s = String(name || "").toLowerCase();
+  if (/key|ring|lock/.test(s)) return "⚿";
+  if (/potion|vial|flask/.test(s)) return "⚗";
+  if (/scroll|map|letter/.test(s)) return "¶";
+  if (/coin|gold|gem|chest/.test(s)) return "◆";
+  if (/weapon|sword|axe|bow/.test(s)) return "†";
+  if (/armor|shield|mail/.test(s)) return "⛨";
+  return "!";
+}
+
 export function monsterGlyph(name: string | undefined): string {
   const s = String(name || "M").toLowerCase();
   if (/spider|rat|scorpion/.test(s)) return "8";
@@ -45,6 +69,8 @@ export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: b
     corr: ".",
     voidCh: " ",
     water: "~",
+    bridge: "=",
+    lava: "≈",
     pillar: "O",
     road: ":",
     stairsU: "<",
@@ -87,10 +113,17 @@ export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: b
       let eName: string | null = null;
       let extra: unknown = null;
       if (ent) {
-        ch = ent.type === "monster" ? monsterGlyph(ent.name) : ent.type === "trap" ? "^" : "!";
+        ch =
+          ent.type === "monster"
+            ? monsterGlyph(ent.name)
+            : ent.type === "trap"
+              ? trapGlyph(ent.name)
+              : ent.type === "item"
+                ? itemGlyph(ent.name)
+                : "?";
         eType = ent.type;
         extra = ent;
-      } else if (deco) {
+      } else if (deco && String(deco.ch ?? "").trim() !== "") {
         ch = deco.ch;
         fg = deco.fg ?? null;
         eType = "deco";
@@ -99,7 +132,7 @@ export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: b
       } else if (label) {
         ch = String(label.id);
         eType = "label";
-      } else if (showThemes && themeMap[k] && (tile === T.F || tile === T.C || tile === T.ROAD)) {
+      } else if (showThemes && themeMap[k] && (tile === T.F || tile === T.C || tile === T.ROAD || tile === T.BRIDGE)) {
         ch = THEME_GLYPH[themeMap[k]] || G.floor;
         eType = "theme";
       } else {
@@ -133,6 +166,12 @@ export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: b
             break;
           case T.ROAD:
             ch = G.road;
+            break;
+          case T.BRIDGE:
+            ch = G.bridge;
+            break;
+          case T.LAVA:
+            ch = G.lava;
             break;
           default:
             ch = G.voidCh;

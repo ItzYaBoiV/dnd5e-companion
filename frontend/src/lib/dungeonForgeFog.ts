@@ -8,15 +8,45 @@ export type FogDungeonGrid = {
 };
 
 /**
- * Flood visibility from revealed room interiors through corridors/doors/roads only.
- * Closed doors (not in `doorOpen`) block passage; the door tile itself remains visible from the side that already has line-of-sight.
+ * Flood visibility from revealed room interiors through corridors/doors/roads (and optionally connective T.F yards).
+ * Closed doors (not passable per `doorOpen` / `doorStates`) block passage; the door tile itself remains visible from the side that already has line-of-sight.
  */
+function doorPassableAt(
+  key: string,
+  doorOpen: Set<string> | null | undefined,
+  doorStates: Record<string, string> | null | undefined,
+): boolean {
+  if (doorStates && Object.prototype.hasOwnProperty.call(doorStates, key)) {
+    return doorStates[key] === "open";
+  }
+  if (doorOpen == null) return true;
+  return doorOpen.has(key);
+}
+
+export type ComputeVisibleFogOpts = {
+  openFloor?: boolean;
+};
+
+/** Yards and outdoor grids where revealed rooms should flood through connective T.F (not only corridors). */
+export function isOpenFloorLocation(locationType: string): boolean {
+  return locationType === "graveyard" || locationType === "swamp" || locationType === "town";
+}
+
+/** Room id whose bounding box contains (x,y), or null if in shared yard / void. */
+export function cellRoomId(dg: FogDungeonGrid, x: number, y: number): number | null {
+  for (const r of dg.rooms) {
+    if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return r.id;
+  }
+  return null;
+}
+
 export function computeVisibleCellsForPlayer(
   revealed: Set<number> | Iterable<number>,
   dg: FogDungeonGrid,
   doorOpen: Set<string> | null | undefined,
+  doorStates?: Record<string, string> | null,
+  fogOpts?: ComputeVisibleFogOpts,
 ): Set<string> {
-  const doorKeys = doorOpen ?? new Set<string>();
   const rev = revealed instanceof Set ? revealed : new Set(revealed);
   const cells = new Set<string>();
   const W = dg.width;
@@ -61,7 +91,7 @@ export function computeVisibleCellsForPlayer(
       if (visited.has(nk)) continue;
 
       const dk = doorKeyForStep(x, y, nx, ny);
-      if (dk && !doorKeys.has(dk)) {
+      if (dk && !doorPassableAt(dk, doorOpen, doorStates ?? null)) {
         const nt = g[ny][nx];
         if (nt === T.D) {
           cells.add(nk);
@@ -71,7 +101,18 @@ export function computeVisibleCellsForPlayer(
       }
 
       const tile = g[ny][nx];
-      if (tile === T.C || tile === T.D || tile === T.ROAD) {
+      const openFloor = !!fogOpts?.openFloor;
+
+      if (tile === T.C || tile === T.D || tile === T.ROAD || tile === T.BRIDGE || tile === T.LAVA) {
+        visited.add(nk);
+        cells.add(nk);
+        queue.push(nk);
+      } else if (openFloor && tile === T.F) {
+        // Shared yard / paths: flood. Building interiors stay fogged until that room is revealed.
+        const interiorRid = cellRoomId(dg, nx, ny);
+        if (interiorRid != null && !rev.has(interiorRid)) {
+          continue;
+        }
         visited.add(nk);
         cells.add(nk);
         queue.push(nk);

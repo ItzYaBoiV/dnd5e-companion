@@ -1,7 +1,6 @@
 /**
  * Canvas pixel-art tile renderer for Dungeon Forge.
- * Tile type constants MUST match `T` in DungeonForgeImpl.jsx:
- * { V:0, F:1, W:2, D:3, C:4, SD:5, SU:6, WA:7, P:8, ROAD:9 }
+ * Tile type constants MUST match `DUNGEON_T` in dungeonForgeConstants.ts.
  */
 
 export type TilePalette = {
@@ -25,6 +24,12 @@ export type TilePalette = {
   pillarShadow: string;
   roadBg: string;
   roadLine: string;
+  /** Plank / span over water (defaults to corridor tones if omitted). */
+  bridgeBg?: string;
+  bridgeFg?: string;
+  /** Molten hazard (defaults to water tones if omitted). */
+  lavaBg?: string;
+  lavaGlow?: string;
 };
 
 export type EntityPalette = {
@@ -51,8 +56,14 @@ export type RenderTileOpts = {
   /** Semi-transparent highlight for selected room bounds (grid coords). */
   highlightRoom?: { x: number; y: number; w: number; h: number } | null;
   inkSaver?: boolean;
-  /** Grid keys `"x,y"` for doors that are open. Omitted / empty = all doors closed for drawing. */
+  /** Grid keys `"x,y"` for doors that are open. Omitted / empty = all doors open for drawing (legacy). */
   doorOpen?: Set<string> | null;
+  /** Optional explicit door machine: `"open" | "closed" | "locked"` per key; overrides `doorOpen` when set. */
+  doorStates?: Record<string, string> | null;
+  /** 0–1 animation phase for water/lava shimmer. */
+  animPhase?: number;
+  /** Simple radial dimming from a grid cell (player lantern / torch). */
+  lighting?: { gx: number; gy: number; radiusCells: number; intensity?: number } | null;
 };
 
 export type RenderCell = {
@@ -74,6 +85,21 @@ const T_STAIRS_UP = 6;
 const T_WATER = 7;
 const T_PILLAR = 8;
 const T_ROAD = 9;
+const T_BRIDGE = 10;
+const T_LAVA = 11;
+
+function isDoorOpenForRender(
+  dk: string | null,
+  doorOpen: Set<string> | null | undefined,
+  doorStates: Record<string, string> | null | undefined,
+): boolean {
+  if (!dk) return true;
+  if (doorStates && Object.prototype.hasOwnProperty.call(doorStates, dk)) {
+    return doorStates[dk] === "open";
+  }
+  if (doorOpen == null) return true;
+  return doorOpen.has(dk);
+}
 
 function hexToGray(hex: string): string {
   if (typeof hex !== "string" || !hex.startsWith("#")) return hex;
@@ -92,7 +118,9 @@ function hexToGray(hex: string): string {
 function grayPalette(p: TilePalette): TilePalette {
   const o = {} as Record<keyof TilePalette, string>;
   (Object.keys(p) as (keyof TilePalette)[]).forEach((k) => {
-    o[k] = hexToGray(p[k]);
+    const v = p[k];
+    if (v === undefined) return;
+    o[k] = hexToGray(v);
   });
   return o as TilePalette;
 }
@@ -122,8 +150,12 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
   const cssW = cols * cellPx;
   const cssH = rows * cellPx;
 
-  canvas.width = Math.ceil(cssW * dpr);
-  canvas.height = Math.ceil(cssH * dpr);
+  const nextW = Math.ceil(cssW * dpr);
+  const nextH = Math.ceil(cssH * dpr);
+  if (canvas.width !== nextW || canvas.height !== nextH) {
+    canvas.width = nextW;
+    canvas.height = nextH;
+  }
   canvas.style.width = `${cssW}px`;
   canvas.style.height = `${cssH}px`;
 
@@ -140,6 +172,9 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
   const sanitize = !!opts.playerSanitize;
   const hideDeco = opts.hideDecoKeys ?? new Set<string>();
   const hi = opts.highlightRoom;
+  const animPhase = opts.animPhase ?? 0;
+  const doorStates = opts.doorStates ?? null;
+  const lighting = opts.lighting ?? null;
 
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
@@ -153,7 +188,25 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
         continue;
       }
 
-      drawBaseTile(ctx, cell, px, py, cellPx, palette, grid, x, y, cols, rows, showEnts, sanitize, hideDeco, opts.doorOpen);
+      drawBaseTile(
+        ctx,
+        cell,
+        px,
+        py,
+        cellPx,
+        palette,
+        grid,
+        x,
+        y,
+        cols,
+        rows,
+        showEnts,
+        sanitize,
+        hideDeco,
+        opts.doorOpen,
+        doorStates,
+        animPhase,
+      );
 
       if (hi && x >= hi.x && x < hi.x + hi.w && y >= hi.y && y < hi.y + hi.h) {
         ctx.fillStyle = "rgba(255,220,50,0.18)";
@@ -172,6 +225,17 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
         sanitize,
         hideDeco,
       );
+
+      if (lighting) {
+        const { gx: lx, gy: ly, radiusCells, intensity = 0.48 } = lighting;
+        const d = Math.hypot(x - lx, y - ly);
+        const falloff = Math.max(0, 1 - d / Math.max(0.5, radiusCells));
+        const dark = (1 - falloff) * intensity;
+        if (dark > 0.001) {
+          ctx.fillStyle = `rgba(0,0,0,${dark})`;
+          ctx.fillRect(px, py, cellPx, cellPx);
+        }
+      }
     }
   }
 }
@@ -192,6 +256,8 @@ function drawBaseTile(
   sanitize: boolean,
   hideDeco: Set<string>,
   doorOpen?: Set<string> | null,
+  doorStates?: Record<string, string> | null,
+  animPhase = 0,
 ): void {
   const t = cell.tile;
 
@@ -206,11 +272,11 @@ function drawBaseTile(
     hideDeco.has(String((cell.extra as { decoKey?: string }).decoKey));
 
   if (hideEntityOverlay || hideLabel || hideDecoCell) {
-    drawTileByKind(ctx, t, px, py, s, p, true, doorOpen, gx, gy);
+    drawTileByKind(ctx, t, px, py, s, p, true, doorOpen, doorStates, gx, gy, animPhase);
     return;
   }
 
-  drawTileByKind(ctx, t, px, py, s, p, false, doorOpen, gx, gy);
+  drawTileByKind(ctx, t, px, py, s, p, false, doorOpen, doorStates, gx, gy, animPhase);
 }
 
 function drawTileByKind(
@@ -222,8 +288,10 @@ function drawTileByKind(
   p: TilePalette,
   mutedFloor: boolean,
   doorOpen?: Set<string> | null,
+  doorStates?: Record<string, string> | null,
   gx?: number,
   gy?: number,
+  animPhase = 0,
 ): void {
   if (t === T_VOID) {
     ctx.fillStyle = p.void;
@@ -267,13 +335,16 @@ function drawTileByKind(
   }
 
   if (t === T_FLOOR || t === T_CORRIDOR) {
-    const bg = mutedFloor ? p.floorBg : t === T_FLOOR ? p.floorBg : p.corridorBg;
-    const detail = mutedFloor ? p.floorDetail : t === T_FLOOR ? p.floorDetail : p.corridorFg;
+    const isCorr = t === T_CORRIDOR;
+    const bg = mutedFloor ? p.floorBg : isCorr ? p.corridorBg : p.floorBg;
+    const detail = mutedFloor ? p.floorDetail : isCorr ? p.corridorFg : p.floorDetail;
     ctx.fillStyle = bg;
     ctx.fillRect(px, py, s, s);
-    if (s >= 8) {
+    const dotThreshold = isCorr ? 8 : 12;
+    const dotAlpha = mutedFloor ? 0.2 : isCorr ? 0.25 : 0.22;
+    if (s >= dotThreshold) {
       ctx.fillStyle = detail;
-      ctx.globalAlpha = mutedFloor ? 0.2 : 0.35;
+      ctx.globalAlpha = dotAlpha;
       const spacing = Math.floor(s / 4);
       for (let dotX = spacing; dotX < s; dotX += spacing) {
         for (let dotY = spacing; dotY < s; dotY += spacing) {
@@ -285,12 +356,23 @@ function drawTileByKind(
       }
       ctx.globalAlpha = 1;
     }
+    if (isCorr && s >= 8 && gx != null && gy != null) {
+      const mid = Math.floor(s / 2);
+      ctx.strokeStyle = detail;
+      ctx.globalAlpha = mutedFloor ? 0.12 : 0.32;
+      ctx.lineWidth = Math.max(0.5, s * 0.09);
+      ctx.beginPath();
+      ctx.moveTo(px + mid, py + 2);
+      ctx.lineTo(px + mid, py + s - 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
     return;
   }
 
   if (t === T_DOOR) {
     const dk = gx != null && gy != null ? `${gx},${gy}` : null;
-    const closed = !!(doorOpen && dk && !doorOpen.has(dk));
+    const closed = !isDoorOpenForRender(dk, doorOpen ?? null, doorStates ?? null);
     ctx.fillStyle = closed ? p.wallBg : p.doorBg;
     ctx.fillRect(px, py, s, s);
     const pad = Math.max(1, Math.floor(s * 0.15));
@@ -342,6 +424,8 @@ function drawTileByKind(
   }
 
   if (t === T_WATER) {
+    const ph = animPhase * Math.PI * 2;
+    const gyJ = gy ?? 0;
     ctx.fillStyle = p.waterBg;
     ctx.fillRect(px, py, s, s);
     if (s >= 8) {
@@ -355,7 +439,34 @@ function drawTileByKind(
         ctx.beginPath();
         ctx.moveTo(px, wy);
         for (let wx = 0; wx < s; wx += 2) {
-          ctx.lineTo(px + wx, wy + Math.sin((wx / s) * Math.PI * 2) * amp);
+          ctx.lineTo(px + wx, wy + Math.sin((wx / s) * Math.PI * 2 + ph + gyJ * 0.15) * amp);
+        }
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    return;
+  }
+
+  if (t === T_LAVA) {
+    const ph = animPhase * Math.PI * 2;
+    const gyJ = gy ?? 0;
+    const lb = p.lavaBg ?? p.waterBg;
+    const lg = p.lavaGlow ?? p.waterWave;
+    ctx.fillStyle = lb;
+    ctx.fillRect(px, py, s, s);
+    if (s >= 8) {
+      ctx.strokeStyle = lg;
+      ctx.lineWidth = Math.max(0.5, s * 0.07);
+      ctx.globalAlpha = 0.55;
+      const waveRows = Math.floor(s / 3);
+      for (let wi = 1; wi <= waveRows; wi++) {
+        const wy = py + (wi / (waveRows + 1)) * s;
+        const amp = s * 0.08;
+        ctx.beginPath();
+        ctx.moveTo(px, wy);
+        for (let wx = 0; wx < s; wx += 2) {
+          ctx.lineTo(px + wx, wy + Math.sin((wx / s) * Math.PI * 3 + ph + gyJ * 0.22) * amp);
         }
         ctx.stroke();
       }
@@ -377,6 +488,25 @@ function drawTileByKind(
     const sh2 = Math.max(1, Math.floor(s * 0.15));
     ctx.fillRect(px + pad, py + s - pad - sh2, s - pad * 2, sh2);
     ctx.fillRect(px + s - pad - sh2, py + pad, sh2, s - pad * 2);
+    return;
+  }
+
+  if (t === T_BRIDGE) {
+    const bb = p.bridgeBg ?? p.corridorBg;
+    const bf = p.bridgeFg ?? p.floorDetail;
+    ctx.fillStyle = bb;
+    ctx.fillRect(px, py, s, s);
+    const plank = Math.max(2, Math.floor(s / 4));
+    ctx.strokeStyle = bf;
+    ctx.globalAlpha = 0.42;
+    ctx.lineWidth = Math.max(0.5, s * 0.06);
+    for (let u = plank; u < s - 1; u += plank) {
+      ctx.beginPath();
+      ctx.moveTo(px + u, py + 1);
+      ctx.lineTo(px + u, py + s - 1);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
     return;
   }
 

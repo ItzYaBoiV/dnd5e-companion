@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, memo } from "react";
 import {
   renderDungeonToCanvas,
   type EntityPalette,
@@ -18,13 +18,16 @@ export type DungeonMapCanvasProps = {
   highlightRoom?: { x: number; y: number; w: number; h: number } | null;
   /** Doors with these grid keys `"x,y"` render open; omitted = all doors drawn open (legacy). */
   doorOpen?: Set<string> | null;
+  doorStates?: Record<string, string> | null;
+  animPhase?: number;
+  lighting?: { gx: number; gy: number; radiusCells: number; intensity?: number } | null;
   className?: string;
   style?: React.CSSProperties;
   onCellClick?: (x: number, y: number, cell: RenderCell) => void;
   onCellHover?: (x: number, y: number, cell: RenderCell | null) => void;
 };
 
-export function DungeonMapCanvas({
+function DungeonMapCanvasInner({
   grid,
   cellPx,
   palette,
@@ -35,6 +38,9 @@ export function DungeonMapCanvas({
   hideDecoKeys,
   highlightRoom,
   doorOpen,
+  doorStates,
+  animPhase,
+  lighting,
   className,
   style,
   onCellClick,
@@ -57,6 +63,9 @@ export function DungeonMapCanvas({
       hideDecoKeys,
       highlightRoom: highlightRoom ?? null,
       doorOpen: doorOpen ?? null,
+      doorStates: doorStates ?? null,
+      animPhase,
+      lighting: lighting ?? null,
       inkSaver: false,
     });
   }, [
@@ -71,6 +80,9 @@ export function DungeonMapCanvas({
     hideDecoKeys,
     highlightRoom,
     doorOpen,
+    doorStates,
+    animPhase,
+    lighting,
   ]);
 
   function cellFromEvent(e: React.MouseEvent): { x: number; y: number; cell: RenderCell } | null {
@@ -105,3 +117,5 @@ export function DungeonMapCanvas({
     />
   );
 }
+
+export const DungeonMapCanvas = memo(DungeonMapCanvasInner);

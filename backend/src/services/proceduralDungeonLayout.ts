@@ -115,7 +115,7 @@ function inferLocationBucket(theme: string): "castle" | "dungeon" | "cave" | "se
   const t = theme.toLowerCase();
   if (/castle|keep|palace|manor|fort\b/.test(t)) return "castle";
   if (/cave|cavern|grotto|underdark/.test(t)) return "cave";
-  if (/sewer|undercity|pipe|flood|drain/.test(t)) return "sewer";
+  if (/sewer|pipe|flood|drain/.test(t)) return "sewer";
   return "dungeon";
 }
 
