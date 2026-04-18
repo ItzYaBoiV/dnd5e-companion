@@ -4,77 +4,49 @@ import { computeCellSize } from "./computeCellSize";
 const base = {
   gridW: 80,
   gridH: 52,
-  hiRes: false,
-  tinyMode: false,
-  compactCells: false,
-  style: "terminal",
+  cellPx: 18,
   pad: 12,
 };
 
 describe("computeCellSize", () => {
-  it("never returns 0 and uses mode min when viewport is invalid", () => {
-    expect(computeCellSize({ ...base, vpW: 0, vpH: 640 })).toBe(10);
-    expect(computeCellSize({ ...base, vpW: 360, vpH: 0 })).toBe(10);
-    expect(computeCellSize({ ...base, vpW: -1, vpH: -1 })).toBe(10);
+  it("returns cellPx when viewport is invalid", () => {
+    expect(computeCellSize({ ...base, vpW: 0, vpH: 640 })).toBe(18);
+    expect(computeCellSize({ ...base, vpW: 360, vpH: 0 })).toBe(18);
+    expect(computeCellSize({ ...base, vpW: -1, vpH: -1 })).toBe(18);
   });
 
-  it("tiny mode clamps between 4 and 18", () => {
+  it("never goes below 4px", () => {
     expect(
       computeCellSize({
         ...base,
-        tinyMode: true,
-        vpW: 360,
-        vpH: 640,
+        cellPx: 8,
+        vpW: 100,
+        vpH: 100,
       }),
     ).toBeGreaterThanOrEqual(4);
-    expect(
-      computeCellSize({
-        ...base,
-        tinyMode: true,
-        vpW: 4000,
-        vpH: 2400,
-      }),
-    ).toBeLessThanOrEqual(18);
   });
 
-  it("default mode caps at 36 on a very large viewport", () => {
+  it("does not exceed requested cellPx when viewport is huge", () => {
     const cs = computeCellSize({
       ...base,
+      cellPx: 24,
       vpW: 3840,
       vpH: 2160,
     });
-    expect(cs).toBeLessThanOrEqual(36);
-    expect(cs).toBeGreaterThanOrEqual(10);
+    expect(cs).toBe(24);
   });
 
-  it("hi-res mode uses higher min/max", () => {
-    expect(
-      computeCellSize({
-        ...base,
-        hiRes: true,
-        vpW: 0,
-        vpH: 0,
-      }),
-    ).toBe(14);
-    const large = computeCellSize({
-      ...base,
-      hiRes: true,
-      vpW: 5000,
-      vpH: 3000,
+  it("shrinks below cellPx when the grid cannot fit at full size", () => {
+    const cs = computeCellSize({
+      gridW: 80,
+      gridH: 52,
+      cellPx: 48,
+      vpW: 400,
+      vpH: 400,
+      pad: 12,
     });
-    expect(large).toBeLessThanOrEqual(56);
-    expect(large).toBeGreaterThanOrEqual(14);
-  });
-
-  it("compact mode uses 6–24 band", () => {
-    expect(
-      computeCellSize({
-        ...base,
-        compactCells: true,
-        vpW: 1,
-        vpH: 1,
-      }),
-    ).toBe(6);
+    expect(cs).toBeLessThan(48);
+    expect(cs).toBeGreaterThanOrEqual(4);
   });
 
   const viewports = [
@@ -90,9 +62,9 @@ describe("computeCellSize", () => {
     [3840, 2160],
   ] as const;
 
-  it.each(viewports)("viewport %s×%s respects default bounds", (vpW, vpH) => {
+  it.each(viewports)("viewport %s×%s stays within [4, cellPx]", (vpW, vpH) => {
     const cs = computeCellSize({ ...base, vpW, vpH });
-    expect(cs).toBeGreaterThanOrEqual(10);
-    expect(cs).toBeLessThanOrEqual(36);
+    expect(cs).toBeGreaterThanOrEqual(4);
+    expect(cs).toBeLessThanOrEqual(18);
   });
 });

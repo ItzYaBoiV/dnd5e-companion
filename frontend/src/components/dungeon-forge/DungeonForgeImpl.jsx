@@ -2,11 +2,16 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { computeCellSize } from "@/lib/computeCellSize";
 import { buildAsciiMapLegend } from "@/lib/dungeonAsciiMap";
-import { applyAsciiDensity } from "@/lib/dungeonAsciiDensity";
-import { downloadAsciiPng } from "@/lib/dungeonAsciiCanvas";
+import { renderDungeonToCanvas } from "@/lib/dungeonTileRenderer";
+import { DEFAULT_PALETTE, ENTITY_PALETTE, LOCATION_PALETTE } from "@/lib/dungeonTilePalettes";
+import { DungeonMapCanvas } from "@/components/dungeon-forge/DungeonMapCanvas";
+import { DungeonLegend } from "@/components/dungeon-forge/DungeonLegend";
 import { openForgePrintPacket } from "@/lib/forgePrintPacket";
 import { MonsterStatCard } from "@/components/dungeon-forge/MonsterStatCard";
 import { useSessionStore } from "@/store/sessionStore";
+import { DUNGEON_T as T } from "@/lib/dungeonForgeConstants";
+import { buildRenderGrid } from "@/lib/dungeonForgeRenderGrid";
+import { computeVisibleCellsForPlayer, inferStartingRoomId } from "@/lib/dungeonForgeFog";
 
 /* ═══════════════════════════════════════════════════════════════════════
    D&D 5e DUNGEON FORGE v3 — Location-Aware Procedural Map Generator
@@ -275,19 +280,6 @@ function pickRoomType(loc,locationType,rng){
     if(ok.length)return pick(ok,rng);
   }
   return pick(loc.rooms,rng);
-}
-
-function monsterGlyph(name){
-  const s=String(name||"M").toLowerCase();
-  if(/spider|rat|scorpion/.test(s))return"8";
-  if(/bat|bird|raven|crow/.test(s))return"v";
-  if(/dragon|drake|wyrm|hydra/.test(s))return"D";
-  if(/zombie|skeleton|ghoul|wraith|ghost|specter|banshee/.test(s))return"Z";
-  if(/slime|ooze|jelly|mold/.test(s))return"%";
-  if(/goblin|kobold|orc|gnoll|hobgoblin|bugbear/.test(s))return"g";
-  if(/ogre|troll|giant|golem|minotaur|mummy/.test(s))return"&";
-  if(/wolf|bear|boar|serpent|frog/.test(s))return"*";
-  return String(name||"M")[0]||"M";
 }
 
 // ── Location Types ───────────────────────────────────────────────────
@@ -567,9 +559,6 @@ const LOCATIONS = {
     },
   },
 };
-
-// ── Tile Types ───────────────────────────────────────────────────────
-const T={V:0,F:1,W:2,D:3,C:4,SD:5,SU:6,WA:7,P:8,ROAD:9};
 
 function getCR(lv){if(lv<=2)return 1;if(lv<=4)return 3;if(lv<=6)return 5;if(lv<=8)return 7;if(lv<=10)return 9;if(lv<=12)return 11;if(lv<=14)return 13;if(lv<=16)return 15;if(lv<=18)return 17;return 20;}
 
@@ -1508,8 +1497,6 @@ function generateMap(cfg) {
   return {grid,rooms:roomsMeta,entities,decoOverlay,width:W,height:H,mapName,locationType,glyphs:LOCATION_GLYPHS[locationType]||LOCATION_GLYPHS.dungeon};
 }
 
-const THEME_GLYPH={entrance:"⚑",guard:"🛡",treasure:"💰",trap:"⚠",rest:"🛏",boss:"👑",lore:"🕯",puzzle:"🧩"};
-
 function forgeRoomsToDungeonMapRooms(dg){
   if(!dg||!dg.rooms)return[];
   return dg.rooms.map((r)=>({
@@ -1564,35 +1551,6 @@ function carvePath(grid,a,b,W,H,rng,isRoad){
   };
   if(goH){while(x!==b.cx){carve(x,y);x+=x<b.cx?1:-1;}carve(x,y);while(y!==b.cy){carve(x,y);y+=y<b.cy?1:-1;}carve(x,y);}
   else{while(y!==b.cy){carve(x,y);y+=y<b.cy?1:-1;}carve(x,y);while(x!==b.cx){carve(x,y);x+=x<b.cx?1:-1;}carve(x,y);}
-}
-
-// ── Rendering ────────────────────────────────────────────────────────
-function buildRenderGrid(dg,forgeCfg){
-  const showThemes=!!forgeCfg?.showThemes;
-  const {grid,rooms,entities,decoOverlay,width:W,height:H,glyphs:rawG={}}=dg;
-  const G={floor:".",wall:"#",door:"+",corr:".",voidCh:" ",water:"~",pillar:"O",road:":",stairsU:"<",stairsD:">",...rawG};
-  const eMap={};entities.forEach(e=>{eMap[`${e.x},${e.y}`]=e;});
-  const dMap={};decoOverlay.forEach(d=>{dMap[`${d.x},${d.y}`]=d;});
-  const labelMap={};rooms.forEach(r=>{labelMap[`${r.cx},${r.y}`]=r;});
-  const themeMap={};
-  if(showThemes){
-    for(const r of rooms){
-      if(!r.theme)continue;
-      const gx=Math.min(r.x+r.w-1,r.x+1),gy=Math.min(r.y+r.h-1,r.y+1);
-      themeMap[`${gx},${gy}`]=r.theme;
-    }
-  }
-  const out=[];
-  for(let y=0;y<H;y++){const row=[];for(let x=0;x<W;x++){
-    const k=`${x},${y}`;const ent=eMap[k];const deco=dMap[k];const label=labelMap[k];const tile=grid[y][x];
-    let ch,eType=null,fg=null,eName=null,extra=null;
-    if(ent){ch=ent.type==="monster"?monsterGlyph(ent.name):ent.type==="trap"?"^":"!";eType=ent.type;extra=ent;}
-    else if(deco){ch=deco.ch;fg=deco.fg;eType="deco";eName=deco.name;extra=deco;}
-    else if(label){ch=String(label.id);eType="label";}
-    else if(showThemes&&themeMap[k]&&(tile===T.F||tile===T.C||tile===T.ROAD)){ch=THEME_GLYPH[themeMap[k]]||G.floor;eType="theme";}
-    else{switch(tile){case T.V:ch=G.voidCh;break;case T.F:ch=G.floor;break;case T.W:ch=G.wall;break;case T.D:ch=G.door;break;case T.C:ch=G.corr;break;case T.SU:ch=G.stairsU;break;case T.SD:ch=G.stairsD;break;case T.WA:ch=G.water;break;case T.P:ch=G.pillar;break;case T.ROAD:ch=G.road;break;default:ch=G.voidCh;}}
-    row.push({ch,tile,eType,fg,eName,extra});
-  }out.push(row);}return out;
 }
 
 const STY={
@@ -1796,10 +1754,9 @@ function renderCanvas(dg,style,options={}){
 }
 
 /** Cropped hi-res canvas for one room (+2 cell pad). DM palette; no fog. */
-function renderRoomCanvas(dg, roomId, styleName, locationType, forgeCfg, opts = {}) {
+function renderRoomCanvas(dg, roomId, _styleName, locationType, forgeCfg, opts = {}) {
   const cellPx = opts.cellPx ?? 32;
   const dpr = opts.dpr ?? 2;
-  const fontPx = opts.fontPx ?? 24;
   const rm = dg.rooms.find((r) => r.id === roomId);
   if (!rm) {
     const empty = document.createElement("canvas");
@@ -1815,84 +1772,39 @@ function renderRoomCanvas(dg, roomId, styleName, locationType, forgeCfg, opts = 
   const y1 = Math.min(dg.height, rm.y + rm.h + pad);
   const gw = Math.max(1, x1 - x0);
   const gh = Math.max(1, y1 - y0);
-  const cW = cellPx;
-  const cH = Math.round(cellPx * 1.4);
-  const cssW = gw * cW;
-  const cssH = gh * cH;
+  const sub = [];
+  for (let y = 0; y < gh; y++) {
+    const row = [];
+    for (let x = 0; x < gw; x++) row.push(rg[y0 + y][x0 + x]);
+    sub.push(row);
+  }
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(cssW * dpr));
-  canvas.height = Math.max(1, Math.round(cssH * dpr));
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return canvas;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.imageSmoothingEnabled = false;
-  const locOv = LOCATION_STYLE_OVERRIDE[locationType] || {};
-  const S = { ...STY[styleName], ...locOv };
-  ctx.fillStyle = S.bg;
-  ctx.fillRect(0, 0, cssW, cssH);
-  ctx.font = `${Math.max(6, Math.round(fontPx))}px "Courier New", monospace`;
-  ctx.textBaseline = "top";
-  for (let yy = 0; yy < gh; yy++) {
-    for (let xx = 0; xx < gw; xx++) {
-      const x = x0 + xx;
-      const y = y0 + yy;
-      const cell = rg[y][x];
-      const px = xx * cW;
-      const py = yy * cH;
-      const pw = cW;
-      const ph = cH;
-      const c = cellColor(cell, styleName, locOv);
-      ctx.fillStyle = c.bg;
-      ctx.fillRect(px, py, pw, ph);
-      ctx.fillStyle = c.fg;
-      const ch = cell.ch.length > 1 ? cell.ch[0] : cell.ch;
-      if (ch !== " ") ctx.fillText(ch, px + Math.round(pw * 0.08), py + Math.round(ph * 0.06));
-    }
-  }
+  renderDungeonToCanvas(canvas, sub, {
+    palette: LOCATION_PALETTE[locationType] ?? DEFAULT_PALETTE,
+    entities: ENTITY_PALETTE,
+    cellPx,
+    dpr,
+    showEnts: true,
+    playerSanitize: false,
+    inkSaver: false,
+  });
   return canvas;
-}
-
-function computeRevealedCells(revealed,dg,exploredCorridors=new Set()){
-  const cells=new Set();
-  if(!dg)return cells;
-  for(const rm of dg.rooms){
-    if(!revealed.has(rm.id))continue;
-    for(let y=rm.y;y<rm.y+rm.h;y++){
-      for(let x=rm.x;x<rm.x+rm.w;x++)cells.add(`${x},${y}`);
-    }
-  }
-  for(const key of exploredCorridors)cells.add(key);
-  const queue=[...cells];
-  const visited=new Set(cells);
-  while(queue.length){
-    const key=queue.shift();
-    const [x,y]=key.split(",").map(Number);
-    for(const [dx,dy] of [[0,1],[0,-1],[1,0],[-1,0]]){
-      const nx=x+dx,ny=y+dy,nk=`${nx},${ny}`;
-      if(visited.has(nk)||nx<0||ny<0||nx>=dg.width||ny>=dg.height)continue;
-      const tile=dg.grid?.[ny]?.[nx];
-      if(tile===4||tile===3||tile===T.ROAD){
-        visited.add(nk);
-        cells.add(nk);
-        queue.push(nk);
-      }else if(tile===2){
-        cells.add(nk);
-      }
-    }
-  }
-  return cells;
 }
 
 // ── Component ────────────────────────────────────────────────────────
 export default function DungeonForge(){
   const FORGE_CFG_KEY="forge.config.v2";
   /** Locked display behavior — no sidebar toggles (tiny cells, fill viewport, 2× PNG, scenery). */
-  const FIXED_FORGE_DISPLAY={hiRes:true,hiResExport:true,tinyMode:true,showDecos:true,compactCells:false,showThemes:false};
+  const FIXED_FORGE_DISPLAY={showDecos:true,showThemes:false};
   const [cfg,setCfg]=useState(()=>{
-    const base={roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:"terminal",seed:Math.floor(Math.random()*999999),locationType:"dungeon",...FIXED_FORGE_DISPLAY,asciiDensity:1,asciiFontPx:14,autoSync:false};
+    const base={roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:"terminal",seed:Math.floor(Math.random()*999999),locationType:"dungeon",...FIXED_FORGE_DISPLAY,cellPx:18,exportCellPx:32,autoSync:false};
     try{
       const raw=localStorage.getItem(FORGE_CFG_KEY);
-      if(raw)return{...base,...JSON.parse(raw),...FIXED_FORGE_DISPLAY};
+      if(raw){
+        const p=JSON.parse(raw);
+        delete p.asciiDensity;delete p.asciiFontPx;delete p.hiRes;delete p.hiResExport;delete p.tinyMode;delete p.compactCells;delete p.density;
+        return{...base,...p,...FIXED_FORGE_DISPLAY};
+      }
     }catch(_){/* ignore */}
     return base;
   });
@@ -1901,16 +1813,17 @@ export default function DungeonForge(){
   const [view,setView]=useState("dm");const [revealed,setRevealed]=useState(()=>new Set());
   const [statCard,setStatCard]=useState(null);
   const cfgSaveTimer=useRef(null);
-  const mapViewportRef=useRef(null);const canvasRef=useRef(null);const draggingRef=useRef(null);
+  const mapViewportRef=useRef(null);const draggingRef=useRef(null);
   const [vpSize,setVpSize]=useState({w:0,h:0});
   const [zoom,setZoom]=useState(1);const [pan,setPan]=useState({x:0,y:0});const [dragging,setDragging]=useState(null);
   const [tvRoom,setTvRoom]=useState(null);
   const [coarsePointer,setCoarsePointer]=useState(false);
   const [saveLibraryMsg,setSaveLibraryMsg]=useState(null);
+  const [mapHoverTip,setMapHoverTip]=useState(null);
   const [giveItemTarget,setGiveItemTarget]=useState(null);
   const [selectedSessionId,setSelectedSessionId]=useState("");
   const [sendMsg,setSendMsg]=useState(null);
-  const [exploredCorridors,setExploredCorridors]=useState(new Set());
+  const [doorOpen,setDoorOpen]=useState(()=>new Set());
   const { partyCharacters, sessions, activeSession, loadSessions } = useSessionStore();
   useEffect(()=>{
     const el=mapViewportRef.current;
@@ -1946,14 +1859,12 @@ export default function DungeonForge(){
     const seed=sp.get("seed");
     const loc=sp.get("loc");
     const level=sp.get("level");
-    const density=sp.get("density");
-    if(seed||loc||level||density){
+    if(seed||loc||level){
       setCfg((c)=>({
         ...c,
         ...(seed?{seed:parseInt(seed,10)||c.seed}:{}),
         ...(loc?{locationType:loc}:{}),
         ...(level?{level:Math.max(1,Math.min(20,parseInt(level,10)||c.level))}:{}),
-        ...(density?{asciiDensity:Math.min(4,Math.max(1,parseInt(density,10)||1))}:{}),
       }));
       window.history.replaceState({}, "", window.location.pathname);
     }
@@ -2005,8 +1916,9 @@ export default function DungeonForge(){
         return{...e,slug:t.slug,unresolved:t.unresolved};
       });
     });
-    const firstRoomId=all?.[0]?.rooms?.[0]?.id??1;
-    setFloors(all);setDg(all[0]);setCurFloor(1);setSelRoom(null);setTvRoom(null);setRevealed(new Set([firstRoomId]));setExploredCorridors(new Set());
+    const d0=all?.[0];
+    const startId=(d0&&inferStartingRoomId(d0))??d0?.rooms?.[0]?.id??1;
+    setFloors(all);setDg(all[0]);setCurFloor(1);setSelRoom(null);setTvRoom(null);setRevealed(new Set([startId]));setDoorOpen(new Set());
   },[cfg]);
 
   useEffect(()=>{void generate();},[generate]);
@@ -2032,21 +1944,24 @@ export default function DungeonForge(){
       vpH:vpSize.h,
       gridW:Wm,
       gridH:Hm,
-      hiRes:cfg.hiRes,
-      tinyMode:cfg.tinyMode,
-      compactCells:cfg.compactCells,
+      cellPx:cfg.cellPx??18,
       pad:12,
     });
     if(import.meta.env.DEV&&n<=0){
       console.warn("[DungeonForge] cell size collapsed",{vpSize,Wm,Hm,cfg});
     }
     return n;
-  },[vpSize.w,vpSize.h,Wm,Hm,cfg.hiRes,cfg.tinyMode,cfg.compactCells]);
+  },[vpSize.w,vpSize.h,Wm,Hm,cfg.cellPx]);
   const rooms=dg?dg.rooms:[];const ents=dg?dg.entities:[];const decos=dg?dg.decoOverlay:[];
+  const mapFogCells=isP&&dg&&revealed?computeVisibleCellsForPlayer(revealed,dg,doorOpen):null;
+  const highlightRoom=useMemo(()=>{
+    if(selRoom==null||!dg)return null;
+    const rm=dg.rooms.find(r=>r.id===selRoom);
+    return rm?{x:rm.x,y:rm.y,w:rm.w,h:rm.h}:null;
+  },[selRoom,dg]);
   const loc=LOCATIONS[cfg.locationType];
   const asciiExport=useMemo(()=>{
     if(!dg)return null;
-    const den=Math.min(4,Math.max(1,parseInt(String(cfg.asciiDensity??"1"),10)||1));
     const rg=buildRenderGrid(dg,{showThemes:!!cfg.showThemes});
     const rawLines=[];
     for(let y=0;y<dg.height;y++){
@@ -2057,12 +1972,11 @@ export default function DungeonForge(){
       }
       rawLines.push(row);
     }
-    const denseLines=applyAsciiDensity(rawLines,den);
-    const mapOnly=denseLines.join("\n");
+    const mapOnly=rawLines.join("\n");
     const legend=buildAsciiMapLegend(forgeRoomsToDungeonMapRooms(dg),{mode:isP?"player":"dm",footer:"forge"});
     const text=`${mapOnly}\n\n${legend}`;
-    return{text,mapOnly,legend,width:denseLines[0]?[...denseLines[0]].length:0,height:denseLines.length};
-  },[dg,isP,cfg.asciiDensity,cfg.showThemes]);
+    return{text,mapOnly,legend,width:rawLines[0]?[...rawLines[0]].length:0,height:rawLines.length};
+  },[dg,isP,cfg.showThemes]);
 
   const tvForgeCfg=useMemo(()=>({showThemes:!!cfg.showThemes}),[cfg.showThemes]);
   const tvPreviewUrl=useMemo(()=>{
@@ -2070,66 +1984,14 @@ export default function DungeonForge(){
     return renderRoomCanvas(dg,tvRoom,cfg.style,cfg.locationType,tvForgeCfg,{cellPx:32,dpr:2,fontPx:24}).toDataURL("image/png");
   },[tvRoom,dg,cfg.style,cfg.locationType,tvForgeCfg]);
 
-  useEffect(()=>{setZoom(1);setPan({x:0,y:0});},[cfg.hiRes,cfg.tinyMode,cfg.compactCells]);
+  useEffect(()=>{setZoom(1);setPan({x:0,y:0});},[cfg.cellPx]);
 
   useEffect(()=>{
-    const canvas=canvasRef.current;
-    if(!canvas||!rg||!dg)return;
-    const dpr=window.devicePixelRatio||1;
-    const W=vpSize.w,H=vpSize.h;
-    canvas.width=Math.max(1,Math.round(W*dpr));
-    canvas.height=Math.max(1,Math.round(H*dpr));
-    const ctx=canvas.getContext("2d");
-    if(!ctx)return;
-    ctx.setTransform(dpr,0,0,dpr,0,0);
-    ctx.imageSmoothingEnabled=false;
-    const S0={...STY[cfg.style],...(LOCATION_STYLE_OVERRIDE[cfg.locationType]||{})};
-    ctx.fillStyle=S0.bg;
-    ctx.fillRect(0,0,W,H);
-    const cW=cs,cH=Math.round(cs*1.4);
-    const fontPx=Math.max(6,Math.round(cs*0.72));
-    ctx.font=`${fontPx}px "Courier New", monospace`;
-    ctx.textBaseline="top";
-    const offX=pan.x,offY=pan.y;
-    const fogCells=isP&&revealed?computeRevealedCells(revealed,dg,exploredCorridors):null;
-    const locOv=LOCATION_STYLE_OVERRIDE[cfg.locationType]||{};
-    for(let y=0;y<dg.height;y++){
-      for(let x=0;x<dg.width;x++){
-        const cell=rg[y][x];
-        const px=Math.round(offX+x*cW*zoom);
-        const py=Math.round(offY+y*cH*zoom);
-        const pw=Math.ceil(cW*zoom);
-        const ph=Math.ceil(cH*zoom);
-        if(px+pw<0||py+ph<0||px>W||py>H)continue;
-        if(fogCells&&!fogCells.has(`${x},${y}`)){
-          ctx.fillStyle=S0.void;
-          ctx.fillRect(px,py,pw,ph);
-          continue;
-        }
-        const c=cellColor(cell,cfg.style,locOv);
-        ctx.fillStyle=c.bg;
-        ctx.fillRect(px,py,pw,ph);
-        if(selRoom!==null){
-          const rm=dg.rooms.find(r=>r.id===selRoom);
-          if(rm&&x>=rm.x&&x<rm.x+rm.w&&y>=rm.y&&y<rm.y+rm.h){
-            ctx.fillStyle="rgba(255,220,50,0.15)";
-            ctx.fillRect(px,py,pw,ph);
-          }
-        }
-        const hide=isP&&(cell.eType==="monster"||cell.eType==="trap"||cell.eType==="item");
-        ctx.fillStyle=hide?S0.floorFg:c.fg;
-        const ch=hide?".":(cell.ch.length>1?cell.ch[0]:cell.ch);
-        if(ch!==" ")ctx.fillText(ch,px+Math.round(pw*0.08),py+Math.round(ph*0.06));
-      }
-    }
-  },[rg,cs,cfg.style,cfg.locationType,vpSize,zoom,pan,revealed,isP,selRoom,dg,exploredCorridors]);
-
-  useEffect(()=>{
-    const canvas=canvasRef.current;
-    if(!canvas||!dg)return;
+    const el=mapViewportRef.current;
+    if(!el||!dg)return;
     const onWheel=(e)=>{
       e.preventDefault();
-      const rect=canvas.getBoundingClientRect();
+      const rect=el.getBoundingClientRect();
       const mx=e.clientX-rect.left;
       const my=e.clientY-rect.top;
       const delta=e.deltaY>0?0.85:1.18;
@@ -2140,9 +2002,9 @@ export default function DungeonForge(){
         return zNew;
       });
     };
-    canvas.addEventListener("wheel",onWheel,{passive:false});
-    return()=>canvas.removeEventListener("wheel",onWheel);
-  },[rg,dg]);
+    el.addEventListener("wheel",onWheel,{passive:false});
+    return()=>el.removeEventListener("wheel",onWheel);
+  },[dg]);
 
   useEffect(()=>{
     if(tvRoom==null)return;
@@ -2161,54 +2023,57 @@ export default function DungeonForge(){
     const d=draggingRef.current;
     if(d){setPan({x:e.clientX-d.ax,y:e.clientY-d.ay});return;}
     if(!rg||!dg)return;
-    const rect=canvasRef.current?.getBoundingClientRect();
+    const rect=mapViewportRef.current?.getBoundingClientRect();
     if(!rect)return;
-    const cW=cs,cH=Math.round(cs*1.4);
-    const gx=Math.floor((e.clientX-rect.left-pan.x)/(cW*zoom));
-    const gy=Math.floor((e.clientY-rect.top-pan.y)/(cH*zoom));
-    if(gx<0||gy<0||gx>=dg.width||gy>=dg.height){setHovered(null);return;}
+    const relX=e.clientX-rect.left-pan.x;
+    const relY=e.clientY-rect.top-pan.y;
+    const gx=Math.floor(relX/zoom/cs);
+    const gy=Math.floor(relY/zoom/cs);
+    if(gx<0||gy<0||gx>=dg.width||gy>=dg.height){setHovered(null);setMapHoverTip(null);return;}
     const cell=rg[gy][gx];
     if(isP&&revealed){
-      const fogCells=computeRevealedCells(revealed,dg,exploredCorridors);
-      if(!fogCells.has(`${gx},${gy}`)){setHovered(null);return;}
+      const fogCells=computeVisibleCellsForPlayer(revealed,dg,doorOpen);
+      if(!fogCells.has(`${gx},${gy}`)){setHovered(null);setMapHoverTip(null);return;}
     }
     if(cell.extra&&cell.eType!=="deco"&&!isP)setHovered(cell.extra);
     else setHovered(null);
+    const ex=cell.extra;
+    const nm=cell.eName??(ex&&typeof ex==="object"&&"name" in ex?ex.name:null);
+    if(nm||cell.eType==="deco"){
+      const detail=ex&&typeof ex==="object"&&"cr" in ex&&ex.cr!=null?` (CR ${ex.cr})`:ex&&ex.dmg?` — ${ex.dmg}`:ex&&ex.r?` [${ex.r}]`:"";
+      setMapHoverTip(nm?`${nm}${detail}`:cell.eName?`${cell.eName}`:null);
+    }else setMapHoverTip(null);
   };
   const onCanvasPointerUp=(e)=>{
     draggingRef.current=null;
     setDragging(null);
     try{e.currentTarget.releasePointerCapture(e.pointerId);}catch(_){/* noop */}
   };
-  const onCanvasClick=(e)=>{
+  const handleMapCellClick=(gx,gy,cell)=>{
     if(!dg||!rg)return;
-    const rect=canvasRef.current?.getBoundingClientRect();
-    if(!rect)return;
-    const cW=cs,cH=Math.round(cs*1.4);
-    const gx=Math.floor((e.clientX-rect.left-pan.x)/(cW*zoom));
-    const gy=Math.floor((e.clientY-rect.top-pan.y)/(cH*zoom));
     if(gx<0||gy<0||gx>=dg.width||gy>=dg.height)return;
-    const cell=rg[gy][gx];
     if(isP&&revealed){
-      const fogCells=computeRevealedCells(revealed,dg,exploredCorridors);
+      const fogCells=computeVisibleCellsForPlayer(revealed,dg,doorOpen);
       if(!fogCells.has(`${gx},${gy}`))return;
     }
     if(!isP&&cell.extra?.type==="monster"&&cell.extra.slug){setStatCard({slug:cell.extra.slug,view:"dm"});return;}
+    const tile=dg.grid?.[gy]?.[gx];
+    if(!isP&&tile===T.D){
+      const key=`${gx},${gy}`;
+      setDoorOpen((prev)=>{const next=new Set(prev);if(next.has(key))next.delete(key);else next.add(key);return next;});
+      return;
+    }
     const rm=dg.rooms.find(r=>gx>=r.x&&gx<r.x+r.w&&gy>=r.y&&gy<r.y+r.h);
     if(rm)setSelRoom(rm.id===selRoom?null:rm.id);
-    const tile=dg.grid?.[gy]?.[gx];
-    if(tile===4){
-      const key=`${gx},${gy}`;
-      setExploredCorridors(prev=>{const next=new Set(prev);if(next.has(key))next.delete(key);else next.add(key);return next;});
-    }
   };
-  const onCanvasContextMenu=(e)=>{
+  const onMapContextMenu=(e)=>{
     if(!dg||!rg||isP)return;
-    const rect=canvasRef.current?.getBoundingClientRect();
+    const rect=mapViewportRef.current?.getBoundingClientRect();
     if(!rect)return;
-    const cW=cs,cH=Math.round(cs*1.4);
-    const gx=Math.floor((e.clientX-rect.left-pan.x)/(cW*zoom));
-    const gy=Math.floor((e.clientY-rect.top-pan.y)/(cH*zoom));
+    const relX=e.clientX-rect.left-pan.x;
+    const relY=e.clientY-rect.top-pan.y;
+    const gx=Math.floor(relX/zoom/cs);
+    const gy=Math.floor(relY/zoom/cs);
     if(gx<0||gy<0||gx>=dg.width||gy>=dg.height)return;
     const cell=rg[gy][gx];
     if(cell.extra?.type==="monster"&&cell.extra.slug){e.preventDefault();setStatCard({slug:cell.extra.slug,view:"player"});}
@@ -2217,8 +2082,8 @@ export default function DungeonForge(){
   const pushToPlayerScreen=useCallback((overrides={})=>{
     if(!dg)return;
     const mergedRevealed=overrides.revealed!=null?new Set(overrides.revealed):revealed;
-    const mergedExplored=overrides.exploredCorridors!=null?new Set(overrides.exploredCorridors):exploredCorridors;
-    const revealedCells=[...computeRevealedCells(mergedRevealed,dg,mergedExplored)];
+    const mergedDoorOpen=overrides.doorOpen!=null?new Set(overrides.doorOpen):doorOpen;
+    const revealedCells=[...computeVisibleCellsForPlayer(mergedRevealed,dg,mergedDoorOpen)];
     const state={
       dungeonData:{
         grid:dg.grid,
@@ -2226,11 +2091,15 @@ export default function DungeonForge(){
         width:dg.width,
         height:dg.height,
         mapName:dg.mapName,
-        entities:[],
+        entities:dg.entities??[],
+        decoOverlay:dg.decoOverlay??[],
+        locationType:dg.locationType??cfg.locationType,
+        floor:dg.floor,
+        glyphs:dg.glyphs,
       },
       revealed:[...mergedRevealed],
       revealedCells,
-      exploredCorridors:[...mergedExplored],
+      doorOpen:[...mergedDoorOpen],
       selectedRoomId:overrides.selectedRoomId!==undefined?overrides.selectedRoomId:selRoom,
       fogColor:overrides.fogColor??"#000000",
     };
@@ -2240,12 +2109,71 @@ export default function DungeonForge(){
       bc.postMessage(state);
       bc.close();
     }catch(_){/* ignore */}
-  },[dg,revealed,exploredCorridors,selRoom]);
+  },[dg,revealed,doorOpen,selRoom,cfg.locationType]);
   useEffect(()=>{
     if(cfg.autoSync&&dg)pushToPlayerScreen();
   },[cfg.autoSync,dg,pushToPlayerScreen]);
 
-  const exportPNG=(mode,{ink=false}={})=>{if(!dg)return;const scale=cfg.hiResExport?2:1;const isDm=mode==="dm";const fogCells=!isDm?computeRevealedCells(revealed,dg,exploredCorridors):null;const c=renderCanvas(dg,cfg.style,{showEnts:isDm,revArr:null,fogCells:!isDm?fogCells:null,scale,print:true,dmSidebar:isDm,playerSanitizeDecos:!isDm,forgeCfg:cfg,screenMatch:true,inkSaver:ink});const a=document.createElement("a");const inkTag=ink?"-ink":"";a.download=`${(dg.mapName||cfg.locationType).replace(/\s/g,"_")}_f${curFloor}_${mode}${inkTag}_${cfg.seed}.png`;a.href=c.toDataURL("image/png");a.click();};
+  const exportPNG=(mode,{ink=false}={})=>{
+    if(!dg)return;
+    const isDm=mode==="dm";
+    const fogCells=!isDm?computeVisibleCellsForPlayer(revealed,dg,doorOpen):null;
+    const cellPx=Math.max(cfg.exportCellPx??32,cfg.cellPx??18);
+    const dpr=ink?1:2;
+    const fc={...cfg,showThemes:!!cfg.showThemes&&isDm};
+    const gridEx=buildRenderGrid(dg,fc);
+    const mapCanvas=document.createElement("canvas");
+    renderDungeonToCanvas(mapCanvas,gridEx,{
+      palette:LOCATION_PALETTE[dg.locationType]??DEFAULT_PALETTE,
+      entities:ENTITY_PALETTE,
+      cellPx,
+      dpr,
+      fogCells,
+      doorOpen:!isDm?doorOpen:null,
+      showEnts:isDm,
+      playerSanitize:!isDm,
+      hideDecoKeys:PLAYER_PRINT_HIDE_DECO_KEYS,
+      inkSaver:ink,
+    });
+    let out=mapCanvas;
+    if(isDm){
+      const sidebarRaw=buildDmExportSidebarLines(dg);
+      const sidebarLines=[];
+      for(const ln of sidebarRaw)sidebarLines.push(...wrapTextLine(ln,50));
+      const fontPx=11*dpr;
+      const lineH=Math.round(13*dpr);
+      const maxChars=sidebarLines.reduce((m,l)=>Math.max(m,l.length),36);
+      const sidebarW=Math.min(520*dpr,Math.max(280*dpr,Math.ceil(maxChars*7*dpr+24*dpr)));
+      const S0={...STY[cfg.style],...(LOCATION_STYLE_OVERRIDE[cfg.locationType]||{})};
+      const padTop=28*dpr;
+      const full=document.createElement("canvas");
+      full.width=mapCanvas.width+sidebarW+16*dpr;
+      full.height=padTop+Math.max(mapCanvas.height,sidebarLines.length*lineH+16*dpr);
+      const fctx=full.getContext("2d");
+      if(fctx){
+        fctx.fillStyle=ink?hexToGray(S0.bg):S0.bg;
+        fctx.fillRect(0,0,full.width,full.height);
+        fctx.fillStyle=ink?hexToGray(S0.accent||"#ccc"):S0.accent||"#ccc";
+        fctx.font=`bold ${11*dpr}px monospace`;
+        fctx.fillText(`${dg.mapName||"Map"} | DM PRINT | Floor ${dg.floor||1} | Seed ${dg.seed??""}`,4*dpr,18*dpr);
+        fctx.drawImage(mapCanvas,0,padTop);
+        fctx.fillStyle=ink?"#111":S0.textColor;
+        fctx.font=`${fontPx}px monospace`;
+        let ly=padTop+8*dpr;
+        const sx=mapCanvas.width+12*dpr;
+        for(const line of sidebarLines){
+          fctx.fillText(line,sx,ly);
+          ly+=lineH;
+        }
+      }
+      out=full;
+    }
+    const a=document.createElement("a");
+    const inkTag=ink?"-ink":"";
+    a.download=`${(dg.mapName||cfg.locationType).replace(/\s/g,"_")}_f${curFloor}_${mode}${inkTag}_${cfg.seed}.png`;
+    a.href=out.toDataURL("image/png");
+    a.click();
+  };
 
   return(
     <div
@@ -2310,28 +2238,28 @@ export default function DungeonForge(){
           <Tg l="Monsters" on={cfg.monstersOn} S={S} f={()=>u("monstersOn",!cfg.monstersOn)}/>
           <Tg l="Traps" on={cfg.trapsOn} S={S} f={()=>u("trapsOn",!cfg.trapsOn)}/>
           <Tg l="Items" on={cfg.itemsOn} S={S} f={()=>u("itemsOn",!cfg.itemsOn)}/>
-          <LB S={S}>ASCII MAP</LB>
-          <div style={{fontSize:11,color:S.dimText,lineHeight:1.35}}>Logical grid export (same topology as PNG).</div>
-          <select value={String(cfg.asciiDensity??1)} onChange={e=>u("asciiDensity",parseInt(e.target.value,10)||1)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
-            {[1,2,4].map((d)=>(<option key={d} value={d}>Render density {d}x</option>))}
-          </select>
-          <select value={String(cfg.asciiFontPx??14)} onChange={e=>u("asciiFontPx",parseInt(e.target.value,10)||14)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
-            {[
-              [6,"6px"],
-              [8,"8px"],
-              [10,"10px"],
-              [12,"12px"],
-              [14,"14px (default)"],
-              [18,"18px (HD)"],
-              [24,"24px"],
-              [32,"32px (2K)"],
-              [40,"40px"],
-              [48,"48px (4K)"],
-            ].map(([d,lab])=>(<option key={d} value={d}>{lab}</option>))}
-          </select>
-          <button type="button" disabled={!asciiExport?.mapOnly} onClick={()=>{if(!asciiExport)return;const lines=asciiExport.mapOnly.split("\n");downloadAsciiPng(lines,{fontFamily:"JetBrains Mono, Fira Code, ui-monospace, Menlo, monospace",fontSizePx:Math.max(4,Math.min(64,cfg.asciiFontPx||16)),lineHeight:1.15,fg:"#0a0a0a",bg:"#fafafa",smallFontMode:(cfg.asciiFontPx||14)<=7},`${(dg.mapName||cfg.locationType).replace(/\s/g,"_")}_ascii4k_${cfg.seed}.png`);}} style={{width:"100%",padding:"4px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>4K PNG</button>
-          <button type="button" onClick={()=>{const u=new URL(window.location.href);u.searchParams.set("seed",String(cfg.seed));u.searchParams.set("loc",cfg.locationType);u.searchParams.set("level",String(cfg.level));u.searchParams.set("density",String(cfg.asciiDensity||1));void navigator.clipboard.writeText(u.toString());}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>COPY SHARE URL</button>
-          <button type="button" disabled={!dg||!asciiExport?.text} onClick={()=>{if(!dg||!asciiExport)return;const dm=renderCanvas(dg,cfg.style,{showEnts:true,revArr:null,scale:1,print:true,dmSidebar:true,playerSanitizeDecos:false,forgeCfg:cfg,screenMatch:true}).toDataURL("image/png");const lines=dg.rooms.map(r=>`Room ${r.id}: ${r.namedRoom||r.label||r.type} (depth ${r.depth??"?"}, theme ${r.theme||"?"})`);openForgePrintPacket({title:`${dg.mapName||"Forge"} seed ${cfg.seed}`,asciiText:asciiExport.text,dmMapDataUrl:dm,roomLines:lines});}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PRINT DM PACKET</button>
+          <LB S={S}>MAP ZOOM</LB>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <button type="button" className="btn-secondary" style={{padding:"4px 10px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",minHeight:0}}
+              onClick={()=>setCfg((c)=>({...c,cellPx:Math.max(8,(c.cellPx??18)-4)}))}>−</button>
+            <span style={{fontSize:13,fontFamily:"'Courier New',monospace",color:S.textColor,width:52,textAlign:"center"}}>{cfg.cellPx??18}px</span>
+            <button type="button" className="btn-secondary" style={{padding:"4px 10px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",minHeight:0}}
+              onClick={()=>setCfg((c)=>({...c,cellPx:Math.min(48,(c.cellPx??18)+4)}))}>+</button>
+          </div>
+          <div style={{fontSize:10,color:S.dimText,marginTop:4,lineHeight:1.35}}>Live map uses this size; the canvas may shrink to fit the panel.</div>
+          <LB S={S}>PNG EXPORT SCALE</LB>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <button type="button" className="btn-secondary" style={{padding:"4px 10px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",minHeight:0}}
+              onClick={()=>setCfg((c)=>({...c,exportCellPx:Math.max(16,(c.exportCellPx??32)-4)}))}>−</button>
+            <span style={{fontSize:13,fontFamily:"'Courier New',monospace",color:S.textColor,width:52,textAlign:"center"}}>{cfg.exportCellPx??32}px</span>
+            <button type="button" className="btn-secondary" style={{padding:"4px 10px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",minHeight:0}}
+              onClick={()=>setCfg((c)=>({...c,exportCellPx:Math.min(64,(c.exportCellPx??32)+4)}))}>+</button>
+          </div>
+          <div style={{fontSize:10,color:S.dimText,marginTop:2,lineHeight:1.35}}>Same pixel renderer as the live map; larger cells for sharper PNGs (DM/Player buttons use max of this and map zoom).</div>
+          <LB S={S}>ASCII COPY</LB>
+          <div style={{fontSize:11,color:S.dimText,lineHeight:1.35}}>Plain text grid (same topology as the map).</div>
+          <button type="button" onClick={()=>{const u=new URL(window.location.href);u.searchParams.set("seed",String(cfg.seed));u.searchParams.set("loc",cfg.locationType);u.searchParams.set("level",String(cfg.level));void navigator.clipboard.writeText(u.toString());}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>COPY SHARE URL</button>
+          <button type="button" disabled={!dg||!asciiExport?.text} onClick={()=>{if(!dg||!asciiExport)return;const cellPx=Math.max(24,cfg.exportCellPx??32);const gridDm=buildRenderGrid(dg,{...cfg,showThemes:!!cfg.showThemes});const dmEl=document.createElement("canvas");renderDungeonToCanvas(dmEl,gridDm,{palette:LOCATION_PALETTE[dg.locationType]??DEFAULT_PALETTE,entities:ENTITY_PALETTE,cellPx,dpr:2,showEnts:true,playerSanitize:false,inkSaver:false});const dm=dmEl.toDataURL("image/png");const lines=dg.rooms.map(r=>`Room ${r.id}: ${r.namedRoom||r.label||r.type} (depth ${r.depth??"?"}, theme ${r.theme||"?"})`);openForgePrintPacket({title:`${dg.mapName||"Forge"} seed ${cfg.seed}`,asciiText:asciiExport.text,dmMapDataUrl:dm,roomLines:lines});}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PRINT DM PACKET</button>
           <LB S={S}>SEED</LB>
           <div style={{display:"flex",gap:2}}>
             <input type="number" value={cfg.seed} onChange={e=>u("seed",parseInt(e.target.value)||0)} style={{flex:1,padding:"2px 3px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:30}}/>
@@ -2346,10 +2274,10 @@ export default function DungeonForge(){
             ))}
           </div>
           {isP&&<div style={{fontSize:14,color:S.dimText}}>
-            <div style={{marginBottom:2}}>Fog of war active.</div>
+            <div style={{marginBottom:2}}>Fog uses revealed rooms + open doors. On the DM map, click a door to open or close it (gold = open, braced = closed).</div>
             <div style={{display:"flex",gap:2}}>
               <button onClick={()=>setRevealed(new Set(rooms.map(r=>r.id)))} style={{flex:1,padding:"1px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Reveal All</button>
-              <button onClick={()=>setRevealed(new Set([rooms[0]?.id??1]))} style={{flex:1,padding:"1px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Reset</button>
+              <button onClick={()=>{const id=dg?inferStartingRoomId(dg):null;setRevealed(new Set([id??rooms[0]?.id??1]));setDoorOpen(new Set());}} style={{flex:1,padding:"1px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Reset</button>
             </div>
           </div>}
           <LB S={S}>EXPORT PNG</LB>
@@ -2401,10 +2329,10 @@ export default function DungeonForge(){
           <LB S={S}>PLAYER SCREEN</LB>
           <button type="button" onClick={()=>window.open("/dungeons/player","_blank","noopener")} style={{padding:"6px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>OPEN PLAYER SCREEN ↗</button>
           <button type="button" onClick={()=>pushToPlayerScreen()} disabled={!dg} style={{padding:"6px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PUSH MAP TO SCREEN</button>
-          <button type="button" onClick={()=>pushToPlayerScreen({revealed:[...revealed],selectedRoomId:selRoom})} disabled={!dg} style={{padding:"6px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PUSH WITH FOG STATE</button>
+          <button type="button" onClick={()=>pushToPlayerScreen({revealed:[...revealed],doorOpen:[...doorOpen],selectedRoomId:selRoom})} disabled={!dg} style={{padding:"6px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PUSH WITH FOG STATE</button>
           <Tg l="Auto-sync fog on change" on={!!cfg.autoSync} S={S} f={()=>u("autoSync",!cfg.autoSync)}/>
           {floors.length>1&&<><LB S={S}>FLOOR</LB><div style={{display:"flex",gap:2,flexWrap:"wrap"}}>
-            {floors.map((_,i)=>(<button key={i} onClick={()=>{setCurFloor(i+1);setDg(floors[i]);setSelRoom(null);setTvRoom(null);setExploredCorridors(new Set());}} style={{padding:"1px 5px",fontSize:14,fontFamily:"'Courier New',monospace",background:curFloor===i+1?"rgba(255,255,255,0.08)":"transparent",color:curFloor===i+1?S.accent:S.dimText,border:`1px solid ${curFloor===i+1?S.accent:S.panelBorder}`,borderRadius:2,cursor:"pointer"}}>{i+1}</button>))}
+            {floors.map((_,i)=>(<button key={i} onClick={()=>{setCurFloor(i+1);setDg(floors[i]);setSelRoom(null);setTvRoom(null);setDoorOpen(new Set());}} style={{padding:"1px 5px",fontSize:14,fontFamily:"'Courier New',monospace",background:curFloor===i+1?"rgba(255,255,255,0.08)":"transparent",color:curFloor===i+1?S.accent:S.dimText,border:`1px solid ${curFloor===i+1?S.accent:S.panelBorder}`,borderRadius:2,cursor:"pointer"}}>{i+1}</button>))}
           </div></>}
           <div style={{marginTop:1}}><button onClick={()=>setLegend(!legend)} style={{background:"none",border:"none",cursor:"pointer",padding:0,color:S.dimText,fontSize:14,fontFamily:"'Courier New',monospace"}}>{legend?"[-]":"[+]"} LEGEND</button>
             {legend&&<div style={{marginTop:2,fontSize:14,lineHeight:1.7,color:S.textColor}}>
@@ -2415,16 +2343,17 @@ export default function DungeonForge(){
           {asciiExport?.mapOnly&&(
             <div style={{marginTop:4}}>
               <div style={{fontSize:10,color:S.dimText,marginBottom:2}}>ASCII preview</div>
-              <pre style={{margin:0,maxHeight:180,overflow:"auto",padding:6,background:S.bg,border:`1px solid ${S.panelBorder}`,fontFamily:"JetBrains Mono, Fira Code, ui-monospace, Menlo, monospace",fontSize:cfg.asciiFontPx||14,lineHeight:1,letterSpacing:0,fontVariantLigatures:"none",color:S.textColor,whiteSpace:"pre"}}>{asciiExport.mapOnly}</pre>
+              <pre style={{margin:0,maxHeight:180,overflow:"auto",padding:6,background:S.bg,border:`1px solid ${S.panelBorder}`,fontFamily:"JetBrains Mono, Fira Code, ui-monospace, Menlo, monospace",fontSize:12,lineHeight:1,letterSpacing:0,fontVariantLigatures:"none",color:S.textColor,whiteSpace:"pre"}}>{asciiExport.mapOnly}</pre>
             </div>
           )}
         </div>
 
         <div className="forge-main-row">
+          <div style={{flex:"1 1 0",minHeight:0,minWidth:0,display:"flex",flexDirection:"column",width:"100%"}}>
           <div
             ref={mapViewportRef}
             style={{
-              flex:"1 1 0",
+              flex:1,
               minHeight:0,
               minWidth:0,
               overflow:"hidden",
@@ -2434,25 +2363,66 @@ export default function DungeonForge(){
               contain:"layout paint",
             }}
           >
-            {rg&&(
+            {rg&&dg&&(
               <>
-                <canvas
-                  ref={canvasRef}
+                <div
                   onPointerDown={onCanvasPointerDown}
                   onPointerMove={onCanvasPointerMove}
                   onPointerUp={onCanvasPointerUp}
                   onPointerCancel={onCanvasPointerUp}
-                  onClick={onCanvasClick}
-                  onContextMenu={onCanvasContextMenu}
+                  onContextMenu={onMapContextMenu}
                   style={{
-                    display:"block",
-                    width:"100%",
-                    height:"100%",
-                    imageRendering:"pixelated",
-                    cursor:zoom>1?"grab":"default",
+                    position:"absolute",
+                    inset:0,
+                    overflow:"hidden",
+                    cursor:dragging?"grabbing":zoom>1?"grab":"default",
                     touchAction:"none",
                   }}
-                />
+                >
+                  <div
+                    style={{
+                      position:"absolute",
+                      left:0,
+                      top:0,
+                      transform:`translate(${pan.x}px,${pan.y}px) scale(${zoom})`,
+                      transformOrigin:"0 0",
+                      willChange:"transform",
+                    }}
+                  >
+                    <DungeonMapCanvas
+                      grid={rg}
+                      cellPx={cs}
+                      palette={LOCATION_PALETTE[dg.locationType]??DEFAULT_PALETTE}
+                      entities={ENTITY_PALETTE}
+                      fogCells={mapFogCells}
+                      doorOpen={doorOpen}
+                      showEnts={!isP}
+                      playerSanitize={false}
+                      highlightRoom={highlightRoom}
+                      onCellClick={handleMapCellClick}
+                    />
+                  </div>
+                  {mapHoverTip&&(
+                    <div
+                      style={{
+                        position:"absolute",
+                        top:10,
+                        left:10,
+                        zIndex:5,
+                        pointerEvents:"none",
+                        background:"rgba(0,0,0,0.78)",
+                        color:S.textColor,
+                        fontSize:11,
+                        padding:"4px 8px",
+                        borderRadius:2,
+                        border:`1px solid ${S.panelBorder}`,
+                        maxWidth:280,
+                      }}
+                    >
+                      {mapHoverTip}
+                    </div>
+                  )}
+                </div>
                 <div
                   style={{
                     position:"absolute",
@@ -2506,6 +2476,8 @@ export default function DungeonForge(){
                 </div>
               </>
             )}
+          </div>
+          <DungeonLegend locationType={cfg.locationType} />
           </div>
           {hovered&&coarsePointer&&<div style={{position:"fixed",bottom:"max(10px, var(--safe-bottom, 0px))",left:"50%",transform:"translateX(-50%)",background:S.panelBg,color:S.textColor,border:`1px solid ${S.panelBorder}`,padding:"5px 14px",fontSize:13,fontFamily:"'Courier New',monospace",borderRadius:2,zIndex:100,pointerEvents:"none",whiteSpace:"nowrap"}}>
             {hovered.type==="monster"&&<><b style={{color:S.monsterFg}}>{hovered.name}</b> x{hovered.count} (CR {hovered.cr})</>}
