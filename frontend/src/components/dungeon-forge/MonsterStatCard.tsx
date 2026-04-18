@@ -2,6 +2,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Modal } from "@/components/common";
 
+type StatEntry = {
+  name: string;
+  desc: string;
+  attackBonus?: number | null;
+  damageDice?: string | null;
+  damageBonus?: number | null;
+  damageType?: string | null;
+  saveDc?: number | null;
+  saveType?: string | null;
+};
+
 type MonsterJson = {
   slug: string;
   name: string;
@@ -11,20 +22,26 @@ type MonsterJson = {
   hitPoints: number;
   challengeRating: string;
   xp: number;
-  speed: unknown;
+  specialAbilities?: StatEntry[] | null;
+  actions?: StatEntry[] | null;
+  reactions?: StatEntry[] | null;
+  legendaryActions?: StatEntry[] | null;
+  legendaryDesc?: string | null;
+  speed?: Record<string, number> | string | null;
+  skills?: Record<string, number> | null;
+  senses?: string | null;
+  languages?: string | null;
+  savingThrows?: Record<string, number> | null;
+  conditionImmunities?: string | null;
+  damageResistances?: string | null;
+  damageVulnerabilities?: string | null;
+  damageImmunities?: string | null;
   strength: number;
   dexterity: number;
   constitution: number;
   intelligence: number;
   wisdom: number;
   charisma: number;
-  senses?: string;
-  languages?: string;
-  specialAbilities?: unknown;
-  actions?: unknown;
-  reactions?: unknown;
-  legendaryActions?: unknown;
-  damageImmunities?: string | null;
 };
 
 const cache = new Map<string, MonsterJson>();
@@ -34,17 +51,59 @@ function mod(n: number): string {
   return `${m >= 0 ? "+" : ""}${m}`;
 }
 
+function parseEntries(val: unknown): StatEntry[] | null {
+  if (!val) return null;
+  if (typeof val === "string") {
+    const raw = val;
+    try {
+      val = JSON.parse(raw);
+    } catch {
+      return [{ name: "Note", desc: raw }];
+    }
+  }
+  if (!Array.isArray(val)) return null;
+  return (val as Record<string, unknown>[]).map((e) => ({
+    name: String(e.name ?? e.title ?? ""),
+    desc: String(e.desc ?? e.description ?? ""),
+    attackBonus: typeof e.attack_bonus === "number" ? e.attack_bonus : null,
+    damageDice: typeof e.damage_dice === "string" ? e.damage_dice : null,
+    damageBonus: typeof e.damage_bonus === "number" ? e.damage_bonus : null,
+    damageType: typeof e.damage_type === "string" ? e.damage_type : null,
+    saveDc: typeof e.save_dc === "number" ? e.save_dc : null,
+    saveType: typeof e.save_type === "string" ? e.save_type : null,
+  }));
+}
+
+function StatEntryList({ title, entries }: { title: string; entries: StatEntry[] | null | undefined }) {
+  if (!entries || entries.length === 0) return null;
+  return (
+    <div>
+      <div className="text-dnd-gold font-display font-semibold mb-2 text-xs tracking-widest uppercase">{title}</div>
+      <div className="space-y-2">
+        {entries.map((e, i) => (
+          <div key={i} className="border-l-2 border-stone-700 pl-2">
+            <div className="font-semibold text-stone-200 text-xs">
+              {e.name}
+              {e.attackBonus != null && <span className="ml-2 text-dnd-gold">+{e.attackBonus} to hit</span>}
+              {e.damageDice && (
+                <span className="ml-2 text-red-400">
+                  {e.damageDice}
+                  {e.damageBonus ? `+${e.damageBonus}` : ""} {e.damageType ?? ""}
+                </span>
+              )}
+              {e.saveDc != null && e.saveType && <span className="ml-2 text-amber-400">DC {e.saveDc} {e.saveType} save</span>}
+            </div>
+            <div className="text-stone-400 text-xs leading-relaxed">{e.desc}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export type StatCardView = "dm" | "player";
 
-export function MonsterStatCard({
-  slug,
-  initialView,
-  onClose,
-}: {
-  slug: string;
-  initialView: StatCardView;
-  onClose: () => void;
-}) {
+export function MonsterStatCard({ slug, initialView, onClose }: { slug: string; initialView: StatCardView; onClose: () => void }) {
   const navigate = useNavigate();
   const [view, setView] = useState<StatCardView>(initialView);
   const [data, setData] = useState<MonsterJson | null>(null);
@@ -162,25 +221,22 @@ export function MonsterStatCard({
       }
     >
       <div className="text-sm text-stone-200 space-y-3">
-        <h3 id="monster-stat-title" className="sr-only">
-          {title}
-        </h3>
         {err && <p className="text-amber-600">{err}</p>}
         {data && (
           <>
             <p className="text-stone-400 italic capitalize">{data.type}</p>
             <p>
-              <span className="text-dnd-gold font-display">AC</span>{" "}
-              {view === "player" ? "?" : data.armorClass}
+              <span className="text-dnd-gold font-display">AC</span> {view === "player" ? "?" : data.armorClass}
               {" · "}
               <span className="text-dnd-gold font-display">HP</span> {view === "player" ? "?" : data.hitPoints}
               {" · "}
               <span className="text-dnd-gold font-display">CR</span> {data.challengeRating}{" "}
               <span className="text-stone-500">({data.xp} XP)</span>
             </p>
-            {view === "dm" && data.damageImmunities && (
-              <p className="text-xs text-stone-500">Immunities: {data.damageImmunities}</p>
-            )}
+            {view === "dm" && data.senses && <p className="text-xs text-stone-500">Senses: {data.senses}</p>}
+            {view === "dm" && data.languages && <p className="text-xs text-stone-500">Languages: {data.languages}</p>}
+            {view === "dm" && data.conditionImmunities && <p className="text-xs text-stone-500">Cond. Immunities: {data.conditionImmunities}</p>}
+            {view === "dm" && data.damageResistances && <p className="text-xs text-stone-500">Resistances: {data.damageResistances}</p>}
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-xs font-mono">
               {(
                 [
@@ -202,27 +258,15 @@ export function MonsterStatCard({
             </div>
             {view === "dm" && (
               <div className="text-xs space-y-2 max-h-64 overflow-y-auto border border-stone-700 rounded p-2 bg-black/30">
-                <StatBlockJson title="Traits" value={data.specialAbilities} />
-                <StatBlockJson title="Actions" value={data.actions} />
-                <StatBlockJson title="Reactions" value={data.reactions} />
-                <StatBlockJson title="Legendary" value={data.legendaryActions} />
+                <StatEntryList title="Traits" entries={parseEntries(data.specialAbilities)} />
+                <StatEntryList title="Actions" entries={parseEntries(data.actions)} />
+                <StatEntryList title="Reactions" entries={parseEntries(data.reactions)} />
+                <StatEntryList title="Legendary Actions" entries={parseEntries(data.legendaryActions)} />
               </div>
             )}
           </>
         )}
       </div>
     </Modal>
-  );
-}
-
-function StatBlockJson({ title, value }: { title: string; value: unknown }) {
-  if (value == null) return null;
-  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-  if (!text || text === "[]" || text === "{}") return null;
-  return (
-    <div>
-      <div className="text-dnd-gold font-display font-semibold mb-1">{title}</div>
-      <pre className="whitespace-pre-wrap text-stone-300">{text}</pre>
-    </div>
   );
 }

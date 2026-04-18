@@ -6,6 +6,9 @@
 node_modules/
 */node_modules/
 
+# Fetched at npm install (official WoTC fillable sheet for PDF export)
+frontend/public/wizards-5E_CharacterSheet_Fillable.pdf
+
 # Build outputs
 dist/
 */dist/

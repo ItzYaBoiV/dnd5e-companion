@@ -16,6 +16,8 @@ sessionRouter.delete("/:id/characters/:characterId", ctrl.removeCharacter);
 
 // Roll summary for DM helper
 sessionRouter.get("/:id/rolls", ctrl.getRollSummary);
+sessionRouter.post("/:id/dungeon", ctrl.setSessionDungeon);
+sessionRouter.get("/:id/dungeon", ctrl.getSessionDungeon);
 
 // Combat
 sessionRouter.post("/:id/combats",                                        ctrl.startCombat);

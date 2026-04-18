@@ -8,6 +8,7 @@ import ReferencePage        from "@/pages/ReferencePage";
 import PlayPage             from "@/pages/PlayPage";
 import PlayMonsterPage      from "@/pages/PlayMonsterPage";
 import DungeonsPage         from "@/pages/DungeonsPage";
+import DungeonsPlayerPage   from "@/pages/DungeonsPlayerPage";
 import MonstersPage         from "@/pages/MonstersPage";
 
 const queryClient = new QueryClient({
@@ -31,6 +32,7 @@ export default function App() {
             <Route path="/reference"         element={<ReferencePage />} />
             <Route path="/reference/:section" element={<ReferencePage />} />
           </Route>
+          <Route path="/dungeons/player" element={<DungeonsPlayerPage />} />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>

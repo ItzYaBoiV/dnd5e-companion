@@ -541,6 +541,7 @@ model Session {
   id        String             @id @default(cuid())
   name      String
   dungeonId String?
+  dungeonSnapshot String?
   storyId   String?
   status    String             @default("setup")
   notes     String             @default("")

@@ -1,21 +1,41 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Trash2 } from "lucide-react";
+import { ArrowLeft, FileDown, Trash2 } from "lucide-react";
 import { useCharacterStore } from "@/store/characterStore";
 import { characterApi } from "@/services/api";
 import { useUIStore } from "@/store/uiStore";
+import { useSessionStore } from "@/store/sessionStore";
 import { LoadingSpinner } from "@/components/common";
 import CharacterSheet from "@/components/CharacterSheet";
+import { downloadWizardsCharacterSheetPdf } from "@/lib/wizardsCharacterSheetPdfExport";
 
 export default function CharacterSheetPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { activeCharacter, isLoading, error, loadCharacter, clearCharacter } = useCharacterStore();
   const { activeTab, setTab } = useUIStore();
+  const { sessions, activeSession, loadSessions } = useSessionStore();
+  const [pdfExporting, setPdfExporting] = useState(false);
 
   useEffect(() => {
     if (id) loadCharacter(id);
   }, [id, loadCharacter]);
+
+  useEffect(() => {
+    void loadSessions();
+  }, [loadSessions]);
+
+  const playerNameForExport = useMemo(() => {
+    const cid = activeCharacter?.id;
+    if (!cid) return "";
+    const fromActive = activeSession?.characters?.find((x) => x.characterId === cid)?.playerName?.trim();
+    if (fromActive) return fromActive;
+    for (const s of sessions) {
+      const m = s.characters?.find((x) => x.characterId === cid);
+      if (m?.playerName?.trim()) return m.playerName.trim();
+    }
+    return "";
+  }, [activeCharacter?.id, activeSession, sessions]);
 
   if (isLoading) return <LoadingSpinner />;
 
@@ -61,6 +81,32 @@ export default function CharacterSheetPage() {
         </div>
 
         <nav className="flex gap-0.5 items-center flex-wrap justify-end p-0.5 rounded-lg bg-black/35 border border-gray-800">
+          <button
+            type="button"
+            disabled={pdfExporting}
+            onClick={() => {
+              void (async () => {
+                if (!activeCharacter) return;
+                setPdfExporting(true);
+                try {
+                  await downloadWizardsCharacterSheetPdf(activeCharacter, {
+                    playerName: playerNameForExport,
+                  });
+                } catch (e) {
+                  alert(e instanceof Error ? e.message : String(e));
+                } finally {
+                  setPdfExporting(false);
+                }
+              })();
+            }}
+            className="px-2.5 sm:px-3 py-1.5 rounded-md text-xs sm:text-sm font-display font-semibold text-amber-200/95 hover:bg-amber-950/50 hover:text-amber-100 disabled:opacity-40 disabled:pointer-events-none flex items-center gap-1.5 border border-transparent hover:border-amber-800/60"
+            title="Download Wizards of the Coast fillable character sheet PDF"
+            aria-label={pdfExporting ? "Exporting PDF" : "Download official Wizards 5e fillable character sheet PDF"}
+          >
+            <FileDown size={16} className="shrink-0 opacity-90" />
+            <span className="hidden sm:inline">{pdfExporting ? "PDF…" : "Official PDF"}</span>
+          </button>
+          <div className="h-5 w-px bg-gray-700 mx-0.5 hidden sm:block" aria-hidden />
           {(["main", "spells", "inventory", "features", "notes"] as const).map((tab) => (
             <button
               key={tab}

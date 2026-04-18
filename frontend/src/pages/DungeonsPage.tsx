@@ -29,8 +29,8 @@ export default function DungeonsPage() {
   const [tab, setTab] = useState<GenTab>("forge");
 
   return (
-    <div className="flex flex-col min-h-0">
-      <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-800 bg-dnd-dark flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between shrink-0">
+    <div className="flex min-h-0 w-full flex-1 flex-col">
+      <div className="flex shrink-0 flex-col gap-3 border-b border-gray-800 bg-dnd-dark px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6 sm:py-4">
         <div>
           <h1 className="font-display font-bold text-xl sm:text-2xl text-dnd-gold">AI Adventure Generator</h1>
           <p className="text-xs text-gray-500">Dungeon Forge, procedural maps, and GPU-backed AI</p>
@@ -59,10 +59,8 @@ export default function DungeonsPage() {
 
       <div
         className={clsx(
-          "flex flex-col min-h-0",
-          tab === "forge" ? "overflow-hidden flex-1" : "p-4 pb-10",
-          tab === "forge" &&
-            "h-[calc(100dvh-var(--app-header-h)-var(--app-subnav-h)-var(--safe-top,0px)-var(--safe-bottom,0px))] max-h-[calc(100dvh-var(--app-header-h)-var(--app-subnav-h)-var(--safe-top,0px)-var(--safe-bottom,0px))] md:h-[calc(100dvh-var(--app-header-h)-var(--safe-top,0px))] md:max-h-[calc(100dvh-var(--app-header-h)-var(--safe-top,0px))] w-full overflow-hidden",
+          "flex min-h-0 w-full flex-1 flex-col",
+          tab === "forge" ? "overflow-hidden" : "p-4 pb-10",
         )}
       >
         {tab === "forge" && <DungeonForge />}

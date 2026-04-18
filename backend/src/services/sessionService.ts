@@ -296,6 +296,29 @@ export async function getSessionRollSummary(sessionId: string) {
   };
 }
 
+export async function setSessionDungeonSnapshot(sessionId: string, snapshot: unknown) {
+  await assertSessionExists(sessionId);
+  return prisma.session.update({
+    where: { id: sessionId },
+    data: { dungeonSnapshot: JSON.stringify(snapshot ?? null) },
+    select: { id: true, dungeonSnapshot: true, updatedAt: true },
+  });
+}
+
+export async function getSessionDungeonSnapshot(sessionId: string) {
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    select: { id: true, dungeonSnapshot: true },
+  });
+  if (!session) throw new NotFoundError("Session");
+  if (!session.dungeonSnapshot) return null;
+  try {
+    return JSON.parse(session.dungeonSnapshot);
+  } catch {
+    return null;
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────
 async function assertSessionExists(id: string) {
   const s = await prisma.session.findUnique({ where: { id }, select: { id: true } });

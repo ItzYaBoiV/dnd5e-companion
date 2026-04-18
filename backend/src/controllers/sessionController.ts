@@ -65,3 +65,11 @@ export const healCombatant = async (
 
 export const getRollSummary = async (req: Request<{ id: string }>, res: Response) =>
   res.json(await svc.getSessionRollSummary(req.params.id));
+
+export const setSessionDungeon = async (req: Request<{ id: string }>, res: Response) => {
+  const out = await svc.setSessionDungeonSnapshot(req.params.id, req.body);
+  res.status(201).json(out);
+};
+
+export const getSessionDungeon = async (req: Request<{ id: string }>, res: Response) =>
+  res.json(await svc.getSessionDungeonSnapshot(req.params.id));

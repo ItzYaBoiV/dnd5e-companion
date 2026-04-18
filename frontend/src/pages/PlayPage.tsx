@@ -7,7 +7,7 @@ import { LoadingSpinner, formatModifier, HPBar, Modal } from "@/components/commo
 import { Plus, Sword, Shield, Zap, RefreshCw, SkipForward, X, ChevronDown, ChevronRight, Skull } from "lucide-react";
 import { clsx } from "clsx";
 
-type PlayTab = "setup" | "combat" | "rolls";
+type PlayTab = "setup" | "combat" | "rolls" | "dungeon";
 
 export default function PlayPage() {
   const { sessions, activeSession, loadSessions, loadSession, createSession, deleteSession } = useSessionStore();
@@ -36,7 +36,7 @@ export default function PlayPage() {
         <div className="flex gap-2">
           {activeSession && (
             <>
-              {(["setup","combat","rolls"] as PlayTab[]).map((t) => (
+              {(["setup","combat","rolls","dungeon"] as PlayTab[]).map((t) => (
                 <button
                   key={t}
                   onClick={() => setTab(t)}
@@ -45,7 +45,7 @@ export default function PlayPage() {
                     tab === t ? "bg-dnd-red text-white" : "text-gray-400 hover:text-white hover:bg-gray-800"
                   )}
                 >
-                  {t === "rolls" ? "Roll Helper" : t}
+                  {t === "rolls" ? "Roll Helper" : t === "dungeon" ? "Dungeon Map" : t}
                 </button>
               ))}
             </>
@@ -68,6 +68,7 @@ export default function PlayPage() {
             {tab === "setup"  && <SetupTab />}
             {tab === "combat" && <CombatTab />}
             {tab === "rolls"  && <RollHelperTab />}
+            {tab === "dungeon" && <DungeonDmTab />}
           </>
         )}
       </div>
@@ -119,6 +120,73 @@ function SessionPicker({ sessions, onSelect, onDelete }: {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function DungeonDmTab() {
+  const { activeSession } = useSessionStore();
+  const [dungeon, setDungeon] = useState<any | null>(null);
+  const [selectedRoomId, setSelectedRoomId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!activeSession?.id) return;
+    fetch(`/api/sessions/${activeSession.id}/dungeon`)
+      .then((r) => r.json())
+      .then((j) => setDungeon(j))
+      .catch(() => setDungeon(null));
+  }, [activeSession?.id]);
+
+  if (!activeSession) return null;
+  if (!dungeon) return <div className="text-sm text-gray-500 italic">No dungeon snapshot has been sent to this session yet.</div>;
+  const rooms = Array.isArray(dungeon.rooms) ? dungeon.rooms : [];
+  const entities = Array.isArray(dungeon.entities) ? dungeon.entities : [];
+  const room = rooms.find((r: any) => r.id === selectedRoomId) ?? null;
+  const roomEntities = room ? entities.filter((e: any) => e.roomId === room.id) : [];
+
+  return (
+    <div className="max-w-5xl space-y-4">
+      <div className="dnd-card">
+        <h2 className="font-display text-dnd-gold font-bold text-lg">{dungeon.mapName || "Dungeon Map"}</h2>
+        <p className="text-xs text-gray-500">Floor {dungeon.floor ?? 1} · {rooms.length} rooms</p>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-[2fr,1fr] gap-4">
+        <div className="dnd-card">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+            {rooms.map((r: any) => (
+              <button key={r.id} onClick={() => setSelectedRoomId(r.id)} className={clsx("rounded border px-2 py-1 text-left text-xs", selectedRoomId === r.id ? "border-dnd-gold text-dnd-gold bg-black/40" : "border-gray-700 text-gray-300")}>
+                <div className="font-semibold">Room {r.id}</div>
+                <div className="text-[11px] text-gray-500">{r.label || r.type}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="dnd-card">
+          {!room ? (
+            <p className="text-sm text-gray-500 italic">Select a room to inspect.</p>
+          ) : (
+            <div className="space-y-2 text-sm">
+              <div className="font-display font-bold text-dnd-gold">Room {room.id}: {room.label || room.type}</div>
+              <div className="text-xs text-gray-500">{room.w}x{room.h}</div>
+              {roomEntities.length === 0 ? <div className="text-xs text-gray-500 italic">No entities in this room.</div> : roomEntities.map((e: any, i: number) => (
+                <div key={i} className="border border-gray-700 rounded p-2 text-xs space-y-1">
+                  {e.type === "trap" ? (
+                    <>
+                      <div><span className="text-orange-300 font-semibold">Trap:</span> <span className="text-gray-200">{e.name}</span></div>
+                      {e.dmg && <div className="text-gray-400">Damage: {e.dmg}</div>}
+                      {e.detectDC != null && <div className="text-gray-500">Detection: DC {e.detectDC} Perception</div>}
+                      {e.saveDC > 0 && e.saveType && <div className="text-gray-500">{e.saveType} save: DC {e.saveDC}</div>}
+                      {e.effect && <div className="text-gray-500 italic">{e.effect}</div>}
+                    </>
+                  ) : (
+                    <div><span className="text-gray-300 font-semibold capitalize">{e.type}:</span> {e.name}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,10 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/exhaustive-deps */
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { computeCellSize } from "@/lib/computeCellSize";
-import { buildAsciiDungeonMap, downloadAsciiMap } from "@/lib/dungeonAsciiMap";
+import { buildAsciiMapLegend } from "@/lib/dungeonAsciiMap";
+import { applyAsciiDensity } from "@/lib/dungeonAsciiDensity";
 import { downloadAsciiPng } from "@/lib/dungeonAsciiCanvas";
 import { openForgePrintPacket } from "@/lib/forgePrintPacket";
 import { MonsterStatCard } from "@/components/dungeon-forge/MonsterStatCard";
+import { useSessionStore } from "@/store/sessionStore";
 
 /* ═══════════════════════════════════════════════════════════════════════
    D&D 5e DUNGEON FORGE v3 — Location-Aware Procedural Map Generator
@@ -17,7 +19,23 @@ function rI(a,b,r){return Math.floor(r()*(b-a+1))+a;}
 
 // ── Monsters / Traps / Items ─────────────────────────────────────────
 const MONSTERS={0:["Rat","Bat","Spider","Frog"],0.125:["Bandit","Kobold","Skeleton","Zombie","Cultist"],0.25:["Goblin","Wolf","Acolyte"],0.5:["Orc","Gnoll","Shadow","Hobgoblin","Scout"],1:["Ghoul","Bugbear","Giant Spider","Specter"],2:["Ghast","Mimic","Ogre","Gargoyle","Wererat"],3:["Minotaur","Mummy","Owlbear","Werewolf","Hell Hound"],4:["Banshee","Ghost","Flameskull","Ettin"],5:["Troll","Wraith","Umber Hulk","Flesh Golem"],6:["Medusa","Drider","Chimera","Young White Dragon"],7:["Mind Flayer","Stone Giant","Young Black Dragon"],8:["Hydra","Frost Giant","Young Green Dragon","Assassin"],9:["Young Blue Dragon","Fire Giant","Bone Devil"],10:["Young Red Dragon","Aboleth","Stone Golem"],13:["Beholder","Vampire","Adult White Dragon","Rakshasa"],15:["Adult Green Dragon","Purple Worm"],17:["Adult Blue Dragon","Death Knight"],20:["Ancient White Dragon","Pit Fiend"]};
-const TRAPS=[{name:"Pit Trap",minLv:1,dmg:"2d10"},{name:"Poison Darts",minLv:1,dmg:"1d10+psn"},{name:"Swinging Blade",minLv:2,dmg:"3d10"},{name:"Fire Jet",minLv:3,dmg:"4d10"},{name:"Collapsing Ceiling",minLv:4,dmg:"4d10"},{name:"Acid Pool",minLv:5,dmg:"6d6 acid"},{name:"Lightning Rune",minLv:6,dmg:"8d6 ltng"},{name:"Spike Pit",minLv:2,dmg:"4d10"},{name:"Gas Cloud",minLv:4,dmg:"3d8 psn"},{name:"Crushing Wall",minLv:3,dmg:"5d10"},{name:"Symbol of Death",minLv:13,dmg:"10d10 nec"}];
+const TRAPS = [
+  { name:"Pit Trap", minLv:1, dmg:"2d10 bludgeoning", detectDC:15, saveDC:12, saveType:"DEX", effect:"Fall 10ft into pit. DEX save or take damage." },
+  { name:"Poison Darts", minLv:1, dmg:"1d10 piercing + poison", detectDC:17, saveDC:13, saveType:"CON", effect:"CON save or poisoned 1 hour." },
+  { name:"Swinging Blade", minLv:2, dmg:"3d10 slashing", detectDC:15, saveDC:14, saveType:"DEX", effect:"DEX save or take full damage." },
+  { name:"Fire Jet", minLv:3, dmg:"4d10 fire", detectDC:18, saveDC:14, saveType:"DEX", effect:"15ft line. DEX save for half." },
+  { name:"Collapsing Ceiling", minLv:4, dmg:"4d10 bludgeoning", detectDC:19, saveDC:15, saveType:"DEX", effect:"10ft radius. DEX save or buried (restrained)." },
+  { name:"Acid Pool", minLv:5, dmg:"6d6 acid", detectDC:18, saveDC:14, saveType:"DEX", effect:"Hidden floor panel. DEX save or submerged." },
+  { name:"Lightning Rune", minLv:6, dmg:"8d6 lightning", detectDC:20, saveDC:16, saveType:"CON", effect:"Rune triggers on touch. 30ft chain. CON save for half." },
+  { name:"Spike Pit", minLv:2, dmg:"4d10 piercing", detectDC:16, saveDC:13, saveType:"DEX", effect:"Spikes deal extra 2d10 on failed save." },
+  { name:"Gas Cloud", minLv:4, dmg:"3d8 poison", detectDC:17, saveDC:15, saveType:"CON", effect:"20ft radius cloud. CON save or incapacitated until leaving." },
+  { name:"Crushing Wall", minLv:3, dmg:"5d10 bludgeoning", detectDC:18, saveDC:15, saveType:"STR", effect:"STR save or pushed into corner and restrained." },
+  { name:"Symbol of Death", minLv:13, dmg:"10d10 necrotic", detectDC:22, saveDC:18, saveType:"CON", effect:"Triggers on reading. 60ft radius. CON save or drop to 0." },
+  { name:"Net Trap", minLv:1, dmg:"none", detectDC:14, saveDC:13, saveType:"STR", effect:"STR save or restrained until DC13 STR check to break free." },
+  { name:"Teleport Trap", minLv:5, dmg:"none", detectDC:20, saveDC:16, saveType:"WIS", effect:"WIS save or teleported to random room in dungeon." },
+  { name:"Alarm Bell", minLv:1, dmg:"none", detectDC:12, saveDC:0, saveType:"", effect:"Triggers monster encounter in 1d4 rounds." },
+  { name:"Freezing Floor", minLv:4, dmg:"4d8 cold", detectDC:17, saveDC:15, saveType:"CON", effect:"CON save or speed reduced to 0 until end of next turn." },
+];
 const ITEMS=[{name:"Healing Potion",r:"common",minLv:1},{name:"Gold (2d6x10)",r:"common",minLv:1},{name:"Scroll",r:"common",minLv:1},{name:"+1 Weapon",r:"uncommon",minLv:2},{name:"Bag of Holding",r:"uncommon",minLv:3},{name:"Cloak of Protection",r:"uncommon",minLv:3},{name:"Ring of Protection",r:"rare",minLv:5},{name:"+2 Weapon",r:"rare",minLv:6},{name:"Flame Tongue",r:"rare",minLv:7},{name:"Staff of Power",r:"vr",minLv:10},{name:"+3 Weapon",r:"vr",minLv:12},{name:"Vorpal Sword",r:"legendary",minLv:15},{name:"Staff of the Magi",r:"legendary",minLv:17},{name:"Gold (4d6x100)",r:"rare",minLv:5},{name:"Gem (500gp)",r:"rare",minLv:7}];
 
 // ── Name Generators ──────────────────────────────────────────────────
@@ -33,7 +51,7 @@ function genDungeonName(r){return pick(DUNGEON_NAMES,r)+" "+pick(DN2,r);}
 
 // ── ASCII Decoration Stamps ──────────────────────────────────────────
 const S_={
-  grave1:{rows:[" _ ","|+|"],fg:"#777",n:"Gravestone"},
+  grave1:{rows:[" _ ","|+|","|_|"],fg:"#777",n:"Gravestone"},
   grave2:{rows:["._.","|R|","|I|","|P|"],fg:"#888",n:"RIP Stone"},
   grave3:{rows:[" + "," | "],fg:"#777",n:"Cross"},
   skull:{rows:["_O_"," V "],fg:"#dd8",n:"Skull"},
@@ -92,17 +110,17 @@ const S_={
   corpse_human:{rows:[" o ","/|\\","/ \\"],fg:"#955",n:"Fallen body"},
   splatter:{rows:[",.,",".;,"],fg:"#811",n:"Blood"},
   bone_heap:{rows:["oOo","ooo"],fg:"#ba8",n:"Bone heap"},
-  iron_gate:{rows:["|T|","| |","|_|"],fg:"#888",n:"Iron gate"},
+  iron_gate:{rows:["|T|","|+|","|_|"],fg:"#888",n:"Iron gate"},
 };
 
 // ── Location visuals (floor/corridor flavor) + room-type bias ─────────
 const LOCATION_GLYPHS={
   dungeon:{floor:"·",wall:"#",corr:"·",water:"~",road:":",stairsU:"<",stairsD:">",voidCh:" "},
-  town:{floor:"·",wall:"#",corr:":",water:"~",road:"=",stairsU:"<",stairsD:">",voidCh:" "},
+  town:{floor:"·",wall:"#",corr:":",water:"~",road:"·",stairsU:"<",stairsD:">",voidCh:" "},
   castle:{floor:"·",wall:"█",corr:"·",water:"~",road:":",stairsU:"<",stairsD:">",voidCh:" "},
   graveyard:{floor:",",wall:"†",corr:",",water:"~",road:",",stairsU:"<",stairsD:">",voidCh:" "},
-  swamp:{floor:";",wall:"≈",corr:"~",water:"≈",road:"~",stairsU:"<",stairsD:">",voidCh:" "},
-  cave:{floor:".",wall:"*",corr:"·",water:"~",road:"·",stairsU:"<",stairsD:">",voidCh:" "},
+  swamp:{floor:"·",wall:"≈",corr:"~",water:"░",road:"·",stairsU:"<",stairsD:">",voidCh:" "},
+  cave:{floor:".",wall:"#",corr:"·",water:"~",road:"·",stairsU:"<",stairsD:">",voidCh:" "},
   temple:{floor:":",wall:"║",corr:"·",water:"~",road:":",stairsU:"<",stairsD:">",voidCh:" "},
   sewer:{floor:"·",wall:"=",corr:"·",water:"≈",road:"·",stairsU:"<",stairsD:">",voidCh:" "},
   shipwreck:{floor:".",wall:"|",corr:".",water:"~",road:".",stairsU:"<",stairsD:">",voidCh:" "},
@@ -113,7 +131,7 @@ const LOCATION_GLYPHS={
 
 const LOCATION_DESCRIPTIONS={
   dungeon:"Classic stone halls — chambers, crypts, traps",
-  town:"Grid streets, buildings, market squares",
+  town:"Road grid, scattered lots with multiple buildings per block",
   castle:"Thick walls, towers, keep, battlements",
   graveyard:"Open yard, mausoleums, catacombs, gate",
   swamp:"Waterlogged islands connected by bridges",
@@ -142,19 +160,22 @@ const ROOM_LABEL={
 };
 
 /** Merge into STY[style] for floor/wall/water accents per location. */
-const LOCATION_STYLE_OVERRIDE={
-  dungeon:{floorFg:"#6a6",wallFg:"#888",waterFg:"#28c",doorFg:"#cc0",corrFg:"#585"},
-  town:{floorFg:"#8a7",wallFg:"#665",roadFg:"#7a6",waterFg:"#38a"},
-  cave:{waterFg:"#68f",floorFg:"#554",wallFg:"#766"},
-  swamp:{floorFg:"#363",waterFg:"#2a4",wallFg:"#454",corrFg:"#484"},
-  graveyard:{floorFg:"#556",wallFg:"#558",corrFg:"#575"},
-  temple:{floorFg:"#9a8",wallFg:"#cc9",doorFg:"#ffd",corrFg:"#a98"},
-  sewer:{floorFg:"#464",waterFg:"#0a8",wallFg:"#556",corrFg:"#585"},
-  castle:{wallFg:"#aaa",floorFg:"#cba",corrFg:"#bca"},
-  shipwreck:{floorFg:"#864",wallFg:"#a85",waterFg:"#26a",doorFg:"#cc8",corrFg:"#975"},
-  volcanic_lair:{floorFg:"#642",wallFg:"#a40",waterFg:"#f60",corrFg:"#830",pillarFg:"#311"},
-  fey_forest:{floorFg:"#383",wallFg:"#6b5",waterFg:"#6cf",corrFg:"#495",doorFg:"#ec8"},
-  undercity:{floorFg:"#445",wallFg:"#667",waterFg:"#238",corrFg:"#556",roadFg:"#889"},
+const LOCATION_STYLE_OVERRIDE = {
+  dungeon:   { wallFg:"#6a6058", floorFg:"#2a2520", doorFg:"#b8900a", roadFg:"#3a3530" },
+  cave:      { wallFg:"#9eb0c0", floorFg:"#243540", waterFg:"#2a8aaa", doorFg:"#6ab090" },
+  graveyard: { floorFg:"#4a4d52", wallFg:"#5a5d6a", doorFg:"#7a8090", waterFg:"#2a3040" },
+  swamp:     { floorFg:"#2a3a1a", waterFg:"#2a5a48", wallFg:"#223218", doorFg:"#3a5a2a", roadFg:"#4a5a40" },
+  temple:    { floorFg:"#6a6050", wallFg:"#9a8860", doorFg:"#d4a820", waterFg:"#3a5a8a" },
+  sewer:     { floorFg:"#2e4235", waterFg:"#0a5545", wallFg:"#3a4a3a", doorFg:"#5a8060" },
+  castle:    { wallFg:"#8a8278", floorFg:"#a89880", doorFg:"#7a5a20", roadFg:"#6a6050" },
+  town:      { floorFg:"#7a6a50", wallFg:"#5a4a38", roadFg:"#8a7a5a", doorFg:"#a07020" },
+  shipwreck: { floorFg:"#5a3a1a", wallFg:"#3a2010", waterFg:"#0a2a5a", doorFg:"#6a4a20" },
+  volcano:   { floorFg:"#6a2010", waterFg:"#cc3300", wallFg:"#4a1808", doorFg:"#aa4400" },
+  feyforest: { floorFg:"#1a4a20", wallFg:"#0a2a10", waterFg:"#1a6a4a", doorFg:"#8844cc" },
+  undercity: { floorFg:"#3a3045", wallFg:"#2a2035", doorFg:"#8844aa", roadFg:"#4a3858" },
+  // Keep canonical internal keys mapped too.
+  volcanic_lair: { floorFg:"#6a2010", waterFg:"#cc3300", wallFg:"#4a1808", doorFg:"#aa4400" },
+  fey_forest: { floorFg:"#1a4a20", wallFg:"#0a2a10", waterFg:"#1a6a4a", doorFg:"#8844cc" },
 };
 
 function applyLocationSpecialFeatures(grid,rooms,locationType,rng,W,H){
@@ -170,7 +191,7 @@ function applyLocationSpecialFeatures(grid,rooms,locationType,rng,W,H){
       for(let x=1;x<W-1;x++){
         if(grid[y][x]!==T.F) continue;
         const adj=[[0,1],[0,-1],[1,0],[-1,0]].filter(([dy,dx])=>grid[y+dy]?.[x+dx]===T.WA).length;
-        if(adj>=2&&rng()<0.15) grid[y][x]=T.WA;
+        if(adj>=3&&rng()<0.035) grid[y][x]=T.WA;
       }
     }
   }
@@ -366,10 +387,10 @@ const LOCATIONS = {
     name: "Graveyard", genName: (r)=>"The "+pick(["Forgotten","Silent","Weeping","Hollow","Cursed","Ancient","Blighted","Restless"],r)+" "+pick(["Cemetery","Graveyard","Burial Ground","Necropolis","Boneyard"],r),
     rooms: ["Graveyard","Mausoleum","Crypt","Open Graves","Chapel","Caretaker Hut","Ossuary","Tomb","Catacomb","Gate House","Charnel Pit","Bone Yard","Iron Gate","Mortuary","Lichyard"],
     decos: {
-      "Graveyard":["grave1","grave1","grave2","grave3","grave3","deadbody","bones","skull","bush"],
+      "Graveyard":["grave2","grave3","grave3","grave1","deadbody","bones","skull","bush"],
       "Mausoleum":["coffin","coffin","skull","bones","blood_sm","web","statue"],
       "Crypt":["coffin","skeleton","bones","skull","blood_sm","web","rubble"],
-      "Open Graves":["grave1","grave2","grave3","deadbody","bones","blood_lg","skull","skeleton"],
+      "Open Graves":["grave2","grave2","grave3","deadbody","bones","blood_lg","skull","skeleton"],
       "Chapel":["altar","bench","bench","bookshelf","banner","statue"],
       "Caretaker Hut":["bed","table_h","crate","barrel","torch_w","chair"],
       "Ossuary":["skull","skull","bones","bones","skeleton","skeleton","blood_sm"],
@@ -377,7 +398,7 @@ const LOCATIONS = {
       "Catacomb":["bones","bones","skull","skeleton","web","rubble","blood_sm"],
       "Gate House":["bench","torch_w","weapon_rack","crate","barrel"],
       "Charnel Pit":["bones","bone_heap","skull","splatter","blood_lg","deadbody"],
-      "Bone Yard":["bones","bones","skull","grave1","grave2","rubble"],
+      "Bone Yard":["bones","bones","skull","grave2","grave3","rubble"],
       "Iron Gate":["iron_gate","chains","bench","torch_w","weapon_rack"],
       "Mortuary":["coffin","table_h","skull","bones","bookshelf","altar"],
       "Lichyard":["grave2","grave3","coffin","web","bones","statue"],
@@ -609,11 +630,89 @@ function placeStairsOnGrid({grid,rooms,stairUp,stairDown,stairUpTo,stairDownTo,r
   }
 }
 
+function rectsOverlapPad(a,b,gap){
+  return !(a.x+a.w+gap<=b.x||b.x+b.w+gap<=a.x||a.y+a.h+gap<=b.y||b.y+b.h+gap<=a.y);
+}
+
+/** 1–3 non-overlapping building footprints inside a town lot (leaves yard = open floor). */
+function layoutTownBuildingsInLot(lot,n,rng){
+  const {rx,ry,rw,rh}=lot;
+  const rects=[];
+  const gap=1;
+  const cap=rw>=12&&rh>=10?3:rw>=9&&rh>=8?2:1;
+  const target=Math.min(n,cap,rI(1,Math.min(cap,n),rng));
+  let tries=0;
+  while(rects.length<target&&tries<target*140){
+    tries++;
+    const maxBw=Math.min(11,Math.max(4,Math.floor(rw/2)-gap));
+    const maxBh=Math.min(9,Math.max(3,Math.floor(rh/2)-gap));
+    const brw=rI(4,maxBw,rng);
+    const brh=rI(3,maxBh,rng);
+    const bxMin=rx+1;
+    const bxMax=rx+rw-brw-2;
+    const byMin=ry+1;
+    const byMax=ry+rh-brh-2;
+    if(bxMax<bxMin||byMax<byMin) break;
+    const bx=rI(bxMin,bxMax,rng);
+    const by=rI(byMin,byMax,rng);
+    const cand={x:bx,y:by,w:brw,h:brh};
+    if(rects.some((r)=>rectsOverlapPad(cand,r,gap))) continue;
+    rects.push(cand);
+  }
+  if(rects.length===0&&rw>=5&&rh>=5){
+    const brw=Math.max(4,Math.min(rw-4,Math.floor(rw*0.52)));
+    const brh=Math.max(3,Math.min(rh-4,Math.floor(rh*0.52)));
+    const bx=rx+Math.max(1,Math.floor((rw-brw)/2));
+    const by=ry+Math.max(1,Math.floor((rh-brh)/2));
+    rects.push({x:bx,y:by,w:brw,h:brh});
+  }
+  return rects;
+}
+
+function placeTownDoorOnBuilding(grid,rx,ry,rw,rh,W,H,rng){
+  const cands=[];
+  const tryWall=(wx,wy)=>{
+    if(grid[wy]?.[wx]!==T.W) return;
+    for(const[dy,dx] of [[-1,0],[1,0],[0,-1],[0,1]]){
+      const ny=wy+dy,nx=wx+dx;
+      if(ny>=0&&ny<H&&nx>=0&&nx<W&&grid[ny][nx]===T.ROAD){ cands.push({x:wx,y:wy}); return; }
+    }
+  };
+  for(let x=rx;x<rx+rw;x++){ tryWall(x,ry-1); tryWall(x,ry+rh); }
+  for(let y=ry;y<ry+rh;y++){ tryWall(rx-1,y); tryWall(rx+rw,y); }
+  if(cands.length){
+    const p=pick(cands,rng);
+    grid[p.y][p.x]=T.D;
+    return;
+  }
+  const mx=rx+Math.floor(rw/2), my=ry+Math.floor(rh/2);
+  if(grid[ry+rh]?.[mx]===T.W) grid[ry+rh][mx]=T.D;
+  else if(grid[ry-1]?.[mx]===T.W) grid[ry-1][mx]=T.D;
+  else if(grid[my]?.[rx+rw]===T.W) grid[my][rx+rw]=T.D;
+  else if(grid[my]?.[rx-1]===T.W) grid[my][rx-1]=T.D;
+}
+
+function stampTownBuilding(grid,rect,W,H,rng){
+  const rx=rect.x, ry=rect.y, rw=rect.w, rh=rect.h;
+  for(let y=ry;y<ry+rh;y++) for(let x=rx;x<rx+rw;x++){
+    if(y>=0&&y<H&&x>=0&&x<W) grid[y][x]=T.F;
+  }
+  for(let y=ry-1;y<=ry+rh;y++){
+    for(let x=rx-1;x<=rx+rw;x++){
+      if(y>=0&&y<H&&x>=0&&x<W && grid[y][x]===T.F) grid[y][x]=T.W;
+    }
+  }
+  for(let y=ry;y<ry+rh;y++) for(let x=rx;x<rx+rw;x++){
+    if(y>=0&&y<H&&x>=0&&x<W) grid[y][x]=T.F;
+  }
+  placeTownDoorOnBuilding(grid,rx,ry,rw,rh,W,H,rng);
+}
+
 function generateTownLayout(cfg,rng){
   const {width:W,height:H,roomCount}=cfg;
   const grid=Array.from({length:H},()=>Array(W).fill(T.V));
   const rooms=[];
-  const ROAD_W=3,BLOCK=14,STRIDE=ROAD_W+BLOCK;
+  const ROAD_W=3,BLOCK=16,STRIDE=ROAD_W+BLOCK;
   const vX=[],hY=[];
   for(let x=0;x+ROAD_W<=W;x+=STRIDE) vX.push(x);
   for(let y=0;y+ROAD_W<=H;y+=STRIDE) hY.push(y);
@@ -628,32 +727,45 @@ function generateTownLayout(cfg,rng){
       const bw=(vX[ci+1]??W)-bx, bh=(hY[ri+1]??H)-by;
       if(bw<5||bh<5) continue;
       const rx=bx+1, ry=by+1, rw=bw-2, rh=bh-2;
-      if(rw<3||rh<3) continue;
+      if(rw<5||rh<5) continue;
       const dist=Math.abs(ci-cxIdx)+Math.abs(ri-cyIdx);
       blocks.push({rx,ry,rw,rh,dist});
     }
   }
   blocks.sort((a,b)=>a.dist-b.dist);
 
-  const typeQ=['Well Square','Tavern','Blacksmith','Market','Temple','Town Hall','Stable','Inn','Apothecary','General Store','Barracks','Library','Bakery','Guard Tower','House'];
-  const chosen=blocks.slice(0,Math.max(1,roomCount));
-  for(let i=0;i<chosen.length;i++){
-    const b=chosen[i];
-    const roomType=typeQ[i]||'House';
-    const label=roomType==='Tavern'?genTavernName(rng):roomType;
-    rooms.push({id:rooms.length+1,x:b.rx,y:b.ry,w:b.rw,h:b.rh,cx:Math.floor(b.rx+b.rw/2),cy:Math.floor(b.ry+b.rh/2),type:roomType,label});
-    for(let y=b.ry;y<b.ry+b.rh;y++) for(let x=b.rx;x<b.rx+b.rw;x++) grid[y][x]=T.F;
-    // Ring walls around building interior.
-    for(let y=b.ry-1;y<=b.ry+b.rh;y++){
-      for(let x=b.rx-1;x<=b.rx+b.rw;x++){
-        if(y>=0&&y<H&&x>=0&&x<W && grid[y][x]===T.V) grid[y][x]=T.W;
-      }
+  for(const b of blocks){
+    for(let y=b.ry;y<b.ry+b.rh;y++) for(let x=b.rx;x<b.rx+b.rw;x++){
+      if(y>=0&&y<H&&x>=0&&x<W) grid[y][x]=T.F;
     }
-    const mx=b.rx+Math.floor(b.rw/2), my=b.ry+Math.floor(b.rh/2);
-    if(grid[b.ry-1]?.[mx]===T.ROAD) grid[b.ry-1][mx]=T.D;
-    if(grid[b.ry+b.rh]?.[mx]===T.ROAD) grid[b.ry+b.rh][mx]=T.D;
-    if(grid[my]?.[b.rx-1]===T.ROAD) grid[my][b.rx-1]=T.D;
-    if(grid[my]?.[b.rx+b.rw]===T.ROAD) grid[my][b.rx+b.rw]=T.D;
+  }
+
+  const typeQ=['Well Square','Tavern','Blacksmith','Market','Temple','Town Hall','Stable','Inn','Apothecary','General Store','Barracks','Library','Bakery','Guard Tower','House'];
+  let ti=0;
+  for(const b of blocks){
+    if(rooms.length>=roomCount) break;
+    const remaining=roomCount-rooms.length;
+    const want=Math.min(remaining,rI(1,Math.min(3,remaining),rng));
+    const sub=layoutTownBuildingsInLot(b,want,rng);
+    for(const rect of sub){
+      if(rooms.length>=roomCount) break;
+      stampTownBuilding(grid,rect,W,H,rng);
+      const roomType=typeQ[ti%typeQ.length];
+      ti++;
+      const label=roomType==='Tavern'?genTavernName(rng):roomType;
+      rooms.push({
+        id:rooms.length+1,
+        x:rect.x,y:rect.y,w:rect.w,h:rect.h,
+        cx:Math.floor(rect.x+rect.w/2),cy:Math.floor(rect.y+rect.h/2),
+        type:roomType,label,
+      });
+    }
+  }
+  if(rooms.length===0&&blocks[0]){
+    const b=blocks[0];
+    const rect={x:b.rx+2,y:b.ry+2,w:Math.max(4,b.rw-4),h:Math.max(3,b.rh-4)};
+    stampTownBuilding(grid,rect,W,H,rng);
+    rooms.push({id:1,x:rect.x,y:rect.y,w:rect.w,h:rect.h,cx:Math.floor(rect.x+rect.w/2),cy:Math.floor(rect.y+rect.h/2),type:'Well Square',label:'Well Square'});
   }
   return {grid,rooms};
 }
@@ -947,8 +1059,15 @@ function generateSewerLayout(cfg,rng){
   const {width:W,height:H,roomCount,locationType}=cfg;
   const grid=Array.from({length:H},()=>Array(W).fill(T.V));
   const rooms=[];
-  const hTrunks=[Math.floor(H/3),Math.floor(2*H/3)];
-  const vTrunks=[Math.floor(W/4),Math.floor(W/2),Math.floor(3*W/4)];
+  const hTrunks=[
+    Math.max(2,Math.min(H-3,Math.floor(H/3 + (rng()-0.5)*H*0.08))),
+    Math.max(2,Math.min(H-3,Math.floor(2*H/3 + (rng()-0.5)*H*0.08))),
+  ];
+  const vTrunks=[
+    Math.max(2,Math.min(W-3,Math.floor(W/4 + (rng()-0.5)*W*0.08))),
+    Math.max(2,Math.min(W-3,Math.floor(W/2 + (rng()-0.5)*W*0.08))),
+    Math.max(2,Math.min(W-3,Math.floor(3*W/4 + (rng()-0.5)*W*0.08))),
+  ];
 
   // Trunks: top walkway (F), center channel (WA), bottom walkway (F).
   for(const ty of hTrunks){
@@ -964,6 +1083,11 @@ function generateSewerLayout(cfg,rng){
       grid[y][tx]=T.WA;
       grid[y][tx+1]=T.F;
     }
+  }
+  for(let i=0;i<rI(2,3,rng);i++){
+    const a={cx:pick(vTrunks,rng),cy:pick(hTrunks,rng)};
+    const b={cx:Math.max(2,Math.min(W-3,pick(vTrunks,rng)+rI(-3,3,rng))),cy:Math.max(2,Math.min(H-3,pick(hTrunks,rng)+rI(-2,2,rng)))};
+    carveWindingCorridor(grid,a,b,W,H,rng,1);
   }
 
   // Junction rooms 8x8 at intersections (use floor, not water in center).
@@ -1037,7 +1161,7 @@ function generateSwampLayout(cfg,rng){
   let att=0;
   while(rooms.length<roomCount && att<roomCount*200){
     att++;
-    const rw=rI(5,11,rng), rh=rI(4,8,rng);
+    const rw=rI(7,14,rng), rh=rI(5,11,rng);
     const rx=rI(2,W-rw-3,rng), ry=rI(2,H-rh-3,rng);
     let overlap=false;
     for(const r of rooms){
@@ -1058,9 +1182,9 @@ function generateSwampLayout(cfg,rng){
     const roomType=pickRoomType(LOCATIONS.swamp,locationType,rng);
     rooms.push({id:rooms.length+1,x:rx,y:ry,w:rw,h:rh,cx:Math.floor(rx+rw/2),cy:Math.floor(ry+rh/2),type:roomType,label:roomType});
 
-    // Water pools inside larger islands.
-    if(rw*rh>35 && rng()<0.8){
-      const poolW=rng()<0.5?2:3, poolH=2;
+    // Small interior pools on large islands only (keep most land readable).
+    if(rw*rh>48 && rng()<0.28){
+      const poolW=rI(2,3,rng), poolH=rI(1,2,rng);
       const px=rx+1+rI(0,Math.max(0,rw-poolW-2),rng);
       const py=ry+1+rI(0,Math.max(0,rh-poolH-2),rng);
       for(let y=py;y<py+poolH;y++) for(let x=px;x<px+poolW;x++) grid[y][x]=T.WA;
@@ -1215,7 +1339,8 @@ function generateMap(cfg) {
     }
   }
 
-  if(rooms.length>1){
+  // Town already has a full road grid + building lots; carving paths would cut through walls.
+  if(rooms.length>1 && !loc.usesRoads){
     const conn=new Set([0]);const unconn=new Set(rooms.map((_,i)=>i).filter(i=>i>0));
     while(unconn.size>0){
       let bd=Infinity,ba=-1,bb=-1;
@@ -1471,7 +1596,7 @@ function buildRenderGrid(dg,forgeCfg){
 }
 
 const STY={
-  terminal:{bg:"#000",void:"#000",wallFg:"#666",floorFg:"#222",doorFg:"#cc0",stairsFg:"#0f0",waterFg:"#06f",pillarFg:"#555",monsterFg:"#f22",trapFg:"#f80",itemFg:"#f0f",labelFg:"#0c0",roadFg:"#444",panelBg:"#000",panelBorder:"#222",textColor:"#ccc",dimText:"#444",accent:"#0c0",accentAlt:"#f22",inputBg:"#0a0a0a",inputBorder:"#333",inputFg:"#0f0",btnBorder:"#0a0",btnFg:"#0f0",headerBg:"#000",selectedBg:"#0a1a0a",floorBg:"#000",wallBg:"#000",labelBg:"#000",doorBg:"#000",stairsBg:"#000",roadBg:"#000"},
+  terminal:{bg:"#000",void:"#000",wallFg:"#555",floorFg:"#1a1a1a",doorFg:"#cc0",stairsFg:"#0f0",waterFg:"#06f",pillarFg:"#555",monsterFg:"#f22",trapFg:"#f80",itemFg:"#f0f",labelFg:"#0c0",roadFg:"#444",panelBg:"#000",panelBorder:"#222",textColor:"#ccc",dimText:"#444",accent:"#0c0",accentAlt:"#f22",inputBg:"#0a0a0a",inputBorder:"#333",inputFg:"#0f0",btnBorder:"#0a0",btnFg:"#0f0",headerBg:"#000",selectedBg:"#0a1a0a",floorBg:"#000",wallBg:"#000",labelBg:"#000",doorBg:"#000",stairsBg:"#000",roadBg:"#000"},
   rogue:{bg:"#08081a",void:"#0d0d1a",wallFg:"#555570",floorFg:"#333350",doorFg:"#c8a020",stairsFg:"#0d0",waterFg:"#26c",pillarFg:"#668",monsterFg:"#f33",trapFg:"#f80",itemFg:"#4af",labelFg:"#aad",roadFg:"#444466",panelBg:"#0a0a1f",panelBorder:"#1a1a33",textColor:"#c8c8e0",dimText:"#456",accent:"#a8f",accentAlt:"#f44",inputBg:"#151530",inputBorder:"#2a2a44",inputFg:"#b9f",btnBorder:"#43b",btnFg:"#ddd",headerBg:"#0c0c22",selectedBg:"#1a1a55",floorBg:"#1a1a2e",wallBg:"#2a2a3a",labelBg:"#1a1a2e",doorBg:"#1a1a2e",stairsBg:"#1a1a2e",roadBg:"#1a1a2e"},
   grid:{bg:"#6b6560",void:"#8a8680",wallFg:"#5a5647",floorFg:"#c8c0b0",doorFg:"#5c4400",stairsFg:"#2d8b2d",waterFg:"#3a7ca5",pillarFg:"#6b6358",monsterFg:"#c22",trapFg:"#c80",itemFg:"#24c",labelFg:"#333",roadFg:"#a09888",panelBg:"#5e5955",panelBorder:"#4a4540",textColor:"#f0e8d8",dimText:"#aa9",accent:"#f0e8d8",accentAlt:"#c22",inputBg:"#e8e4dc",inputBorder:"#8a8580",inputFg:"#333",btnBorder:"#8a6820",btnFg:"#fff",headerBg:"#5a5550",selectedBg:"#e8e0c0",floorBg:"#f5f0e6",wallBg:"#d4d0c8",labelBg:"#f5f0e6",doorBg:"#8b6914",stairsBg:"#f5f0e6",roadBg:"#e8e0d0"},
 };
@@ -1541,6 +1666,19 @@ function cellColor(cell,style,ov={}){
   }
 }
 
+/** Map a hex color to grayscale (luminance) for ink-saving exports that still follow the map’s structure. */
+function hexToGray(hex){
+  if(typeof hex!=="string"||!hex.startsWith("#"))return hex;
+  let h=hex.slice(1);
+  if(h.length===3)h=h.split("").map((x)=>x+x).join("");
+  if(h.length!==6)return hex;
+  const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);
+  const y=Math.round(0.2126*r+0.7152*g+0.0722*b);
+  const v=Math.min(255,Math.max(0,y));
+  const t=v.toString(16).padStart(2,"0");
+  return `#${t}${t}${t}`;
+}
+
 /** High-contrast palette for PNG export (printer-friendly). */
 function cellColorPrint(cell){
   if(cell.eType==="monster")return{bg:"#ffffff",fg:"#000000"};
@@ -1567,11 +1705,19 @@ function cellColorPrint(cell){
 function renderCanvas(dg,style,options={}){
   const showEnts=options.showEnts!==false;
   const revArr=options.revArr!=null?options.revArr:null;
+  const rawFogCells=options.fogCells;
+  const fogCells=rawFogCells!=null?(rawFogCells instanceof Set?rawFogCells:new Set(Array.isArray(rawFogCells)?rawFogCells:[...rawFogCells])):null;
   const scale=options.scale??1;
   const printExport=!!options.print;
   const dmSidebar=!!options.dmSidebar;
   const playerSanitize=!!options.playerSanitizeDecos;
-  const rg=buildRenderGrid(dg,options.forgeCfg||{});
+  /** Match on-screen Forge colors (theme + location); false = legacy high-contrast print only. */
+  const screenMatch=options.screenMatch!==false;
+  const inkSaver=!!options.inkSaver;
+  const forgeCfg=options.forgeCfg||{};
+  const locOv=LOCATION_STYLE_OVERRIDE[forgeCfg.locationType]||{};
+  const S0={...STY[style],...locOv};
+  const rg=buildRenderGrid(dg,forgeCfg);
   const cW=10*scale,cH=14*scale;
   const mapW=dg.width*cW+4*scale,mapH=dg.height*cH+32*scale;
   const fontPx=11*scale,lineH=Math.round(13*scale),sidebarColW=7*scale;
@@ -1589,30 +1735,43 @@ function renderCanvas(dg,style,options={}){
   canvas.height=Math.max(mapH,sidebarTextH);
   const ctx=canvas.getContext("2d");
   const s=STY[style];
-  const bg=printExport?"#ffffff":s.bg;
-  ctx.fillStyle=bg;ctx.fillRect(0,0,canvas.width,canvas.height);
-  ctx.fillStyle=printExport?"#000000":s.dimText;
+  let pageBg=S0.bg;
+  if(printExport){
+    if(screenMatch&&!inkSaver)pageBg=S0.bg;
+    else if(inkSaver)pageBg="#f5f5f5";
+    else pageBg="#ffffff";
+  }
+  ctx.fillStyle=pageBg;
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle=printExport&&(screenMatch||inkSaver)?(S0.accent||s.accent||"#ccc"):(printExport?"#000000":s.dimText);
   ctx.font=`bold ${fontPx}px monospace`;
   let title=(showEnts?"DM PRINT":"PLAYER PRINT")+" | Floor "+(dg.floor||1)+" | Seed "+(dg.seed||"");
   if(dg.mapName)title=dg.mapName+" | "+title;
+  if(inkSaver)title+=" | Ink save";
   ctx.fillText(title,4*scale,14*scale);
   const fogSet=!showEnts&&revArr!=null?new Set(Array.isArray(revArr)?revArr:[...revArr]):null;
   const yO=28*scale;
   ctx.font=`${fontPx}px monospace`;ctx.textBaseline="top";
+  const floorBgBase=style==="grid"?S0.floorBg:S0.bg;
   for(let y=0;y<dg.height;y++){for(let x=0;x<dg.width;x++){
     const cell=rg[y][x];
-    if(!showEnts&&fogSet){
+    if(!showEnts&&fogCells){
+      if(!fogCells.has(`${x},${y}`)){ctx.fillStyle=screenMatch||inkSaver?S0.void:(printExport?"#f5f5f5":s.void);ctx.fillRect(x*cW+2*scale,yO+y*cH,cW,cH);continue;}
+    }else if(!showEnts&&fogSet){
       const rm=dg.rooms.find(r=>x>=r.x-1&&x<=r.x+r.w&&y>=r.y-1&&y<=r.y+r.h);
       const inC=cell.tile===T.C||cell.tile===T.D||cell.tile===T.ROAD;
-      if(rm&&!fogSet.has(rm.id)&&!inC){ctx.fillStyle=printExport?"#f5f5f5":s.void;ctx.fillRect(x*cW+2*scale,yO+y*cH,cW,cH);continue;}
+      if(rm&&!fogSet.has(rm.id)&&!inC){ctx.fillStyle=screenMatch||inkSaver?S0.void:(printExport?"#f5f5f5":s.void);ctx.fillRect(x*cW+2*scale,yO+y*cH,cW,cH);continue;}
     }
     let hide=!showEnts&&(cell.eType==="monster"||cell.eType==="trap"||cell.eType==="item");
     const hideLabel=!showEnts&&playerSanitize&&cell.eType==="label";
     const hideDeco=!showEnts&&playerSanitize&&cell.eType==="deco"&&cell.extra&&PLAYER_PRINT_HIDE_DECO_KEYS.has(cell.extra.decoKey);
     if(hideLabel||hideDeco)hide=true;
-    const c=printExport?cellColorPrint(cell):cellColor(cell,style);
-    const floorBg=printExport?"#ffffff":(style==="grid"?s.floorBg:s.bg);
-    const floorFg=printExport?"#333333":s.floorFg;
+    let c=(printExport&&!screenMatch)?cellColorPrint(cell):cellColor(cell,style,locOv);
+    if(printExport&&inkSaver){
+      c={bg:hexToGray(c.bg),fg:hexToGray(c.fg)};
+    }
+    const floorBg=printExport&&!screenMatch?"#ffffff":floorBgBase;
+    const floorFg=printExport&&!screenMatch?"#333333":S0.floorFg;
     ctx.fillStyle=hide?floorBg:c.bg;
     ctx.fillRect(x*cW+2*scale,yO+y*cH,cW,cH);
     ctx.fillStyle=hide?floorFg:c.fg;
@@ -1621,9 +1780,9 @@ function renderCanvas(dg,style,options={}){
   }}
   if(sidebarW&&sidebarLines.length){
     const sx=mapW+8*scale;
-    ctx.fillStyle="#ffffff";
+    ctx.fillStyle=inkSaver?"#f0f0f0":"#ffffff";
     ctx.fillRect(sx-4*scale,0,sidebarW+8*scale,canvas.height);
-    ctx.strokeStyle="#cccccc";
+    ctx.strokeStyle=inkSaver?"#999":"#cccccc";
     ctx.strokeRect(sx-4*scale,4*scale,sidebarW+8*scale,canvas.height-8*scale);
     ctx.fillStyle="#000000";
     ctx.font=`${fontPx}px monospace`;
@@ -1693,19 +1852,53 @@ function renderRoomCanvas(dg, roomId, styleName, locationType, forgeCfg, opts = 
   return canvas;
 }
 
+function computeRevealedCells(revealed,dg,exploredCorridors=new Set()){
+  const cells=new Set();
+  if(!dg)return cells;
+  for(const rm of dg.rooms){
+    if(!revealed.has(rm.id))continue;
+    for(let y=rm.y;y<rm.y+rm.h;y++){
+      for(let x=rm.x;x<rm.x+rm.w;x++)cells.add(`${x},${y}`);
+    }
+  }
+  for(const key of exploredCorridors)cells.add(key);
+  const queue=[...cells];
+  const visited=new Set(cells);
+  while(queue.length){
+    const key=queue.shift();
+    const [x,y]=key.split(",").map(Number);
+    for(const [dx,dy] of [[0,1],[0,-1],[1,0],[-1,0]]){
+      const nx=x+dx,ny=y+dy,nk=`${nx},${ny}`;
+      if(visited.has(nk)||nx<0||ny<0||nx>=dg.width||ny>=dg.height)continue;
+      const tile=dg.grid?.[ny]?.[nx];
+      if(tile===4||tile===3||tile===T.ROAD){
+        visited.add(nk);
+        cells.add(nk);
+        queue.push(nk);
+      }else if(tile===2){
+        cells.add(nk);
+      }
+    }
+  }
+  return cells;
+}
+
 // ── Component ────────────────────────────────────────────────────────
 export default function DungeonForge(){
   const FORGE_CFG_KEY="forge.config.v2";
+  /** Locked display behavior — no sidebar toggles (tiny cells, fill viewport, 2× PNG, scenery). */
+  const FIXED_FORGE_DISPLAY={hiRes:true,hiResExport:true,tinyMode:true,showDecos:true,compactCells:false,showThemes:false};
   const [cfg,setCfg]=useState(()=>{
+    const base={roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:"terminal",seed:Math.floor(Math.random()*999999),locationType:"dungeon",...FIXED_FORGE_DISPLAY,asciiDensity:1,asciiFontPx:14,autoSync:false};
     try{
       const raw=localStorage.getItem(FORGE_CFG_KEY);
-      if(raw)return JSON.parse(raw);
+      if(raw)return{...base,...JSON.parse(raw),...FIXED_FORGE_DISPLAY};
     }catch(_){/* ignore */}
-    return{roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:"terminal",seed:Math.floor(Math.random()*999999),locationType:"dungeon",hiRes:true,hiResExport:true,compactCells:false,tinyMode:false,showDecos:true,showThemes:false,asciiDensity:1,asciiFontPx:14};
+    return base;
   });
   const [dg,setDg]=useState(null);const [selRoom,setSelRoom]=useState(null);const [curFloor,setCurFloor]=useState(1);
   const [floors,setFloors]=useState([]);const [hovered,setHovered]=useState(null);const [legend,setLegend]=useState(false);
-  const [view,setView]=useState("dm");const [revealed,setRevealed]=useState(new Set([1]));
+  const [view,setView]=useState("dm");const [revealed,setRevealed]=useState(()=>new Set());
   const [statCard,setStatCard]=useState(null);
   const cfgSaveTimer=useRef(null);
   const mapViewportRef=useRef(null);const canvasRef=useRef(null);const draggingRef=useRef(null);
@@ -1714,6 +1907,11 @@ export default function DungeonForge(){
   const [tvRoom,setTvRoom]=useState(null);
   const [coarsePointer,setCoarsePointer]=useState(false);
   const [saveLibraryMsg,setSaveLibraryMsg]=useState(null);
+  const [giveItemTarget,setGiveItemTarget]=useState(null);
+  const [selectedSessionId,setSelectedSessionId]=useState("");
+  const [sendMsg,setSendMsg]=useState(null);
+  const [exploredCorridors,setExploredCorridors]=useState(new Set());
+  const { partyCharacters, sessions, activeSession, loadSessions } = useSessionStore();
   useEffect(()=>{
     const el=mapViewportRef.current;
     if(!el)return;
@@ -1768,6 +1966,10 @@ export default function DungeonForge(){
     },400);
     return()=>{if(cfgSaveTimer.current)clearTimeout(cfgSaveTimer.current);};
   },[cfg]);
+  useEffect(()=>{void loadSessions();},[loadSessions]);
+  useEffect(()=>{
+    if(!selectedSessionId&&activeSession?.id)setSelectedSessionId(activeSession.id);
+  },[activeSession,selectedSessionId]);
 
   const generate=useCallback(async()=>{
     const anchorRng=seededRNG(cfg.seed+99991);
@@ -1803,7 +2005,8 @@ export default function DungeonForge(){
         return{...e,slug:t.slug,unresolved:t.unresolved};
       });
     });
-    setFloors(all);setDg(all[0]);setCurFloor(1);setSelRoom(null);setTvRoom(null);setRevealed(new Set([1]));
+    const firstRoomId=all?.[0]?.rooms?.[0]?.id??1;
+    setFloors(all);setDg(all[0]);setCurFloor(1);setSelRoom(null);setTvRoom(null);setRevealed(new Set([firstRoomId]));setExploredCorridors(new Set());
   },[cfg]);
 
   useEffect(()=>{void generate();},[generate]);
@@ -1844,8 +2047,22 @@ export default function DungeonForge(){
   const asciiExport=useMemo(()=>{
     if(!dg)return null;
     const den=Math.min(4,Math.max(1,parseInt(String(cfg.asciiDensity??"1"),10)||1));
-    return buildAsciiDungeonMap(forgeRoomsToDungeonMapRooms(dg),{mode:isP?"player":"dm",density:den});
-  },[dg,isP,cfg.asciiDensity]);
+    const rg=buildRenderGrid(dg,{showThemes:!!cfg.showThemes});
+    const rawLines=[];
+    for(let y=0;y<dg.height;y++){
+      let row="";
+      for(let x=0;x<dg.width;x++){
+        const ch=String(rg[y][x]?.ch??" ");
+        row+=Array.from(ch)[0]??" ";
+      }
+      rawLines.push(row);
+    }
+    const denseLines=applyAsciiDensity(rawLines,den);
+    const mapOnly=denseLines.join("\n");
+    const legend=buildAsciiMapLegend(forgeRoomsToDungeonMapRooms(dg),{mode:isP?"player":"dm",footer:"forge"});
+    const text=`${mapOnly}\n\n${legend}`;
+    return{text,mapOnly,legend,width:denseLines[0]?[...denseLines[0]].length:0,height:denseLines.length};
+  },[dg,isP,cfg.asciiDensity,cfg.showThemes]);
 
   const tvForgeCfg=useMemo(()=>({showThemes:!!cfg.showThemes}),[cfg.showThemes]);
   const tvPreviewUrl=useMemo(()=>{
@@ -1874,7 +2091,7 @@ export default function DungeonForge(){
     ctx.font=`${fontPx}px "Courier New", monospace`;
     ctx.textBaseline="top";
     const offX=pan.x,offY=pan.y;
-    const fogSet=isP&&revealed?revealed:null;
+    const fogCells=isP&&revealed?computeRevealedCells(revealed,dg,exploredCorridors):null;
     const locOv=LOCATION_STYLE_OVERRIDE[cfg.locationType]||{};
     for(let y=0;y<dg.height;y++){
       for(let x=0;x<dg.width;x++){
@@ -1884,10 +2101,10 @@ export default function DungeonForge(){
         const pw=Math.ceil(cW*zoom);
         const ph=Math.ceil(cH*zoom);
         if(px+pw<0||py+ph<0||px>W||py>H)continue;
-        if(fogSet){
-          const wr=dg.rooms.find(r=>x>=r.x-1&&x<=r.x+r.w&&y>=r.y-1&&y<=r.y+r.h);
-          const inC=cell.tile===T.C||cell.tile===T.D||cell.tile===T.ROAD;
-          if(wr&&!fogSet.has(wr.id)&&!inC){ctx.fillStyle=S0.void;ctx.fillRect(px,py,pw,ph);continue;}
+        if(fogCells&&!fogCells.has(`${x},${y}`)){
+          ctx.fillStyle=S0.void;
+          ctx.fillRect(px,py,pw,ph);
+          continue;
         }
         const c=cellColor(cell,cfg.style,locOv);
         ctx.fillStyle=c.bg;
@@ -1905,7 +2122,7 @@ export default function DungeonForge(){
         if(ch!==" ")ctx.fillText(ch,px+Math.round(pw*0.08),py+Math.round(ph*0.06));
       }
     }
-  },[rg,cs,cfg.style,cfg.locationType,vpSize,zoom,pan,revealed,isP,selRoom,dg]);
+  },[rg,cs,cfg.style,cfg.locationType,vpSize,zoom,pan,revealed,isP,selRoom,dg,exploredCorridors]);
 
   useEffect(()=>{
     const canvas=canvasRef.current;
@@ -1952,9 +2169,8 @@ export default function DungeonForge(){
     if(gx<0||gy<0||gx>=dg.width||gy>=dg.height){setHovered(null);return;}
     const cell=rg[gy][gx];
     if(isP&&revealed){
-      const wr=dg.rooms.find(r=>gx>=r.x-1&&gx<=r.x+r.w&&gy>=r.y-1&&gy<=r.y+r.h);
-      const inC=cell.tile===T.C||cell.tile===T.D||cell.tile===T.ROAD;
-      if(wr&&!revealed.has(wr.id)&&!inC){setHovered(null);return;}
+      const fogCells=computeRevealedCells(revealed,dg,exploredCorridors);
+      if(!fogCells.has(`${gx},${gy}`)){setHovered(null);return;}
     }
     if(cell.extra&&cell.eType!=="deco"&&!isP)setHovered(cell.extra);
     else setHovered(null);
@@ -1974,13 +2190,17 @@ export default function DungeonForge(){
     if(gx<0||gy<0||gx>=dg.width||gy>=dg.height)return;
     const cell=rg[gy][gx];
     if(isP&&revealed){
-      const wr=dg.rooms.find(r=>gx>=r.x-1&&gx<=r.x+r.w&&gy>=r.y-1&&gy<=r.y+r.h);
-      const inC=cell.tile===T.C||cell.tile===T.D||cell.tile===T.ROAD;
-      if(wr&&!revealed.has(wr.id)&&!inC)return;
+      const fogCells=computeRevealedCells(revealed,dg,exploredCorridors);
+      if(!fogCells.has(`${gx},${gy}`))return;
     }
     if(!isP&&cell.extra?.type==="monster"&&cell.extra.slug){setStatCard({slug:cell.extra.slug,view:"dm"});return;}
     const rm=dg.rooms.find(r=>gx>=r.x&&gx<r.x+r.w&&gy>=r.y&&gy<r.y+r.h);
     if(rm)setSelRoom(rm.id===selRoom?null:rm.id);
+    const tile=dg.grid?.[gy]?.[gx];
+    if(tile===4){
+      const key=`${gx},${gy}`;
+      setExploredCorridors(prev=>{const next=new Set(prev);if(next.has(key))next.delete(key);else next.add(key);return next;});
+    }
   };
   const onCanvasContextMenu=(e)=>{
     if(!dg||!rg||isP)return;
@@ -1994,7 +2214,38 @@ export default function DungeonForge(){
     if(cell.extra?.type==="monster"&&cell.extra.slug){e.preventDefault();setStatCard({slug:cell.extra.slug,view:"player"});}
   };
 
-  const exportPNG=(mode)=>{if(!dg)return;const scale=cfg.hiResExport?2:1;const isDm=mode==="dm";const c=renderCanvas(dg,cfg.style,{showEnts:isDm,revArr:null,scale,print:true,dmSidebar:isDm,playerSanitizeDecos:!isDm,forgeCfg:cfg});const a=document.createElement("a");a.download=`${(dg.mapName||cfg.locationType).replace(/\s/g,"_")}_f${curFloor}_${mode}_print_${cfg.seed}.png`;a.href=c.toDataURL("image/png");a.click();};
+  const pushToPlayerScreen=useCallback((overrides={})=>{
+    if(!dg)return;
+    const mergedRevealed=overrides.revealed!=null?new Set(overrides.revealed):revealed;
+    const mergedExplored=overrides.exploredCorridors!=null?new Set(overrides.exploredCorridors):exploredCorridors;
+    const revealedCells=[...computeRevealedCells(mergedRevealed,dg,mergedExplored)];
+    const state={
+      dungeonData:{
+        grid:dg.grid,
+        rooms:dg.rooms,
+        width:dg.width,
+        height:dg.height,
+        mapName:dg.mapName,
+        entities:[],
+      },
+      revealed:[...mergedRevealed],
+      revealedCells,
+      exploredCorridors:[...mergedExplored],
+      selectedRoomId:overrides.selectedRoomId!==undefined?overrides.selectedRoomId:selRoom,
+      fogColor:overrides.fogColor??"#000000",
+    };
+    try{localStorage.setItem("dnd5e-player-map-state",JSON.stringify(state));}catch(_){/* ignore */}
+    try{
+      const bc=new BroadcastChannel("dnd5e-player-map");
+      bc.postMessage(state);
+      bc.close();
+    }catch(_){/* ignore */}
+  },[dg,revealed,exploredCorridors,selRoom]);
+  useEffect(()=>{
+    if(cfg.autoSync&&dg)pushToPlayerScreen();
+  },[cfg.autoSync,dg,pushToPlayerScreen]);
+
+  const exportPNG=(mode,{ink=false}={})=>{if(!dg)return;const scale=cfg.hiResExport?2:1;const isDm=mode==="dm";const fogCells=!isDm?computeRevealedCells(revealed,dg,exploredCorridors):null;const c=renderCanvas(dg,cfg.style,{showEnts:isDm,revArr:null,fogCells:!isDm?fogCells:null,scale,print:true,dmSidebar:isDm,playerSanitizeDecos:!isDm,forgeCfg:cfg,screenMatch:true,inkSaver:ink});const a=document.createElement("a");const inkTag=ink?"-ink":"";a.download=`${(dg.mapName||cfg.locationType).replace(/\s/g,"_")}_f${curFloor}_${mode}${inkTag}_${cfg.seed}.png`;a.href=c.toDataURL("image/png");a.click();};
 
   return(
     <div
@@ -2059,13 +2310,6 @@ export default function DungeonForge(){
           <Tg l="Monsters" on={cfg.monstersOn} S={S} f={()=>u("monstersOn",!cfg.monstersOn)}/>
           <Tg l="Traps" on={cfg.trapsOn} S={S} f={()=>u("trapsOn",!cfg.trapsOn)}/>
           <Tg l="Items" on={cfg.itemsOn} S={S} f={()=>u("itemsOn",!cfg.itemsOn)}/>
-          <LB S={S}>DISPLAY</LB>
-          <Tg l="Large cells (fill view)" on={cfg.hiRes} S={S} f={()=>u("hiRes",!cfg.hiRes)}/>
-          <Tg l="2x PNG export" on={cfg.hiResExport} S={S} f={()=>u("hiResExport",!cfg.hiResExport)}/>
-          <Tg l="Compact cells" on={cfg.compactCells} S={S} f={()=>u("compactCells",!cfg.compactCells)}/>
-          <Tg l="Tiny cells (hi-res art)" on={cfg.tinyMode} S={S} f={()=>u("tinyMode",!cfg.tinyMode)}/>
-          <Tg l="Show scenery" on={cfg.showDecos} S={S} f={()=>u("showDecos",!cfg.showDecos)}/>
-          <Tg l="Show themes on map" on={!!cfg.showThemes} S={S} f={()=>u("showThemes",!cfg.showThemes)}/>
           <LB S={S}>ASCII MAP</LB>
           <div style={{fontSize:11,color:S.dimText,lineHeight:1.35}}>Logical grid export (same topology as PNG).</div>
           <select value={String(cfg.asciiDensity??1)} onChange={e=>u("asciiDensity",parseInt(e.target.value,10)||1)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
@@ -2085,12 +2329,9 @@ export default function DungeonForge(){
               [48,"48px (4K)"],
             ].map(([d,lab])=>(<option key={d} value={d}>{lab}</option>))}
           </select>
-          <div style={{display:"flex",gap:2,flexWrap:"wrap"}}>
-            <button type="button" disabled={!asciiExport?.text} onClick={()=>{if(!asciiExport)return;downloadAsciiMap(`${(dg.mapName||cfg.locationType).replace(/\s/g,"_")}_f${curFloor}_${isP?"player":"dm"}_${cfg.seed}.txt`,asciiExport.text);}} style={{flex:1,padding:"4px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>.txt</button>
-            <button type="button" disabled={!asciiExport?.mapOnly} onClick={()=>{if(!asciiExport)return;const lines=asciiExport.mapOnly.split("\n");downloadAsciiPng(lines,{fontFamily:"JetBrains Mono, Fira Code, ui-monospace, Menlo, monospace",fontSizePx:Math.max(4,Math.min(64,cfg.asciiFontPx||16)),lineHeight:1.15,fg:"#0a0a0a",bg:"#fafafa",smallFontMode:(cfg.asciiFontPx||14)<=7},`${(dg.mapName||cfg.locationType).replace(/\s/g,"_")}_ascii4k_${cfg.seed}.png`);}} style={{flex:1,padding:"4px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>4K PNG</button>
-          </div>
+          <button type="button" disabled={!asciiExport?.mapOnly} onClick={()=>{if(!asciiExport)return;const lines=asciiExport.mapOnly.split("\n");downloadAsciiPng(lines,{fontFamily:"JetBrains Mono, Fira Code, ui-monospace, Menlo, monospace",fontSizePx:Math.max(4,Math.min(64,cfg.asciiFontPx||16)),lineHeight:1.15,fg:"#0a0a0a",bg:"#fafafa",smallFontMode:(cfg.asciiFontPx||14)<=7},`${(dg.mapName||cfg.locationType).replace(/\s/g,"_")}_ascii4k_${cfg.seed}.png`);}} style={{width:"100%",padding:"4px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>4K PNG</button>
           <button type="button" onClick={()=>{const u=new URL(window.location.href);u.searchParams.set("seed",String(cfg.seed));u.searchParams.set("loc",cfg.locationType);u.searchParams.set("level",String(cfg.level));u.searchParams.set("density",String(cfg.asciiDensity||1));void navigator.clipboard.writeText(u.toString());}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>COPY SHARE URL</button>
-          <button type="button" disabled={!dg||!asciiExport?.text} onClick={()=>{if(!dg||!asciiExport)return;const dm=renderCanvas(dg,cfg.style,{showEnts:true,revArr:null,scale:1,print:true,dmSidebar:true,playerSanitizeDecos:false,forgeCfg:cfg}).toDataURL("image/png");const lines=dg.rooms.map(r=>`Room ${r.id}: ${r.namedRoom||r.label||r.type} (depth ${r.depth??"?"}, theme ${r.theme||"?"})`);openForgePrintPacket({title:`${dg.mapName||"Forge"} seed ${cfg.seed}`,asciiText:asciiExport.text,dmMapDataUrl:dm,roomLines:lines});}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PRINT DM PACKET</button>
+          <button type="button" disabled={!dg||!asciiExport?.text} onClick={()=>{if(!dg||!asciiExport)return;const dm=renderCanvas(dg,cfg.style,{showEnts:true,revArr:null,scale:1,print:true,dmSidebar:true,playerSanitizeDecos:false,forgeCfg:cfg,screenMatch:true}).toDataURL("image/png");const lines=dg.rooms.map(r=>`Room ${r.id}: ${r.namedRoom||r.label||r.type} (depth ${r.depth??"?"}, theme ${r.theme||"?"})`);openForgePrintPacket({title:`${dg.mapName||"Forge"} seed ${cfg.seed}`,asciiText:asciiExport.text,dmMapDataUrl:dm,roomLines:lines});}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PRINT DM PACKET</button>
           <LB S={S}>SEED</LB>
           <div style={{display:"flex",gap:2}}>
             <input type="number" value={cfg.seed} onChange={e=>u("seed",parseInt(e.target.value)||0)} style={{flex:1,padding:"2px 3px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:30}}/>
@@ -2108,14 +2349,18 @@ export default function DungeonForge(){
             <div style={{marginBottom:2}}>Fog of war active.</div>
             <div style={{display:"flex",gap:2}}>
               <button onClick={()=>setRevealed(new Set(rooms.map(r=>r.id)))} style={{flex:1,padding:"1px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Reveal All</button>
-              <button onClick={()=>setRevealed(new Set([1]))} style={{flex:1,padding:"1px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Reset</button>
+              <button onClick={()=>setRevealed(new Set([rooms[0]?.id??1]))} style={{flex:1,padding:"1px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Reset</button>
             </div>
           </div>}
-          <LB S={S}>EXPORT PNG (PRINT)</LB>
-          <div style={{fontSize:16,color:S.dimText,lineHeight:1.35,marginBottom:2}}>White background, black ink. DM = room key on the side. Player = no secrets, no room numbers.</div>
-          <div style={{display:"flex",gap:2}}>
-            <button onClick={()=>exportPNG("dm")} style={{flex:1,padding:"2px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>DM Map</button>
-            <button onClick={()=>exportPNG("player")} style={{flex:1,padding:"2px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Player Map</button>
+          <LB S={S}>EXPORT PNG</LB>
+          <div style={{fontSize:11,color:S.dimText,lineHeight:1.35,marginBottom:4}}>Color exports match the header theme (TERM / DARK / LIGHT) and location tints. DM includes the room key column. Player hides secrets. Ink uses grayscale from the same map (saves toner, not blocky).</div>
+          <div style={{display:"flex",gap:2,flexWrap:"wrap"}}>
+            <button type="button" onClick={()=>exportPNG("dm")} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>DM · color</button>
+            <button type="button" onClick={()=>exportPNG("player")} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Player · color</button>
+          </div>
+          <div style={{display:"flex",gap:2,flexWrap:"wrap",marginTop:4}}>
+            <button type="button" onClick={()=>exportPNG("dm",{ink:true})} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>DM · ink</button>
+            <button type="button" onClick={()=>exportPNG("player",{ink:true})} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Player · ink</button>
           </div>
           <LB S={S}>LIBRARY</LB>
           <button type="button" onClick={async()=>{
@@ -2130,8 +2375,36 @@ export default function DungeonForge(){
             }catch(err){ setSaveLibraryMsg(String(err)); }
           }} style={{padding:"6px 0",fontSize:14,fontWeight:"bold",fontFamily:"'Courier New',monospace",letterSpacing:1,background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>SAVE TO LIBRARY</button>
           {saveLibraryMsg&&<div style={{fontSize:12,color:saveLibraryMsg.startsWith("Saved")?S.accent:S.accentAlt}}>{saveLibraryMsg}</div>}
+          <LB S={S}>ACTIVE SESSION</LB>
+          <select
+            value={selectedSessionId}
+            onChange={e=>setSelectedSessionId(e.target.value)}
+            style={{padding:"4px 6px",fontSize:13,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}
+          >
+            <option value="">Select session...</option>
+            {sessions.map(s=><option key={s.id} value={s.id}>{s.name}{s.status==="active"?" (active)":""}</option>)}
+          </select>
+          <button
+            disabled={!dg||!selectedSessionId}
+            onClick={async()=>{
+              if(!dg||!selectedSessionId)return;
+              const payload={dungeonSeed:cfg.seed,locationType:cfg.locationType,mapName:dg.mapName,rooms:dg.rooms,entities:dg.entities,width:dg.width,height:dg.height,floor:curFloor,grid:dg.grid};
+              await fetch(`/api/sessions/${selectedSessionId}/dungeon`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+              setSendMsg("Sent to session!");
+              setTimeout(()=>setSendMsg(null),3000);
+            }}
+            style={{marginTop:3,padding:"6px 0",fontSize:14,fontWeight:"bold",fontFamily:"'Courier New',monospace",letterSpacing:2,background:S.inputBg,color:S.accent,border:`1px solid ${S.btnBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}
+          >
+            SEND TO SESSION
+          </button>
+          {sendMsg&&<div style={{color:S.accent,fontSize:11}}>{sendMsg}</div>}
+          <LB S={S}>PLAYER SCREEN</LB>
+          <button type="button" onClick={()=>window.open("/dungeons/player","_blank","noopener")} style={{padding:"6px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>OPEN PLAYER SCREEN ↗</button>
+          <button type="button" onClick={()=>pushToPlayerScreen()} disabled={!dg} style={{padding:"6px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PUSH MAP TO SCREEN</button>
+          <button type="button" onClick={()=>pushToPlayerScreen({revealed:[...revealed],selectedRoomId:selRoom})} disabled={!dg} style={{padding:"6px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PUSH WITH FOG STATE</button>
+          <Tg l="Auto-sync fog on change" on={!!cfg.autoSync} S={S} f={()=>u("autoSync",!cfg.autoSync)}/>
           {floors.length>1&&<><LB S={S}>FLOOR</LB><div style={{display:"flex",gap:2,flexWrap:"wrap"}}>
-            {floors.map((_,i)=>(<button key={i} onClick={()=>{setCurFloor(i+1);setDg(floors[i]);setSelRoom(null);setTvRoom(null);}} style={{padding:"1px 5px",fontSize:14,fontFamily:"'Courier New',monospace",background:curFloor===i+1?"rgba(255,255,255,0.08)":"transparent",color:curFloor===i+1?S.accent:S.dimText,border:`1px solid ${curFloor===i+1?S.accent:S.panelBorder}`,borderRadius:2,cursor:"pointer"}}>{i+1}</button>))}
+            {floors.map((_,i)=>(<button key={i} onClick={()=>{setCurFloor(i+1);setDg(floors[i]);setSelRoom(null);setTvRoom(null);setExploredCorridors(new Set());}} style={{padding:"1px 5px",fontSize:14,fontFamily:"'Courier New',monospace",background:curFloor===i+1?"rgba(255,255,255,0.08)":"transparent",color:curFloor===i+1?S.accent:S.dimText,border:`1px solid ${curFloor===i+1?S.accent:S.panelBorder}`,borderRadius:2,cursor:"pointer"}}>{i+1}</button>))}
           </div></>}
           <div style={{marginTop:1}}><button onClick={()=>setLegend(!legend)} style={{background:"none",border:"none",cursor:"pointer",padding:0,color:S.dimText,fontSize:14,fontFamily:"'Courier New',monospace"}}>{legend?"[-]":"[+]"} LEGEND</button>
             {legend&&<div style={{marginTop:2,fontSize:14,lineHeight:1.7,color:S.textColor}}>
@@ -2263,6 +2536,7 @@ export default function DungeonForge(){
                   {!isP&&rm.theme&&<span style={{fontSize:10,fontWeight:"normal",color:S.accentAlt}}>theme {rm.theme}</span>}
                   {!isP&&typeof rm.depth==="number"&&<span style={{fontSize:10,fontWeight:"normal",color:S.dimText}}>depth {rm.depth}</span>}
                   {isP&&<button onClick={()=>{const n=new Set(revealed);if(n.has(rm.id))n.delete(rm.id);else n.add(rm.id);setRevealed(n);}} style={{marginLeft:"auto",padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:revealed.has(rm.id)?S.accentAlt:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>{revealed.has(rm.id)?"HIDE":"REVEAL"}</button>}
+                  {!isP&&<button type="button" onClick={()=>setRevealed(new Set([rm.id]))} style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Set as Start Room</button>}
                   <button type="button" onClick={()=>setTvRoom(rm.id)} style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>📺 TV</button>
                 </div>
                 {!isP&&rm.stairDownTo&&<div style={{fontSize:12,color:S.dimText,marginBottom:2}}>▼ Stair down → Floor {rm.stairDownTo}</div>}
@@ -2272,15 +2546,54 @@ export default function DungeonForge(){
                   re.length===0?<div style={{fontSize:12,fontStyle:"italic",color:S.dimText}}>No encounters</div>:
                   <div style={{display:"flex",flexDirection:"column",gap:2}}>
                     {re.map((e,i)=>(<div key={i} style={{display:"flex",alignItems:"center",gap:4,fontSize:12,padding:"1px 4px",background:"rgba(255,255,255,0.02)",borderRadius:2,border:`1px solid ${S.panelBorder}`}}>
-                      <span style={{fontWeight:"bold",color:e.type==="monster"?S.monsterFg:e.type==="trap"?S.trapFg:S.itemFg,minWidth:16}}>{e.type==="monster"?"[M]":e.type==="trap"?"[T]":"[I]"}</span>
-                      {e.type==="monster"&&e.slug?(
-                        <button type="button" onClick={()=>setStatCard({slug:e.slug,view:"dm"})} onContextMenu={(ev)=>{ev.preventDefault();setStatCard({slug:e.slug,view:"player"});}} style={{background:"none",border:"none",padding:0,cursor:"pointer",color:S.textColor,textAlign:"left"}}>
-                          <b>{e.name}</b>{e.unresolved&&<span style={{color:S.accentAlt}} title="Unresolved SRD match"> ●</span>}
-                          <span> x{e.count} (CR {e.cr})</span>
-                        </button>
-                      ):(<>
-                        <b>{e.name}</b>{e.type==="monster"&&<span> x{e.count} (CR {e.cr})</span>}{e.type==="trap"&&<span> — {e.dmg}</span>}{e.type==="item"&&<span style={{color:RM[e.r]||S.itemFg}}> ({e.r})</span>}
-                      </>)}
+                      {e.type==="trap"&&(
+                        <div style={{background:"rgba(255,120,0,0.08)",border:`1px solid ${S.trapFg}`,borderRadius:3,padding:"6px 8px",fontSize:11,width:"100%"}}>
+                          <div style={{fontWeight:"bold",color:S.trapFg}}>⚠ {e.name}</div>
+                          <div style={{color:S.textColor,marginTop:2}}><b>Damage:</b> {e.dmg}</div>
+                          {e.detectDC&&<div style={{color:S.dimText}}><b>Detection:</b> DC {e.detectDC} Perception</div>}
+                          {e.saveDC>0&&<div style={{color:S.dimText}}><b>{e.saveType} Save:</b> DC {e.saveDC}</div>}
+                          {e.effect&&<div style={{color:S.dimText,marginTop:2,fontStyle:"italic"}}>{e.effect}</div>}
+                        </div>
+                      )}
+                      {e.type==="item"&&(
+                        <div style={{fontSize:11,border:`1px solid ${S.panelBorder}`,borderRadius:3,padding:"5px 8px",width:"100%"}}>
+                          <div style={{fontWeight:"bold",color:RM[e.r]||S.itemFg}}>
+                            {e.name} <span style={{fontSize:9,color:S.dimText}}>({e.r})</span>
+                          </div>
+                          {partyCharacters.length>0&&(
+                            <select
+                              onChange={async(ev)=>{
+                                const charId=ev.target.value;
+                                if(!charId)return;
+                                setGiveItemTarget(charId);
+                                await fetch(`/api/characters/${charId}/inventory`,{
+                                  method:"POST",
+                                  headers:{"Content-Type":"application/json"},
+                                  body:JSON.stringify({customName:e.name,quantity:1,notes:`Found in ${rm?.label||"room"} (${e.r} rarity)`}),
+                                });
+                                ev.target.value="";
+                                setGiveItemTarget(null);
+                              }}
+                              value={giveItemTarget&&partyCharacters.some(c=>c.id===giveItemTarget)?giveItemTarget:""}
+                              style={{marginTop:4,width:"100%",fontSize:10,padding:"2px",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2}}
+                            >
+                              <option value="">+ Give to player...</option>
+                              {partyCharacters.map(c=>(<option key={c.id} value={c.id}>{c.name}</option>))}
+                            </select>
+                          )}
+                        </div>
+                      )}
+                      {e.type==="monster"&&(
+                        <>
+                          <span style={{fontWeight:"bold",color:S.monsterFg,minWidth:16}}>[M]</span>
+                          {e.slug?(
+                            <button type="button" onClick={()=>setStatCard({slug:e.slug,view:"dm"})} onContextMenu={(ev)=>{ev.preventDefault();setStatCard({slug:e.slug,view:"player"});}} style={{background:"none",border:"none",padding:0,cursor:"pointer",color:S.textColor,textAlign:"left"}}>
+                              <b>{e.name}</b>{e.unresolved&&<span style={{color:S.accentAlt}} title="Unresolved SRD match"> ●</span>}
+                              <span> x{e.count} (CR {e.cr})</span>
+                            </button>
+                          ):(<><b>{e.name}</b><span> x{e.count} (CR {e.cr})</span></>)}
+                        </>
+                      )}
                     </div>))}
                     {!isP&&re.some(e=>e.type==="monster")&&(
                       <div style={{display:"flex",gap:4,marginTop:8}}>

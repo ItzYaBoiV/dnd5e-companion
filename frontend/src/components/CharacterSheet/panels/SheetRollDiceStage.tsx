@@ -60,29 +60,31 @@ export function SheetRollDiceStage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [banner.phase, dismissAppRoll]);
 
-  // Re-run only when a new animating toss starts; `result` is read from `banner` at effect fire time.
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: omit `banner.result` from deps
+  // Defer starting the dice physics to the next macrotask so React Strict Mode’s effect
+  // cleanup can clearTimeout before `runSheetDiceRoll` runs. Otherwise two mounts queue
+  // two `box.roll()` calls (looks like one d20, then a second batch with 2d20 for advantage).
   useEffect(() => {
     if (banner.phase !== "animating") return;
     const { result } = banner;
 
     let cancelled = false;
-
-    const run = async () => {
-      try {
-        const notation = sheetRollToDiceNotation(result);
-        await runSheetDiceRoll(notation);
-      } catch (e) {
-        console.error("Dice roll animation failed:", e);
-      } finally {
-        if (!cancelled) notifySheetRollVisualComplete();
-      }
-    };
-
-    void run();
+    const tid = window.setTimeout(() => {
+      if (cancelled) return;
+      void (async () => {
+        try {
+          const notation = sheetRollToDiceNotation(result);
+          await runSheetDiceRoll(notation);
+        } catch (e) {
+          console.error("Dice roll animation failed:", e);
+        } finally {
+          if (!cancelled) notifySheetRollVisualComplete();
+        }
+      })();
+    }, 0);
 
     return () => {
       cancelled = true;
+      clearTimeout(tid);
     };
   }, [banner.phase, rollTossKey, notifySheetRollVisualComplete]);
 
@@ -95,7 +97,7 @@ export function SheetRollDiceStage() {
 
   if (banner.phase === "idle" || !portalEl) return null;
 
-  const { phase, title, variant, tossKey } = banner;
+  const { phase, title, variant } = banner;
   const result = phase === "done" || phase === "animating" ? banner.result : null;
 
   const advFromResult = result ? hasAdvantageOrDisadvantage(result.advantage) : false;
@@ -125,7 +127,6 @@ export function SheetRollDiceStage() {
 
   const overlay = (
     <div
-      key={tossKey}
       className="fixed inset-0 z-[200]"
       role="dialog"
       aria-modal="true"
@@ -139,7 +140,8 @@ export function SheetRollDiceStage() {
         onClick={dismissAppRoll}
       />
 
-      {/* Full-viewport WebGL host — keep *above* backdrop but not covered by a full-screen UI layer (stacking / compositor quirks). */}
+      {/* Full-viewport WebGL host — keep *above* backdrop but not covered by a full-screen UI layer (stacking / compositor quirks).
+          Keep this node stable across tosses: `sheetDiceBoxController` attaches a singleton canvas to `#sheet-dice-box-root`. */}
       <div
         id="sheet-dice-box-root"
         className="pointer-events-none absolute inset-0 z-[10] flex min-h-[40vh] w-full items-center justify-center px-2"

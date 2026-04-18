@@ -170,9 +170,6 @@ export type AsciiDungeonMapResult = {
   height: number;
 };
 
-/**
- * Build ASCII/Unicode map. Uses logical dungeon cells (same as canvas); walls drawn in void around rooms.
- */
 function roomTheme(r: DungeonMapRoom): string | null {
   const t = r.theme?.trim() || r.themeTag?.trim();
   if (t) return t;
@@ -181,6 +178,72 @@ function roomTheme(r: DungeonMapRoom): string | null {
   return x || null;
 }
 
+/**
+ * Room list + key for .txt exports. Shared by {@link buildAsciiDungeonMap} and Forge screen-matched exports.
+ */
+export function buildAsciiMapLegend(
+  rooms: DungeonMapRoom[],
+  opts: { mode: AsciiMapMode; footer?: "forge" | "roomGraph" },
+): string {
+  const footer = opts.footer ?? "roomGraph";
+  const ordered = sortedRooms(rooms);
+  if (ordered.length === 0) {
+    return "── Legend ──\n  (no rooms)";
+  }
+  const legendLines: string[] = ["── Legend ──"];
+  const themeBuckets = new Map<string, DungeonMapRoom[]>();
+  ordered.forEach((r) => {
+    const tg = roomTheme(r) ?? "_ungrouped";
+    const arr = themeBuckets.get(tg) ?? [];
+    arr.push(r);
+    themeBuckets.set(tg, arr);
+  });
+  const orderedThemes = [...themeBuckets.keys()].sort((a, b) => a.localeCompare(b));
+  for (const tg of orderedThemes) {
+    const list = themeBuckets.get(tg)!;
+    if (tg !== "_ungrouped" && opts.mode === "dm") {
+      legendLines.push(`  — ${tg} —`);
+    }
+    list.forEach((r) => {
+      const i = ordered.indexOf(r);
+      const mk = ROOM_MARKERS[i] ?? "?";
+      const dmName = String(r.name ?? r.namedRoom ?? "Room").trim();
+      const pl = String(r.playerLabel ?? "").trim();
+      const label = opts.mode === "player" && pl ? pl : dmName;
+      const type = String(r.type ?? "chamber");
+      const depth = r.depth ?? r.features?.layoutMeta?.depth;
+      const depthS = typeof depth === "number" ? `  d${depth}` : "";
+      let extra = "";
+      if (opts.mode === "dm") {
+        const bits: string[] = [];
+        if (r.traps || type === "trap") bits.push("hazard");
+        if (Array.isArray(r.monsters) && r.monsters.length > 0) bits.push("encounter");
+        if (r.treasures && ((r.treasures.gold ?? 0) > 0 || (r.treasures.items?.length ?? 0) > 0)) bits.push("loot");
+        const f = r.features as { secretDoors?: unknown[]; hiddenStashes?: unknown[] } | undefined;
+        if (f?.secretDoors?.length) bits.push("secret door");
+        if (f?.hiddenStashes?.length) bits.push("hidden stash");
+        if (bits.length) extra = `  [${bits.join(", ")}]`;
+      }
+      legendLines.push(`  ${mk}  ${label}  (${type})${depthS}${extra}`);
+    });
+  }
+  if (opts.mode === "dm") {
+    if (footer === "forge") {
+      legendLines.push("  +  door   !  item   ^  trap   letters  room markers   theme glyphs when enabled");
+      legendLines.push("  Map text matches the Dungeon Forge canvas (procedural grid).");
+    } else {
+      legendLines.push("  +  door   S  secret (DM)   !  trap   ◆  treasure   ✦  stash   ⚔  encounter");
+      legendLines.push("  ·  floor   lines  outer walls (room-outline preview)");
+    }
+  } else {
+    legendLines.push("  +  passage door   ·  floor");
+  }
+  return legendLines.join("\n");
+}
+
+/**
+ * Room-rectangle outline + box walls (classic generator / tests). Not the same topology as the procedural Forge grid.
+ */
 export function buildAsciiDungeonMap(
   rooms: DungeonMapRoom[],
   opts: { mode: AsciiMapMode; maxLineWidth?: number; density?: AsciiDensity },
@@ -357,51 +420,7 @@ export function buildAsciiDungeonMap(
   const denseLines = applyAsciiDensity(mapLineArray, density);
   const mapOnly = denseLines.join("\n");
 
-  const legendLines: string[] = ["── Legend ──"];
-  const themeBuckets = new Map<string, DungeonMapRoom[]>();
-  ordered.forEach((r) => {
-    const tg = roomTheme(r) ?? "_ungrouped";
-    const arr = themeBuckets.get(tg) ?? [];
-    arr.push(r);
-    themeBuckets.set(tg, arr);
-  });
-  const orderedThemes = [...themeBuckets.keys()].sort((a, b) => a.localeCompare(b));
-  for (const tg of orderedThemes) {
-    const list = themeBuckets.get(tg)!;
-    if (tg !== "_ungrouped" && opts.mode === "dm") {
-      legendLines.push(`  — ${tg} —`);
-    }
-    list.forEach((r) => {
-      const i = ordered.indexOf(r);
-      const mk = ROOM_MARKERS[i] ?? "?";
-      const dmName = String(r.name ?? r.namedRoom ?? "Room").trim();
-      const pl = String(r.playerLabel ?? "").trim();
-      const label = opts.mode === "player" && pl ? pl : dmName;
-      const type = String(r.type ?? "chamber");
-      const depth = r.depth ?? r.features?.layoutMeta?.depth;
-      const depthS = typeof depth === "number" ? `  d${depth}` : "";
-      let extra = "";
-      if (opts.mode === "dm") {
-        const bits: string[] = [];
-        if (r.traps || type === "trap") bits.push("hazard");
-        if (Array.isArray(r.monsters) && r.monsters.length > 0) bits.push("encounter");
-        if (r.treasures && ((r.treasures.gold ?? 0) > 0 || (r.treasures.items?.length ?? 0) > 0)) bits.push("loot");
-        const f = r.features as { secretDoors?: unknown[]; hiddenStashes?: unknown[] } | undefined;
-        if (f?.secretDoors?.length) bits.push("secret door");
-        if (f?.hiddenStashes?.length) bits.push("hidden stash");
-        if (bits.length) extra = `  [${bits.join(", ")}]`;
-      }
-      legendLines.push(`  ${mk}  ${label}  (${type})${depthS}${extra}`);
-    });
-  }
-  if (opts.mode === "dm") {
-    legendLines.push("  +  door   S  secret (DM)   !  trap   ◆  treasure   ✦  stash   ⚔  encounter");
-    legendLines.push("  ·  floor   lines  outer walls");
-  } else {
-    legendLines.push("  +  passage door   ·  floor");
-  }
-
-  const legend = legendLines.join("\n");
+  const legend = buildAsciiMapLegend(rooms, { mode: opts.mode, footer: "roomGraph" });
   const text = `${mapOnly}\n\n${legend}`;
 
   const width = denseLines[0] ? [...denseLines[0]!].length : 0;
