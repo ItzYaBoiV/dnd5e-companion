@@ -2,7 +2,8 @@
 # Stage, commit, and push the current branch to origin (GitHub).
 #
 # Upstream repo: https://github.com/ItzYaBoiV/dnd5e-companion
-# If you use `gh auth login`, HTTPS push to github.com usually works without extra setup.
+# Git does not use `gh` for HTTPS until you run: gh auth setup-git
+# This script runs that automatically when `gh` is installed (idempotent).
 # Override remote URL: GITHUB_REPO_URL='git@github.com:ItzYaBoiV/dnd5e-companion.git' ./github.sh
 #
 # Usage:
@@ -22,6 +23,25 @@ ensure_origin() {
   fi
   echo "No 'origin' remote — adding: $GITHUB_REPO_URL"
   git remote add origin "$GITHUB_REPO_URL"
+}
+
+# Wire Git's HTTPS credential helper to GitHub CLI so push does not prompt for user/password.
+# (SSH remotes use your SSH agent instead; this is harmless to run once.)
+ensure_gh_credential_helper() {
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "Tip: install GitHub CLI and run: gh auth login && gh auth setup-git" >&2
+    return 0
+  fi
+  local url
+  url=$(git remote get-url origin 2>/dev/null) || return 0
+  case "$url" in
+    https://github.com/*|https://*.github.com/*)
+      gh auth setup-git
+      ;;
+    *)
+      # git@github.com:... — SSH; no gh credential helper required for auth
+      ;;
+  esac
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -55,6 +75,8 @@ if [[ -n "$(git status --porcelain)" ]]; then
 else
   echo "Nothing to commit (working tree clean)."
 fi
+
+ensure_gh_credential_helper
 
 # Push even if we didn't commit (e.g. already committed locally)
 if ! git rev-parse --abbrev-ref "@{u}" >/dev/null 2>&1; then
