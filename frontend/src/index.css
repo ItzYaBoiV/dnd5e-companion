@@ -2,6 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --app-header-h: 4.75rem;
+  --app-subnav-h: 6.25rem;
+  --forge-pad: 12px;
+  --safe-top: 0px;
+  --safe-bottom: 0px;
+}
+
+@supports (padding: max(0px)) {
+  :root {
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
+
 @layer base {
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
@@ -22,14 +37,90 @@
   ::-webkit-scrollbar-thumb { @apply bg-dnd-border/80 rounded-full; }
   ::-webkit-scrollbar-thumb:hover { @apply bg-stone-600; }
 
-  /* iOS Safari: prevent auto-zoom on small text inputs */
-  @media screen and (max-width: 767px) {
-    input, select, textarea { font-size: 16px !important; }
+  /* Prevent iOS Safari auto-zoom on all form controls */
+  input, select, textarea {
+    font-size: max(16px, 1em) !important;
   }
 
   /* iOS Safari: prevent overscroll bounce from triggering refresh */
   html { overscroll-behavior: none; }
   body { overscroll-behavior: none; }
+}
+
+/* Dungeon Forge — container-query layout (replaces JS breakpoint widths for sidebars) */
+.forge-layout {
+  container-type: inline-size;
+  container-name: forge;
+}
+
+.forge-layout-row {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  min-height: 0;
+  width: 100%;
+}
+
+.forge-sidebar-left,
+.forge-sidebar-right {
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.forge-sidebar-left {
+  border-right: 1px solid var(--forge-border, transparent);
+  border-bottom: none;
+  max-height: min(70vh, calc(100dvh - 200px));
+}
+
+.forge-sidebar-right {
+  border-left: 1px solid var(--forge-border, transparent);
+  border-top: none;
+}
+
+.forge-main-row {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+@container forge (max-width: 900px) {
+  .forge-layout-row {
+    flex-direction: column;
+  }
+  .forge-main-row {
+    flex-direction: column;
+  }
+  .forge-sidebar-left,
+  .forge-sidebar-right {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+  .forge-sidebar-left {
+    border-right: none;
+    border-bottom: 1px solid var(--forge-border, transparent);
+    max-height: min(50vh, 360px) !important;
+  }
+  .forge-sidebar-right {
+    border-left: none;
+    border-top: 1px solid var(--forge-border, transparent);
+    max-height: min(40vh, 360px);
+  }
+}
+
+@container forge (min-width: 1600px) {
+  .forge-sidebar-left {
+    width: 320px !important;
+  }
+  .forge-sidebar-right {
+    width: 340px !important;
+  }
 }
 
 @layer components {

@@ -13,7 +13,7 @@
     "sanity:subclasses": "node scripts/subclass-name-sanity.mjs",
     "sanity:feature-choices": "node scripts/feature-choice-sanity.mjs",
     "db:studio": "prisma studio",
-    "test": "node --import tsx --test src/services/multiclass.test.ts"
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@prisma/client": "^5.14.0",

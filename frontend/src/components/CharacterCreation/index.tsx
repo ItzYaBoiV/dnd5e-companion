@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useCharacterStore } from "@/store/characterStore";
 import type { CharacterDraft } from "@/types/dnd";
@@ -10,6 +11,7 @@ import Step6_StartingEquipment from "./Step6_StartingEquipment";
 import Step7_StartingSpells from "./Step7_StartingSpells";
 import Step8_Review from "./Step8_Review";
 import CreationLevelUpStep from "./CreationLevelUpStep";
+import QuickCharacterCreation from "./QuickCharacterCreation";
 import { ChevronLeft } from "lucide-react";
 
 const BASE_STEPS = [
@@ -40,6 +42,7 @@ function getStepLabel(draft: CharacterDraft, step: number): string {
 export default function CharacterCreation() {
   const navigate = useNavigate();
   const { draft, updateDraft, resetDraft, submitDraft } = useCharacterStore();
+  const [mode, setMode] = useState<"full" | "quick">("full");
 
   const lc = levelUpSlotCount(draft);
   const review = reviewStepNumber(draft);
@@ -84,39 +87,74 @@ export default function CharacterCreation() {
         </div>
       </div>
 
-      <p className="text-center text-xs font-display text-stone-500 mb-2 sm:hidden" aria-live="polite">
-        Step {draft.step} of {totalSteps}
-      </p>
-
-      <div className="flex gap-1 mb-6 sm:mb-8" role="progressbar" aria-valuenow={draft.step} aria-valuemin={1} aria-valuemax={totalSteps} aria-label="Character creation progress">
-        {Array.from({ length: totalSteps }, (_, i) => i + 1).map((num) => (
-          <div
-            key={num}
-            className={`flex-1 h-1.5 rounded-full transition-colors min-w-[3px] ${
-              num <= draft.step ? "bg-dnd-red" : "bg-stone-800"
-            }`}
-          />
-        ))}
+      <div className="mb-4">
+        <div className="inline-flex gap-1 p-1 bg-gray-900 rounded">
+          <button
+            type="button"
+            onClick={() => setMode("quick")}
+            className={`px-3 py-1.5 rounded text-xs font-display font-semibold ${mode === "quick" ? "bg-dnd-red text-white" : "text-gray-300 hover:text-white"}`}
+          >
+            Quick Create
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("full")}
+            className={`px-3 py-1.5 rounded text-xs font-display font-semibold ${mode === "full" ? "bg-dnd-red text-white" : "text-gray-300 hover:text-white"}`}
+          >
+            Full Builder
+          </button>
+        </div>
       </div>
 
-      <p className="text-xs text-stone-600 mb-6 leading-relaxed">
-        Rules follow the D&amp;D 5e SRD (Open5e). Starting above 1st level runs guided steps for each level (HP,
-        features, spells, ASI) before review — for both single-class and multiclass (multiclass also sets 1st-level
-        class and level order on the Class step).
-      </p>
-
-      {draft.step === 1 && <Step1_BasicInfo {...stepProps} />}
-      {draft.step === 2 && <Step2_Race {...stepProps} />}
-      {draft.step === 3 && <Step3_Class {...stepProps} />}
-      {draft.step === 4 && <Step4_AbilityScores {...stepProps} />}
-      {draft.step === 5 && <Step5_Background {...stepProps} />}
-      {draft.step === 6 && <Step6_StartingEquipment {...stepProps} />}
-      {draft.step === 7 && <Step7_StartingSpells {...stepProps} />}
-      {lc > 0 && draft.step >= 8 && draft.step < review && (
-        <CreationLevelUpStep {...stepProps} slotIndex={draft.step - 8} />
+      {mode === "full" && (
+        <p className="text-center text-xs font-display text-stone-500 mb-2 sm:hidden" aria-live="polite">
+          Step {draft.step} of {totalSteps}
+        </p>
       )}
-      {draft.step === review && (
-        <Step8_Review draft={draft} onBack={goPrev} onSubmit={handleSubmit} />
+
+      {mode === "full" && (
+        <div className="flex gap-1 mb-6 sm:mb-8" role="progressbar" aria-valuenow={draft.step} aria-valuemin={1} aria-valuemax={totalSteps} aria-label="Character creation progress">
+          {Array.from({ length: totalSteps }, (_, i) => i + 1).map((num) => (
+            <div
+              key={num}
+              className={`flex-1 h-1.5 rounded-full transition-colors min-w-[3px] ${
+                num <= draft.step ? "bg-dnd-red" : "bg-stone-800"
+              }`}
+            />
+          ))}
+        </div>
+      )}
+
+      {mode === "full" ? (
+        <p className="text-xs text-stone-600 mb-6 leading-relaxed">
+          Rules follow the D&amp;D 5e SRD (Open5e). Starting above 1st level runs guided steps for each level (HP,
+          features, spells, ASI) before review — for both single-class and multiclass (multiclass also sets 1st-level
+          class and level order on the Class step).
+        </p>
+      ) : (
+        <p className="text-xs text-stone-600 mb-6 leading-relaxed">
+          Quick Create keeps the full builder untouched and auto-fills the remaining choices from your race/class/playstyle selections.
+        </p>
+      )}
+
+      {mode === "quick" ? (
+        <QuickCharacterCreation />
+      ) : (
+        <>
+          {draft.step === 1 && <Step1_BasicInfo {...stepProps} />}
+          {draft.step === 2 && <Step2_Race {...stepProps} />}
+          {draft.step === 3 && <Step3_Class {...stepProps} />}
+          {draft.step === 4 && <Step4_AbilityScores {...stepProps} />}
+          {draft.step === 5 && <Step5_Background {...stepProps} />}
+          {draft.step === 6 && <Step6_StartingEquipment {...stepProps} />}
+          {draft.step === 7 && <Step7_StartingSpells {...stepProps} />}
+          {lc > 0 && draft.step >= 8 && draft.step < review && (
+            <CreationLevelUpStep {...stepProps} slotIndex={draft.step - 8} />
+          )}
+          {draft.step === review && (
+            <Step8_Review draft={draft} onBack={goPrev} onSubmit={handleSubmit} />
+          )}
+        </>
       )}
     </div>
   );

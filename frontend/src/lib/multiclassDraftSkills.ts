@@ -70,13 +70,20 @@ export function draftSkillConfig(draft: CharacterDraft, classes: DndClass[]) {
   let count = 0;
 
   for (const row of draft.classLevels) {
-    if (!row.classSlug || seen.has(row.classSlug)) continue;
-    seen.add(row.classSlug);
-    const cls = classes.find((c) => c.slug === row.classSlug);
+    const slug = row.classSlug?.trim();
+    if (!slug || seen.has(slug)) continue;
+    const isFirstDistinct = seen.size === 0;
+    seen.add(slug);
+    const cls = classes.find((c) => c.slug === slug);
     if (!cls) continue;
     const healed = healClassSkills(cls);
-    count += healed.count;
-    healed.pool.forEach((s) => pool.add(s));
+    if (isFirstDistinct) {
+      count += healed.count;
+      healed.pool.forEach((s) => pool.add(s));
+    } else if (cls.slug === "bard" || cls.slug === "ranger" || cls.slug === "rogue") {
+      count += 1;
+      healed.pool.forEach((s) => pool.add(s));
+    }
   }
 
   return { pool: [...pool], count };
@@ -88,13 +95,11 @@ export function draftSavingThrows(draft: CharacterDraft, classes: DndClass[]): s
     return cls?.savingThrows ?? [];
   }
 
-  const seen = new Set<string>();
-  const saves: string[] = [];
-  for (const row of draft.classLevels) {
-    if (!row.classSlug || seen.has(row.classSlug)) continue;
-    seen.add(row.classSlug);
-    const cls = classes.find((c) => c.slug === row.classSlug);
-    if (cls?.savingThrows) saves.push(...cls.savingThrows);
-  }
-  return [...new Set(saves)];
+  const firstSlug =
+    draft.multiclassFirstClassSlug?.trim() ||
+    draft.classLevels.find((r) => r.classSlug.trim() && r.levels >= 1)?.classSlug.trim() ||
+    draft.classLevels[0]?.classSlug.trim() ||
+    "";
+  const cls = classes.find((c) => c.slug === firstSlug);
+  return cls?.savingThrows ?? [];
 }

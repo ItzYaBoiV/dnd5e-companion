@@ -25,6 +25,21 @@ export const generateDungeon = async (req: Request, res: Response) => {
 };
 
 /** Synchronous procedural floorplan (no worker / no LLM). */
+export const saveForgeDungeon = async (req: Request, res: Response) => {
+  const b = req.body as Record<string, unknown>;
+  const dungeon = await svc.saveForgeMapToLibrary({
+    seed: Number(b.seed) || 0,
+    locationType: typeof b.locationType === "string" ? b.locationType : "dungeon",
+    levelMin: Math.min(20, Math.max(1, Number(b.levelMin) || 1)),
+    levelMax: Math.min(20, Math.max(1, Number(b.levelMax) || 3)),
+    mapName: typeof b.mapName === "string" ? b.mapName : "Forge map",
+    rooms: Array.isArray(b.rooms) ? (b.rooms as Parameters<typeof svc.saveForgeMapToLibrary>[0]["rooms"]) : [],
+    width: typeof b.width === "number" ? b.width : undefined,
+    height: typeof b.height === "number" ? b.height : undefined,
+  });
+  res.status(201).json(dungeon);
+};
+
 export const generateProceduralDungeon = async (req: Request, res: Response) => {
   const b = req.body as Record<string, unknown>;
   const theme = typeof b.theme === "string" && b.theme.trim() ? b.theme.trim() : "dungeon";

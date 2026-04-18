@@ -53,6 +53,19 @@ export default function Step4_AbilityScores({ draft, updateDraft, onNext }: Prop
     void loadRaces();
   }, [loadClasses, loadRaces]);
 
+  useEffect(() => {
+    if (method !== "standard_array") return;
+    setAssignments((prev) => {
+      if (Object.keys(prev).length > 0) return prev;
+      const reconstructed: Partial<Record<AbilityName, number>> = {};
+      for (const a of ABILITY_NAMES) {
+        const s = draft.scores[a];
+        if (STANDARD_ARRAY.includes(s)) reconstructed[a] = s;
+      }
+      return reconstructed;
+    });
+  }, [method, draft.scores]);
+
   const scores = draft.scores;
   const selectedClass = classes.find((c) => c.slug === draft.classSlug);
   const selectedRace = races.find((r) => r.slug === draft.raceSlug);
@@ -61,6 +74,11 @@ export default function Step4_AbilityScores({ draft, updateDraft, onNext }: Prop
   const remainingPoints = POINT_BUY_BUDGET - usedPoints;
 
   const updateScore = (ability: AbilityName, value: number) => {
+    if (method === "point_buy") {
+      const next = { ...scores, [ability]: value };
+      const used = ABILITY_NAMES.reduce((sum, a) => sum + (POINT_BUY_COST[next[a]] ?? 0), 0);
+      if (used > POINT_BUY_BUDGET) return;
+    }
     updateDraft({ scores: { ...scores, [ability]: value } });
   };
 
@@ -119,7 +137,8 @@ export default function Step4_AbilityScores({ draft, updateDraft, onNext }: Prop
           STANDARD_ARRAY,
         )
       : method === "point_buy"
-        ? remainingPoints === 0 &&
+        ? remainingPoints >= 0 &&
+          remainingPoints === 0 &&
           ABILITY_NAMES.every((a) => scores[a] >= 8 && scores[a] <= 15)
         : ABILITY_NAMES.every((a) => manualScoresEffective[a] >= 1 && manualScoresEffective[a] <= 30);
 

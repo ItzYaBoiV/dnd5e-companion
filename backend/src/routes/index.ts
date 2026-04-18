@@ -4,6 +4,7 @@ import { referenceRouter } from "./reference";
 import { combatRouter }    from "./combat";
 import { monsterRouter }   from "./monsters";
 import { dungeonRouter }   from "./dungeons";
+import { encounterRouter } from "./encounters";
 import { sessionRouter }   from "./sessions";
 import { workerRouter }    from "./workers";
 
@@ -14,6 +15,7 @@ router.use("/reference",  referenceRouter);
 router.use("/combat",     combatRouter);
 router.use("/monsters",   monsterRouter);
 router.use("/generate",   dungeonRouter);
+router.use("/encounters", encounterRouter);
 router.use("/sessions",   sessionRouter);
 router.use("/workers",    workerRouter);   // AI worker registration — no SSH needed
 

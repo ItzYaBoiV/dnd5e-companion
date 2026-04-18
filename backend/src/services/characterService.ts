@@ -1,5 +1,7 @@
 import { prisma } from "../config/database";
 import { NotFoundError, ValidationError } from "../middleware/errorHandler";
+import { meetsMulticlassPrerequisite } from "../lib/multiclassPrereqs";
+import { computeCreateProficienciesFromClasses } from "../lib/multiclassEntryProficiencies";
 import {
   CreateCharacterInput,
   UpdateCharacterInput,
@@ -187,6 +189,29 @@ export async function createCharacter(input: CreateCharacterInput) {
   const wisdom = applyRace("wisdom");
   const charisma = applyRace("charisma");
 
+  const scoreMapForMc = {
+    strength,
+    dexterity,
+    constitution,
+    intelligence,
+    wisdom,
+    charisma,
+  };
+  if (classSlugs.length > 1) {
+    const ordered = [...slices].sort((a, b) => a.sortOrder - b.sortOrder);
+    const seenMc = new Set<string>();
+    for (const seg of ordered) {
+      const slug = seg.classSlug;
+      if (!slug || seenMc.has(slug)) continue;
+      if (seenMc.size > 0 && !meetsMulticlassPrerequisite(slug, scoreMapForMc)) {
+        throw new ValidationError(
+          `Multiclass prerequisite not met for ${slug} (PHB p.164 — adjust ability scores or class choice).`,
+        );
+      }
+      seenMc.add(slug);
+    }
+  }
+
   const conMod = Math.floor((constitution - 10) / 2);
   const hitDieBySlug: Record<string, number> = {};
   for (const s of slices) {
@@ -202,23 +227,24 @@ export async function createCharacter(input: CreateCharacterInput) {
   const maxHp = input.maxHp > 0 ? input.maxHp : computedMaxHp;
   const currentHp = input.currentHp ?? maxHp;
 
-  const mergedSaves = uniqStr([
-    ...input.savingThrowProficiencies,
-    ...slices.flatMap((seg) => classBySlug[seg.classSlug]?.savingThrows ?? []),
-  ]);
+  const mergedSaves = uniqStr([...input.savingThrowProficiencies]);
   const skillProficiencies = uniqStr([...input.skillProficiencies, ...(bg?.skillProficiencies ?? [])]);
+  const classCreateProfs = computeCreateProficienciesFromClasses(
+    slices.map((s) => ({ classSlug: s.classSlug, sortOrder: s.sortOrder })),
+    classBySlug,
+  );
   const toolProficiencies = uniqStr([
     ...input.toolProficiencies,
     ...(bg?.toolProficiencies ?? []),
-    ...slices.flatMap((seg) => classBySlug[seg.classSlug]?.toolProficiencies ?? []),
+    ...classCreateProfs.tools,
   ]);
   const weaponProficiencies = uniqStr([
     ...input.weaponProficiencies,
-    ...slices.flatMap((seg) => classBySlug[seg.classSlug]?.weaponProficiencies ?? []),
+    ...classCreateProfs.weapons,
   ]);
   const armorProficiencies = uniqStr([
     ...input.armorProficiencies,
-    ...slices.flatMap((seg) => classBySlug[seg.classSlug]?.armorProficiencies ?? []),
+    ...classCreateProfs.armor,
   ]);
 
   const raceBaseSpeed =
@@ -301,6 +327,7 @@ export async function createCharacter(input: CreateCharacterInput) {
         customName: row.customName ?? null,
         quantity: row.quantity,
         notes: row.notes ?? "",
+        equipped: row.equipped ?? false,
       })),
     });
   }

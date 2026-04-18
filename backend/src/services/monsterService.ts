@@ -40,6 +40,51 @@ export async function getMonster(slug: string) {
   return m;
 }
 
+function slugifyDisplayName(name: string): string {
+  const s = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return s || "unknown";
+}
+
+/** Best-effort name → SRD slug for Forge / importers (one round-trip per unique name). */
+export async function resolveMonstersByNames(names: string[]) {
+  const unique = [...new Set(names.map((n) => String(n ?? "").trim()).filter(Boolean))];
+  const out: {
+    name: string;
+    slug: string;
+    challengeRating: string;
+    xp: number;
+    unresolved?: boolean;
+  }[] = [];
+
+  for (const name of unique) {
+    const found = await prisma.monster.findFirst({
+      where: { name: { equals: name, mode: "insensitive" } },
+      select: { slug: true, name: true, challengeRating: true, xp: true },
+    });
+    if (found) {
+      out.push({
+        name: found.name,
+        slug: found.slug,
+        challengeRating: found.challengeRating,
+        xp: found.xp,
+      });
+    } else {
+      out.push({
+        name,
+        slug: slugifyDisplayName(name),
+        challengeRating: "0",
+        xp: 0,
+        unresolved: true,
+      });
+    }
+  }
+  return out;
+}
+
 // ── Monsters by CR range (used by AI generation for pool selection) ──
 // challengeRating is stored as String so we fetch and filter in JS
 export async function getMonstersByCr(crMin: number, crMax: number) {

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CharacterDraft, ClassLevelDraftRow, DndClass } from "@/types/dnd";
 import { useReferenceStore } from "@/store/referenceStore";
+import { meetsMulticlassPrerequisite, multiclassPrereqHint } from "@/lib/multiclassPrereqs";
 import { draftSavingThrows, draftSkillConfig } from "@/lib/multiclassDraftSkills";
+import { scoresAfterRace } from "@/lib/suggestedAbilityScores";
 import { SUBCLASS_CHOICE_LEVEL } from "@/lib/levelUpGuide";
 import {
   defaultMulticlassLevelOrder,
@@ -135,22 +137,29 @@ function MulticlassLevelsInput({
 }
 
 export default function Step3_Class({ draft, updateDraft, onNext }: Props) {
-  const { classes, loadClasses, loading } = useReferenceStore();
+  const { classes, races, loadClasses, loadRaces, loading } = useReferenceStore();
   const [expandedClass, setExpandedClass] = useState<string | null>(null);
 
   useEffect(() => {
     loadClasses();
-  }, [loadClasses]);
+    void loadRaces();
+  }, [loadClasses, loadRaces]);
 
   const { pool: skillPool, count: skillCount } = useMemo(
     () => draftSkillConfig(draft, classes),
     [draft, classes],
   );
 
+  const selectedRace = races.find((r) => r.slug === draft.raceSlug);
+  const abilityPreview = useMemo(
+    () => scoresAfterRace(draft.scores, selectedRace, draft.subraceSlug),
+    [draft.scores, draft.subraceSlug, selectedRace],
+  );
+
   const mcSaves = (levels: ClassLevelDraftRow[]) =>
     draftSavingThrows({ ...draft, classLevels: levels, useMulticlass: true }, classes);
 
-  if (loading["classes"]) return <LoadingSpinner />;
+  if (loading["classes"] || loading["races"]) return <LoadingSpinner />;
 
   const selectedClass = classes.find((c: DndClass) => c.slug === draft.classSlug);
 
@@ -480,6 +489,13 @@ export default function Step3_Class({ draft, updateDraft, onNext }: Props) {
                         </option>
                       ))}
                     </select>
+                    {row.classSlug.trim() &&
+                      !meetsMulticlassPrerequisite(row.classSlug, abilityPreview) && (
+                        <p className="text-amber-600/95 text-[11px] mt-1 leading-snug">
+                          ⚠ Multiclass entry requires {multiclassPrereqHint(row.classSlug)} with your current race
+                          bonuses (PHB p.164). You can still adjust abilities on the next step.
+                        </p>
+                      )}
                   </div>
                   <div>
                     <label className="dnd-label block mb-1">Levels in this class</label>

@@ -20,6 +20,15 @@ export const getMonstersByCr = async (req: Request, res: Response) => {
   res.json(await svc.getMonstersByCr(crMin, crMax));
 };
 
+export const resolveMonstersByNames = async (req: Request, res: Response) => {
+  const names = (req.body as { names?: unknown })?.names;
+  if (!Array.isArray(names) || names.some((n) => typeof n !== "string")) {
+    res.status(400).json({ error: "Body must be { names: string[] }" });
+    return;
+  }
+  res.json(await svc.resolveMonstersByNames(names as string[]));
+};
+
 export const encounterDifficulty = async (req: Request, res: Response) => {
   const { partyLevels, monsterXpValues } = req.body as {
     partyLevels: number[];

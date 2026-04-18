@@ -1,12 +1,35 @@
 /**
  * Deterministic grid dungeon layouts for the canvas map (no LLM).
- * Rooms are axis-aligned rectangles; exits are derived from shared edges.
+ * Rooms grow on a grid with optional non-rectangular footprints (see `shapeMask`) for overlap checks.
  */
+
+import {
+  masksOverlap,
+  pickShapeForBucket,
+  shapeMask,
+  type RoomShape,
+} from "./proceduralDungeonShapes";
 
 export type ProceduralRoomType = "entrance" | "corridor" | "chamber" | "boss" | "treasure" | "trap";
 
+export type ForgeThemeTag =
+  | "entrance"
+  | "guard"
+  | "treasure"
+  | "trap"
+  | "rest"
+  | "boss"
+  | "lore"
+  | "puzzle";
+
 /** Stored on DungeonRoom.features — DM-only structured data; player view uses safe subsets only. */
 export type RoomDmFeatures = {
+  layoutMeta?: {
+    shape?: RoomShape;
+    depth?: number;
+    themeTag?: ForgeThemeTag | string;
+    namedRoom?: string | null;
+  };
   secretDoors?: {
     wall: string;
     trigger: string;
@@ -40,6 +63,7 @@ export interface ProceduralRoomDraft {
 }
 
 type Rect = { id: string; x: number; y: number; w: number; h: number };
+type Placed = Rect & { shape: RoomShape; mask: boolean[][] };
 
 function mulberry32(seed: number): () => number {
   return function () {
@@ -87,6 +111,35 @@ function overlaps(a: Rect, b: Rect): boolean {
   return !(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y);
 }
 
+function inferLocationBucket(theme: string): "castle" | "dungeon" | "cave" | "sewer" {
+  const t = theme.toLowerCase();
+  if (/castle|keep|palace|manor|fort\b/.test(t)) return "castle";
+  if (/cave|cavern|grotto|underdark/.test(t)) return "cave";
+  if (/sewer|undercity|pipe|flood|drain/.test(t)) return "sewer";
+  return "dungeon";
+}
+
+function bfsDepths(
+  exitMap: Map<string, { north: string | null; south: string | null; east: string | null; west: string | null }>,
+  startId = "room_0",
+): Map<string, number> {
+  const depth = new Map<string, number>();
+  const q: string[] = [startId];
+  depth.set(startId, 0);
+  while (q.length) {
+    const id = q.shift()!;
+    const d = depth.get(id)!;
+    const ex = exitMap.get(id);
+    if (!ex) continue;
+    for (const n of [ex.north, ex.south, ex.east, ex.west] as const) {
+      if (!n || depth.has(n)) continue;
+      depth.set(n, d + 1);
+      q.push(n);
+    }
+  }
+  return depth;
+}
+
 function tryPlaceNorth(parent: Rect, nw: number, nh: number, rnd: () => number): Rect | null {
   const minNx = parent.x - nw + 1;
   const maxNx = parent.x + parent.w - 1;
@@ -132,7 +185,7 @@ const PLACERS: Record<Dir, (p: Rect, nw: number, nh: number, rnd: () => number) 
   west: tryPlaceWest,
 };
 
-function normalizeOrigin(rects: Rect[]): void {
+function normalizeOrigin(rects: Placed[]): void {
   let minX = Infinity;
   let minY = Infinity;
   for (const r of rects) {
@@ -146,7 +199,7 @@ function normalizeOrigin(rects: Rect[]): void {
 }
 
 function computeExits(
-  rects: Rect[],
+  rects: Placed[],
 ): Map<string, { north: string | null; south: string | null; east: string | null; west: string | null }> {
   const out = new Map<string, { north: string | null; south: string | null; east: string | null; west: string | null }>();
   for (const r of rects) {
@@ -174,7 +227,7 @@ function computeExits(
 }
 
 /** How many full edge-adjacent neighbors (used to spread growth across the frontier). */
-function edgeNeighborCount(r: Rect, rects: Rect[]): number {
+function edgeNeighborCount(r: Placed, rects: Placed[]): number {
   let n = 0;
   for (const o of rects) {
     if (o.id === r.id) continue;
@@ -186,7 +239,7 @@ function edgeNeighborCount(r: Rect, rects: Rect[]): number {
   return n;
 }
 
-function unionSpreadWith(rects: Rect[], add: Rect): number {
+function unionSpreadWith(rects: Placed[], add: Placed): number {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -204,7 +257,7 @@ function unionSpreadWith(rects: Rect[], add: Rect): number {
   return maxX - minX + maxY - minY;
 }
 
-function pickParentIndex(rects: Rect[], rnd: () => number): number {
+function pickParentIndex(rects: Placed[], rnd: () => number): number {
   const scored = rects.map((r, i) => {
     const isChamber = r.w > 1 && r.h > 1;
     const deg = edgeNeighborCount(r, rects);
@@ -277,15 +330,95 @@ function themeHints(theme: string): { place: string; mood: string; smell: string
   };
 }
 
+type MonsterPoolEntry = { slug: string; cr: number };
+
 function pickMonsters(
   rnd: () => number,
-  pool: string[],
+  pool: MonsterPoolEntry[],
   count: number,
+  targetCr: number,
 ): { monsterSlug: string; count: number; notes: string }[] {
   if (pool.length === 0) return [];
-  const slug = pool[Math.floor(rnd() * pool.length)]!;
+  const ranked = [...pool].sort((a, b) => Math.abs(a.cr - targetCr) - Math.abs(b.cr - targetCr));
+  const pick = ranked[Math.floor(rnd() * Math.min(5, ranked.length))]!;
   const c = Math.min(4, 1 + Math.floor(rnd() * count));
-  return [{ monsterSlug: slug, count: c, notes: "Patrol or ambush — adjust for your table." }];
+  return [
+    {
+      monsterSlug: pick.slug,
+      count: c,
+      notes: `Tuned near CR ${targetCr.toFixed(2)} (picked ${pick.slug}, listed CR ${pick.cr}).`,
+    },
+  ];
+}
+
+function targetCrForDepth(depth: number, roomCount: number, partyLevel: number, isBoss: boolean): number {
+  const pl = Math.max(1, Math.min(20, partyLevel));
+  if (isBoss) return Math.min(30, pl + 2);
+  if (depth <= 1) return Math.max(0, pl - 2);
+  if (depth > Math.max(2, Math.floor(roomCount / 2))) return Math.min(30, pl + 1);
+  return pl;
+}
+
+const NAMED_PRESETS: Record<
+  "castle" | "dungeon" | "cave" | "sewer",
+  Partial<Record<string, string[]>>
+> = {
+  castle: {
+    boss: ["Throne of Ash", "High Seat of Blades", "Crownvault"],
+    treasure: ["Regent's coffer", "Reliquary alcove"],
+    lore: ["Weeping portrait hall", "Hall of banners"],
+  },
+  dungeon: {
+    boss: ["Pit sovereign's roost", "Black Gate antechamber"],
+    treasure: ["Weeping vault", "Dead king's tally room"],
+    lore: ["Scriptorium ruin", "Whisper-gallery"],
+    puzzle: ["Riddle antechamber", "False portcullis room"],
+  },
+  cave: {
+    boss: ["Blooming fungus throne", "Deep echo niche"],
+    treasure: ["Crystal cyst", "Bone cache"],
+    rest: ["Dripstone bivouac"],
+  },
+  sewer: {
+    boss: ["Grate king's sump", "Overflow heart"],
+    trap: ["Sluice junction", "Grinding gate"],
+  },
+};
+
+function rollNamedRoom(
+  rnd: () => number,
+  bucket: "castle" | "dungeon" | "cave" | "sewer",
+  theme: ForgeThemeTag,
+  type: ProceduralRoomType,
+): string | null {
+  if (rnd() > 0.42) return null;
+  const table = NAMED_PRESETS[bucket];
+  const key = type === "boss" ? "boss" : theme;
+  const arr = (table as Record<string, string[] | undefined>)[key] ?? table.lore;
+  if (arr?.length) return arr[Math.floor(rnd() * arr.length)]!;
+  return null;
+}
+
+function rollThemeTag(
+  rnd: () => number,
+  type: ProceduralRoomType,
+  depth: number,
+  maxDepth: number,
+  prev: ForgeThemeTag | null,
+): ForgeThemeTag {
+  if (type === "entrance") return "entrance";
+  if (type === "boss") return "boss";
+  if (type === "treasure") return "treasure";
+  if (type === "trap") return "trap";
+  const biasTreasure = prev === "boss" || prev === "lore";
+  const r = rnd();
+  if (biasTreasure && r < 0.22) return "treasure";
+  if (r < 0.28) return "guard";
+  if (r < 0.45) return "lore";
+  if (r < 0.62) return "puzzle";
+  if (r < 0.78) return "rest";
+  if (depth >= maxDepth - 1 && r < 0.9) return "guard";
+  return "lore";
 }
 
 const WALL_HINTS = ["north wall", "south wall", "east wall", "west wall", "corner debris", "old relief", "statue base"];
@@ -382,7 +515,7 @@ export function generateProceduralRooms(opts: {
   difficulty: string;
   levelMin: number;
   levelMax: number;
-  monsterPool: string[];
+  monsterPool: MonsterPoolEntry[];
   mapSeed?: number | string | null;
 }): {
   mapSeed: number;
@@ -397,10 +530,19 @@ export function generateProceduralRooms(opts: {
   const rnd = mulberry32(mapSeed);
   const hints = themeHints(opts.theme);
 
-  const rects: Rect[] = [];
+  const bucket = inferLocationBucket(opts.theme);
+  const rects: Placed[] = [];
   const ew = 3 + Math.floor(rnd() * 2);
   const eh = 2 + Math.floor(rnd() * 2);
-  rects.push({ id: "room_0", x: 0, y: 0, w: ew, h: eh });
+  rects.push({
+    id: "room_0",
+    x: 0,
+    y: 0,
+    w: ew,
+    h: eh,
+    shape: "rect",
+    mask: shapeMask("rect", ew, eh, rnd),
+  });
 
   let attempts = 0;
   const maxAttempts = 6000;
@@ -434,12 +576,15 @@ export function generateProceduralRooms(opts: {
       [dirs[i], dirs[j]] = [dirs[j]!, dirs[i]!];
     }
 
-    const candidates: Rect[] = [];
+    const candidates: Placed[] = [];
     for (const d of dirs) {
       const cand = PLACERS[d]!(parent, nw, nh, rnd);
       if (!cand) continue;
       cand.id = `room_${rects.length}`;
-      if (!rects.some((r) => overlaps(cand, r))) candidates.push(cand);
+      const shape = pickShapeForBucket(bucket, rnd);
+      const mask = shapeMask(shape, cand.w, cand.h, rnd);
+      const placed: Placed = { ...cand, shape, mask };
+      if (!rects.some((r) => masksOverlap(placed.x, placed.y, placed.mask, r.x, r.y, r.mask))) candidates.push(placed);
     }
 
     if (candidates.length === 0) continue;
@@ -459,16 +604,54 @@ export function generateProceduralRooms(opts: {
 
   normalizeOrigin(rects);
   const exitMap = computeExits(rects);
+  const depths = bfsDepths(exitMap, "room_0");
+  const maxDepth = Math.max(0, ...[...depths.values()]);
 
   const chamberIndices = rects
-    .map((r, i) => ({ i, area: r.w * r.h }))
+    .map((r, i) => ({ i, area: r.w * r.h, d: depths.get(r.id) ?? 0 }))
     .filter((x) => x.i !== 0 && rects[x.i]!.w > 1 && rects[x.i]!.h > 1)
-    .sort((a, b) => b.area - a.area)
+    .sort((a, b) => {
+      if (b.d !== a.d) return b.d - a.d;
+      return b.area - a.area;
+    })
     .map((x) => x.i);
 
   const bossIdx = chamberIndices[0] ?? -1;
   const trapIdx = chamberIndices.find((i) => i !== bossIdx) ?? -1;
   const treasureIdx = chamberIndices.find((i) => i !== bossIdx && i !== trapIdx) ?? -1;
+
+  const themeById = new Map<string, ForgeThemeTag>();
+  const bfsOrder: string[] = [];
+  {
+    const seen = new Set<string>();
+    const q = ["room_0"];
+    seen.add("room_0");
+    while (q.length) {
+      const id = q.shift()!;
+      bfsOrder.push(id);
+      const ex = exitMap.get(id)!;
+      for (const n of [ex.north, ex.south, ex.east, ex.west] as const) {
+        if (!n || seen.has(n)) continue;
+        seen.add(n);
+        q.push(n);
+      }
+    }
+  }
+  let prevTheme: ForgeThemeTag | null = null;
+  for (const id of bfsOrder) {
+    const idx = rects.findIndex((r) => r.id === id);
+    if (idx < 0) continue;
+    let t: ProceduralRoomType = "chamber";
+    if (idx === 0) t = "entrance";
+    else if (rects[idx]!.w === 1 || rects[idx]!.h === 1) t = "corridor";
+    else if (bossIdx >= 0 && idx === bossIdx) t = /hard|deadly/.test(opts.difficulty.toLowerCase()) ? "boss" : "chamber";
+    else if (trapIdx >= 0 && idx === trapIdx) t = "trap";
+    else if (treasureIdx >= 0 && idx === treasureIdx) t = "treasure";
+    const depth = depths.get(id) ?? 0;
+    const tag = rollThemeTag(rnd, t, depth, maxDepth, prevTheme);
+    themeById.set(id, tag);
+    prevTheme = tag;
+  }
 
   const rooms: ProceduralRoomDraft[] = rects.map((r, idx) => {
     const isCorridor = r.w === 1 || r.h === 1;
@@ -543,9 +726,13 @@ export function generateProceduralRooms(opts: {
       return `- Listen checks toward connected rooms (DC 12) may hear occupants\n- One mundane clue about the faction or purpose of this place`;
     })();
 
+    const depth = depths.get(r.id) ?? 0;
+    const partyLv = opts.levelMax;
+    const tgt = targetCrForDepth(depth, rects.length, partyLv, type === "boss");
+
     let monsters: { monsterSlug: string; count: number; notes: string }[] = [];
     if (type === "boss" || (type === "chamber" && rnd() < 0.45 && idx !== 0)) {
-      monsters = pickMonsters(rnd, opts.monsterPool, type === "boss" ? 3 : 2);
+      monsters = pickMonsters(rnd, opts.monsterPool, type === "boss" ? 3 : 2, tgt);
     }
 
     let treasures = { gold: 0, items: [] as string[] };
@@ -569,7 +756,18 @@ export function generateProceduralRooms(opts: {
     }
 
     const hasListedTreasure = treasures.gold > 0 || (treasures.items?.length ?? 0) > 0;
-    const features = buildFeaturesForRoom(rnd, type, idx, hints, exitCardinality(ex), hasListedTreasure);
+    const baseFeatures = buildFeaturesForRoom(rnd, type, idx, hints, exitCardinality(ex), hasListedTreasure);
+    const themeTag = themeById.get(r.id) ?? "lore";
+    const namedRoom = rollNamedRoom(rnd, bucket, themeTag, type);
+    const layoutMeta = {
+      shape: r.shape,
+      depth,
+      themeTag,
+      namedRoom,
+    };
+    const features: RoomDmFeatures | null = baseFeatures
+      ? { ...baseFeatures, layoutMeta }
+      : { layoutMeta };
 
     let featLines = "";
     if (features?.secretDoors?.length) {

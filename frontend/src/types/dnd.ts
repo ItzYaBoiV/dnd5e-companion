@@ -476,6 +476,8 @@ export interface StartingInventoryDraftRow {
   displayName?: string;
   customName?: string;
   quantity: number;
+  /** When true, item is created as equipped (armor, shield, weapons). */
+  equipped?: boolean;
 }
 
 /** One segment of a multiclass build (order = level-up order for HP). */

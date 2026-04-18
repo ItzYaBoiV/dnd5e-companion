@@ -19,7 +19,21 @@ export type DungeonMapRoom = {
   features?: {
     secretDoors?: unknown[];
     hiddenStashes?: unknown[];
+    /** Procedural / Forge metadata (theme, depth, footprint, etc.) */
+    layoutMeta?: {
+      themeTag?: string;
+      depth?: number;
+      namedRoom?: string | null;
+      shape?: string;
+    };
   } | null;
+  /** Flattened optional tags for ASCII / UI (mirrors features.layoutMeta when present). */
+  themeTag?: string | null;
+  /** Forge / tooling theme key (e.g. guard, boss). */
+  theme?: string | null;
+  depth?: number | null;
+  /** Display title when different from `name` (e.g. keyed location names). */
+  namedRoom?: string | null;
 };
 
 export type MapLayout = {

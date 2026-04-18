@@ -465,6 +465,7 @@ export const useCharacterStore = create<CharacterStore>((set, get) => ({
           customName: row.customName?.trim() || undefined,
           quantity: row.quantity,
           notes: "",
+          equipped: row.equipped ?? false,
         })),
       startingSpells: startingSpellsPayload,
     };

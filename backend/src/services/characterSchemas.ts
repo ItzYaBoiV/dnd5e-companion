@@ -77,6 +77,7 @@ export const CreateCharacterObjectSchema = z.object({
           customName: z.string().optional(),
           quantity: z.number().int().min(1).default(1),
           notes: z.string().default(""),
+          equipped: z.boolean().optional().default(false),
         })
         .refine(
           (d) =>

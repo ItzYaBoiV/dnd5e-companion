@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from "react";
 import { LoadingSpinner, Modal } from "@/components/common";
-import { Map as MapIcon, BookOpen, Trash2, ChevronDown, ChevronRight, Wand2, Download, Copy } from "lucide-react";
+import { Map as MapIcon, BookOpen, Trash2, ChevronDown, ChevronRight, Wand2, Download, Copy, Sliders, Library } from "lucide-react";
 import { clsx } from "clsx";
 import { postAiGenerate } from "@/lib/aiGenerateFetch";
 import {
@@ -9,7 +9,8 @@ import {
   type DungeonMapRoom,
   type MapPaintMode,
 } from "@/lib/dungeonMapCanvas";
-import { buildAsciiDungeonMap, downloadAsciiMap, type AsciiMapMode } from "@/lib/dungeonAsciiMap";
+import { buildAsciiDungeonMap, downloadAsciiMap, type AsciiDensity, type AsciiMapMode } from "@/lib/dungeonAsciiMap";
+import { downloadAsciiPng } from "@/lib/dungeonAsciiCanvas";
 import DungeonForge from "@/components/dungeon-forge/DungeonForge";
 import { ForgeMonsterLink, ForgeTreasureItemLine } from "@/components/dungeon/ForgeReferenceLinks";
 
@@ -29,19 +30,28 @@ export default function DungeonsPage() {
 
   return (
     <div className="flex flex-col min-h-0">
-      <div className="px-6 py-4 border-b border-gray-800 bg-dnd-dark flex items-center justify-between shrink-0">
+      <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-800 bg-dnd-dark flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between shrink-0">
         <div>
-          <h1 className="font-display font-bold text-2xl text-dnd-gold">AI Adventure Generator</h1>
+          <h1 className="font-display font-bold text-xl sm:text-2xl text-dnd-gold">AI Adventure Generator</h1>
           <p className="text-xs text-gray-500">Dungeon Forge, procedural maps, and GPU-backed AI</p>
         </div>
-        <div className="flex gap-1 p-1 bg-gray-900 rounded-lg flex-wrap justify-end">
+        <div className="flex gap-1 p-1 bg-gray-900 rounded-lg flex-wrap justify-start sm:justify-end w-full sm:w-auto">
           {(["forge", "generator", "dungeons", "stories"] as GenTab[]).map((t) => (
-            <button key={t} onClick={() => setTab(t)}
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              title={TAB_LABELS[t]}
               className={clsx(
-                "px-3 py-1.5 rounded font-display font-semibold text-sm transition-colors",
-                tab === t ? "bg-dnd-red text-white" : "text-gray-400 hover:text-white"
-              )}>
-              {TAB_LABELS[t]}
+                "flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded font-display font-semibold text-xs sm:text-sm transition-colors min-h-[2.75rem] sm:min-h-0",
+                tab === t ? "bg-dnd-red text-white" : "text-gray-400 hover:text-white",
+              )}
+            >
+              {t === "forge" && <Wand2 size={14} className="shrink-0 sm:hidden" />}
+              {t === "generator" && <Sliders size={14} className="shrink-0 sm:hidden" />}
+              {t === "dungeons" && <Library size={14} className="shrink-0 sm:hidden" />}
+              {t === "stories" && <BookOpen size={14} className="shrink-0 sm:hidden" />}
+              <span>{TAB_LABELS[t]}</span>
             </button>
           ))}
         </div>
@@ -51,12 +61,9 @@ export default function DungeonsPage() {
         className={clsx(
           "flex flex-col min-h-0",
           tab === "forge" ? "overflow-hidden flex-1" : "p-4 pb-10",
+          tab === "forge" &&
+            "h-[calc(100dvh-var(--app-header-h)-var(--app-subnav-h)-var(--safe-top,0px)-var(--safe-bottom,0px))] max-h-[calc(100dvh-var(--app-header-h)-var(--app-subnav-h)-var(--safe-top,0px)-var(--safe-bottom,0px))] md:h-[calc(100dvh-var(--app-header-h)-var(--safe-top,0px))] md:max-h-[calc(100dvh-var(--app-header-h)-var(--safe-top,0px))] w-full overflow-hidden",
         )}
-        style={
-          tab === "forge"
-            ? { height: "calc(100dvh - 6.25rem)", maxHeight: "calc(100dvh - 6.25rem)" }
-            : undefined
-        }
       >
         {tab === "forge" && <DungeonForge />}
         {tab === "generator" && <GeneratorPanel />}
@@ -574,8 +581,16 @@ function DungeonAsciiMapPanel({
   mode: AsciiMapMode;
   exportBaseName: string;
 }) {
-  const ascii = useMemo(() => buildAsciiDungeonMap(rooms, { mode }), [rooms, mode]);
+  const [asciiDensity, setAsciiDensity] = useState<AsciiDensity>(1);
+  const ascii = useMemo(() => buildAsciiDungeonMap(rooms, { mode, density: asciiDensity }), [rooms, mode, asciiDensity]);
   const [copied, setCopied] = useState(false);
+  const [asciiSize, setAsciiSize] = useState<"small" | "normal" | "large">("small");
+  const asciiPreClass =
+    asciiSize === "small"
+      ? "text-[8px] leading-[1.1]"
+      : asciiSize === "normal"
+        ? "text-[11px] leading-[1.15]"
+        : "text-[14px] leading-[1.2]";
 
   if (!ascii.mapOnly) return null;
 
@@ -597,7 +612,35 @@ function DungeonAsciiMapPanel({
         <h4 className="font-display font-bold text-dnd-gold flex items-center gap-2">
           Logical ASCII map
         </h4>
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1.5 items-center">
+          <span className="text-[10px] text-gray-500 font-display uppercase tracking-wide">Density</span>
+          {([1, 2, 4] as const).map((d) => (
+            <button
+              key={d}
+              type="button"
+              className={clsx(
+                "text-[10px] px-2 py-1 rounded font-display",
+                asciiDensity === d ? "bg-dnd-red text-white" : "bg-gray-800 text-gray-300 hover:bg-gray-700",
+              )}
+              onClick={() => setAsciiDensity(d)}
+            >
+              {d}x
+            </button>
+          ))}
+          <span className="text-[10px] text-gray-500 font-display uppercase tracking-wide">Size</span>
+          {(["small", "normal", "large"] as const).map((sz) => (
+            <button
+              key={sz}
+              type="button"
+              className={clsx(
+                "text-[10px] px-2 py-1 rounded font-display capitalize",
+                asciiSize === sz ? "bg-dnd-red text-white" : "bg-gray-800 text-gray-300 hover:bg-gray-700",
+              )}
+              onClick={() => setAsciiSize(sz)}
+            >
+              {sz}
+            </button>
+          ))}
           <button
             type="button"
             className="text-xs px-2 py-1 rounded bg-gray-800 text-gray-200 hover:bg-gray-700 flex items-center gap-1 font-display"
@@ -612,6 +655,26 @@ function DungeonAsciiMapPanel({
           >
             <Download size={12} /> .txt
           </button>
+          <button
+            type="button"
+            className="text-xs px-2 py-1 rounded bg-gray-800 text-gray-200 hover:bg-gray-700 flex items-center gap-1 font-display"
+            onClick={() =>
+              downloadAsciiPng(
+                ascii.mapOnly.split("\n"),
+                {
+                  fontFamily: "JetBrains Mono, Fira Code, ui-monospace, Menlo, monospace",
+                  fontSizePx: 8,
+                  lineHeight: 1.15,
+                  fg: "#0a0a0a",
+                  bg: "#fafafa",
+                  dpr: Math.max(2, typeof window !== "undefined" ? window.devicePixelRatio || 2 : 2),
+                },
+                `${exportBaseName}-ascii4k-${tag}.png`,
+              )
+            }
+          >
+            <Download size={12} /> 4K PNG
+          </button>
         </div>
       </div>
       <p className="text-xs text-gray-500 mb-2">
@@ -619,7 +682,10 @@ function DungeonAsciiMapPanel({
         lists each room. {mode === "player" ? "No secret-door hints or hazard icons on the map." : "DM: doors (+), secret hints (S), traps, loot, encounters."}
       </p>
       <pre
-        className="text-[11px] leading-[1.15] text-amber-100/95 bg-black/90 border border-gray-700 rounded p-3 overflow-auto max-h-[min(55vh,520px)] font-mono whitespace-pre select-all"
+        className={clsx(
+          asciiPreClass,
+          "text-amber-100/95 bg-black/90 border border-gray-700 rounded p-3 overflow-auto max-h-[min(55vh,520px)] font-mono whitespace-pre select-all",
+        )}
         aria-label="ASCII dungeon map"
       >
         {ascii.text}

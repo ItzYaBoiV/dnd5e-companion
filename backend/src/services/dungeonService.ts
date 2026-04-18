@@ -2,6 +2,7 @@ import { prisma } from "../config/database";
 import { AppError, NotFoundError } from "../middleware/errorHandler";
 import { generate } from "./aiService";
 import { generateProceduralRooms } from "./proceduralDungeonLayout";
+import { parseCr } from "./monsterService";
 
 // ── Shared system prompt ──────────────────────────────────────────
 const SYSTEM = `You are an expert Dungeons & Dragons 5th Edition Dungeon Master
@@ -72,14 +73,23 @@ export async function createProceduralDungeon(opts: {
   roomCount: number;
   mapSeed?: number | string | null;
 }) {
-  const pool = monsterPoolForLevels(opts.levelMin, opts.levelMax);
+  const poolSlugs = monsterPoolForLevels(opts.levelMin, opts.levelMax);
+  const rows = await prisma.monster.findMany({
+    where: { slug: { in: poolSlugs } },
+    select: { slug: true, challengeRating: true },
+  });
+  const bySlug = new Map(rows.map((r) => [r.slug, r]));
+  const monsterPool = poolSlugs.map((slug) => ({
+    slug,
+    cr: parseCr(bySlug.get(slug)?.challengeRating ?? "0"),
+  }));
   const gen = generateProceduralRooms({
     theme: opts.theme,
     roomCount: opts.roomCount,
     difficulty: opts.difficulty,
     levelMin: opts.levelMin,
     levelMax: opts.levelMax,
-    monsterPool: pool,
+    monsterPool,
     mapSeed: opts.mapSeed,
   });
 
@@ -114,6 +124,66 @@ export async function createProceduralDungeon(opts: {
           treasures: r.treasures ?? undefined,
           features: r.features ?? undefined,
           notes: r.notes ?? "",
+        })),
+      },
+    },
+    include: { rooms: true },
+  });
+}
+
+/** Persist a Dungeon Forge floor into the library (minimal room rows for canvas / list). */
+export async function saveForgeMapToLibrary(body: {
+  seed: number;
+  locationType: string;
+  levelMin: number;
+  levelMax: number;
+  mapName: string;
+  rooms: Array<{
+    id: number;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    type?: string;
+    label?: string;
+  }>;
+  width?: number;
+  height?: number;
+}) {
+  const name = body.mapName?.trim() || `Forge ${body.locationType}`;
+  const seed = Number.isFinite(body.seed) ? Math.trunc(body.seed) >>> 0 : 0;
+  return prisma.dungeon.create({
+    data: {
+      name: name.slice(0, 200),
+      description: `Saved from Map forge (${body.locationType}, seed ${seed}).`,
+      theme: body.locationType.slice(0, 120),
+      difficulty: "medium",
+      levelMin: Math.max(1, Math.min(20, body.levelMin)),
+      levelMax: Math.max(1, Math.min(20, body.levelMax)),
+      story:
+        "This layout was exported from Dungeon Forge. Open rooms below for positions; use the seed in Map forge to regenerate the same map.",
+      npcs: [],
+      aiGenerated: false,
+      mapSeed: seed,
+      rooms: {
+        create: body.rooms.map((r) => ({
+          layoutId: `forge_${r.id}`,
+          name: String(r.label || r.type || `Room ${r.id}`).slice(0, 200),
+          playerLabel: "",
+          playerDescription: "",
+          description: `Forge room ${r.id} (${r.w}×${r.h} cells)${r.type ? ` — ${r.type}` : ""}.`,
+          dmSecrets: "",
+          x: r.x,
+          y: r.y,
+          width: Math.max(1, r.w),
+          height: Math.max(1, r.h),
+          type: "chamber",
+          exits: {},
+          monsters: [],
+          traps: undefined,
+          treasures: undefined,
+          features: undefined,
+          notes: "",
         })),
       },
     },

@@ -6,6 +6,7 @@ import CharacterSheetPage   from "@/pages/CharacterSheetPage";
 import CharacterCreationPage from "@/pages/CharacterCreationPage";
 import ReferencePage        from "@/pages/ReferencePage";
 import PlayPage             from "@/pages/PlayPage";
+import PlayMonsterPage      from "@/pages/PlayMonsterPage";
 import DungeonsPage         from "@/pages/DungeonsPage";
 import MonstersPage         from "@/pages/MonstersPage";
 
@@ -23,6 +24,7 @@ export default function App() {
             <Route path="/characters"        element={<CharacterListPage />} />
             <Route path="/characters/new"    element={<CharacterCreationPage />} />
             <Route path="/characters/:id"    element={<CharacterSheetPage />} />
+            <Route path="/play/monster/:slug" element={<PlayMonsterPage />} />
             <Route path="/play"              element={<PlayPage />} />
             <Route path="/dungeons"          element={<DungeonsPage />} />
             <Route path="/monsters"          element={<MonstersPage />} />

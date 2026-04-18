@@ -5,7 +5,16 @@ import { referenceApi } from "@/services/api";
 import { Modal } from "@/components/common";
 
 /** Opens Monster Manual with this creature selected (see MonstersPage + `openMonsterSlug` state). */
-export function ForgeMonsterLink({ slug, count }: { slug: string; count?: number }) {
+export function ForgeMonsterLink({
+  slug,
+  count,
+  onOpenPeek,
+}: {
+  slug: string;
+  count?: number;
+  /** When set, primary click opens a peek handler instead of navigating away. */
+  onOpenPeek?: (slug: string) => void;
+}) {
   const navigate = useNavigate();
   const clean = (slug ?? "").trim();
   if (!clean) return <span className="text-gray-500">—</span>;
@@ -13,9 +22,9 @@ export function ForgeMonsterLink({ slug, count }: { slug: string; count?: number
   return (
     <button
       type="button"
-      onClick={() => navigate("/monsters", { state: { openMonsterSlug: clean } })}
+      onClick={() => (onOpenPeek ? onOpenPeek(clean) : navigate("/monsters", { state: { openMonsterSlug: clean } }))}
       className="font-semibold text-red-300 hover:text-red-200 underline decoration-red-900/50 underline-offset-2 text-left"
-      title="Open stat block in Monster Manual"
+      title={onOpenPeek ? "Open stat card" : "Open stat block in Monster Manual"}
     >
       {count != null ? `${count}× ` : ""}
       <span className="capitalize">{label}</span>

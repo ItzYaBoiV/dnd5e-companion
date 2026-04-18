@@ -1,10 +1,18 @@
 /**
  * High-quality logical ASCII / Unicode dungeon maps from the same room graph as the canvas.
- * One character per grid cell of the dungeon layout; box-drawing border; doors from exits.
+ *
+ * **Density ladder**
+ * - `density: 1` — one Unicode character per layout cell (default, backward compatible).
+ * - `density: 2` — pairs of map rows merged with half-blocks (▀▄█) for a shorter, bolder wall read.
+ * - `density: 4` — each cell supersampled to a 4×4 fine mask, packed into quadrant block characters (~2× linear size).
+ *
+ * Example: `buildAsciiDungeonMap(rooms, { mode: "dm", density: 4 })` for a finer wall mesh before PNG export.
  */
 
 import type { DungeonMapRoom } from "./dungeonMapCanvas";
+import { applyAsciiDensity, type AsciiDensity } from "./dungeonAsciiDensity";
 
+export type { AsciiDensity };
 export type AsciiMapMode = "dm" | "player";
 
 const ROOM_MARKERS = "123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -165,9 +173,17 @@ export type AsciiDungeonMapResult = {
 /**
  * Build ASCII/Unicode map. Uses logical dungeon cells (same as canvas); walls drawn in void around rooms.
  */
+function roomTheme(r: DungeonMapRoom): string | null {
+  const t = r.theme?.trim() || r.themeTag?.trim();
+  if (t) return t;
+  const lm = r.features?.layoutMeta;
+  const x = lm?.themeTag?.trim();
+  return x || null;
+}
+
 export function buildAsciiDungeonMap(
   rooms: DungeonMapRoom[],
-  opts: { mode: AsciiMapMode; maxLineWidth?: number },
+  opts: { mode: AsciiMapMode; maxLineWidth?: number; density?: AsciiDensity },
 ): AsciiDungeonMapResult {
   const ordered = sortedRooms(rooms);
   const g = buildOccupancy(ordered);
@@ -336,29 +352,48 @@ export function buildAsciiDungeonMap(
     chars.push(row);
   }
 
-  const mapLines = chars.map((row) => row.join(""));
-  const mapOnly = mapLines.join("\n");
+  const density: AsciiDensity = opts.density ?? 1;
+  const mapLineArray = chars.map((row) => row.join(""));
+  const denseLines = applyAsciiDensity(mapLineArray, density);
+  const mapOnly = denseLines.join("\n");
 
   const legendLines: string[] = ["── Legend ──"];
-  ordered.forEach((r, i) => {
-    const mk = ROOM_MARKERS[i] ?? "?";
-    const dmName = String(r.name ?? "Room").trim();
-    const pl = String(r.playerLabel ?? "").trim();
-    const label = opts.mode === "player" && pl ? pl : dmName;
-    const type = String(r.type ?? "chamber");
-    let extra = "";
-    if (opts.mode === "dm") {
-      const bits: string[] = [];
-      if (r.traps || type === "trap") bits.push("hazard");
-      if (Array.isArray(r.monsters) && r.monsters.length > 0) bits.push("encounter");
-      if (r.treasures && ((r.treasures.gold ?? 0) > 0 || (r.treasures.items?.length ?? 0) > 0)) bits.push("loot");
-      const f = r.features as { secretDoors?: unknown[]; hiddenStashes?: unknown[] } | undefined;
-      if (f?.secretDoors?.length) bits.push("secret door");
-      if (f?.hiddenStashes?.length) bits.push("hidden stash");
-      if (bits.length) extra = `  [${bits.join(", ")}]`;
-    }
-    legendLines.push(`  ${mk}  ${label}  (${type})${extra}`);
+  const themeBuckets = new Map<string, DungeonMapRoom[]>();
+  ordered.forEach((r) => {
+    const tg = roomTheme(r) ?? "_ungrouped";
+    const arr = themeBuckets.get(tg) ?? [];
+    arr.push(r);
+    themeBuckets.set(tg, arr);
   });
+  const orderedThemes = [...themeBuckets.keys()].sort((a, b) => a.localeCompare(b));
+  for (const tg of orderedThemes) {
+    const list = themeBuckets.get(tg)!;
+    if (tg !== "_ungrouped" && opts.mode === "dm") {
+      legendLines.push(`  — ${tg} —`);
+    }
+    list.forEach((r) => {
+      const i = ordered.indexOf(r);
+      const mk = ROOM_MARKERS[i] ?? "?";
+      const dmName = String(r.name ?? r.namedRoom ?? "Room").trim();
+      const pl = String(r.playerLabel ?? "").trim();
+      const label = opts.mode === "player" && pl ? pl : dmName;
+      const type = String(r.type ?? "chamber");
+      const depth = r.depth ?? r.features?.layoutMeta?.depth;
+      const depthS = typeof depth === "number" ? `  d${depth}` : "";
+      let extra = "";
+      if (opts.mode === "dm") {
+        const bits: string[] = [];
+        if (r.traps || type === "trap") bits.push("hazard");
+        if (Array.isArray(r.monsters) && r.monsters.length > 0) bits.push("encounter");
+        if (r.treasures && ((r.treasures.gold ?? 0) > 0 || (r.treasures.items?.length ?? 0) > 0)) bits.push("loot");
+        const f = r.features as { secretDoors?: unknown[]; hiddenStashes?: unknown[] } | undefined;
+        if (f?.secretDoors?.length) bits.push("secret door");
+        if (f?.hiddenStashes?.length) bits.push("hidden stash");
+        if (bits.length) extra = `  [${bits.join(", ")}]`;
+      }
+      legendLines.push(`  ${mk}  ${label}  (${type})${depthS}${extra}`);
+    });
+  }
   if (opts.mode === "dm") {
     legendLines.push("  +  door   S  secret (DM)   !  trap   ◆  treasure   ✦  stash   ⚔  encounter");
     legendLines.push("  ·  floor   lines  outer walls");
@@ -369,8 +404,8 @@ export function buildAsciiDungeonMap(
   const legend = legendLines.join("\n");
   const text = `${mapOnly}\n\n${legend}`;
 
-  const width = g.w;
-  const height = g.h;
+  const width = denseLines[0] ? [...denseLines[0]!].length : 0;
+  const height = denseLines.length;
 
   return { text, mapOnly, legend, width, height };
 }

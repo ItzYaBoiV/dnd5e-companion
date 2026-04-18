@@ -3,7 +3,7 @@
  * Resolves item slugs against your DB (with alternates); falls back to custom names.
  */
 
-import type { StartingInventoryDraftRow } from "@/types/dnd";
+import type { Item, StartingInventoryDraftRow } from "@/types/dnd";
 
 export type KitLine =
   | {
@@ -631,4 +631,44 @@ export async function resolveKitToDraft(
     if (missedSlug) missedSlugs.push(missedSlug);
   }
   return { rows, missedSlugs };
+}
+
+/**
+ * Mark armor, shields, and real weapons equipped so AC / attack summaries work immediately.
+ */
+export async function applyAutoEquipToStartingRows(
+  rows: StartingInventoryDraftRow[],
+  fetchFullItem: (slug: string) => Promise<Item | null>,
+): Promise<StartingInventoryDraftRow[]> {
+  const out: StartingInventoryDraftRow[] = [];
+  for (const row of rows) {
+    const slug = row.itemSlug?.trim();
+    if (!slug) {
+      out.push(row);
+      continue;
+    }
+    const item = await fetchFullItem(slug);
+    if (!item) {
+      out.push(row);
+      continue;
+    }
+    const cat = item.category.trim().toLowerCase();
+    let equipped = false;
+    if (cat === "armor") {
+      equipped = true;
+    } else if (cat === "weapon") {
+      if (!item.damageDice?.trim()) {
+        equipped = false;
+      } else {
+        const sub = (item.subcategory ?? "").toLowerCase();
+        const propsLower = (item.properties ?? []).map((p) => p.toLowerCase());
+        const isAmmo =
+          sub.includes("ammunition") ||
+          propsLower.some((p) => p.includes("ammunition"));
+        equipped = !isAmmo;
+      }
+    }
+    out.push({ ...row, equipped });
+  }
+  return out;
 }

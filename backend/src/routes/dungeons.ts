@@ -7,6 +7,7 @@ dungeonRouter.get("/jobs/:id",            ctrl.getGenerationJob);
 dungeonRouter.get("/dungeons",            ctrl.listDungeons);
 dungeonRouter.post("/dungeons/generate",            ctrl.generateDungeon);
 dungeonRouter.post("/dungeons/generate-procedural", ctrl.generateProceduralDungeon);
+dungeonRouter.post("/dungeons/save-forge", ctrl.saveForgeDungeon);
 dungeonRouter.get("/dungeons/:id",        ctrl.getDungeon);
 dungeonRouter.delete("/dungeons/:id",     ctrl.deleteDungeon);
 dungeonRouter.get("/stories",             ctrl.listStories);
