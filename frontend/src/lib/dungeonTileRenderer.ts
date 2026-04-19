@@ -5,7 +5,7 @@
 
 import type { BattleToken, SceneLight } from "@/lib/playerMapBroadcast";
 import { collectTorchFixtureLights, computeOccludedLightDarkness } from "@/lib/dungeonLightOcclusion";
-import { publicAssetUrl } from "@/lib/tokenSprites";
+import { monsterTokenSprite, publicAssetUrl } from "@/lib/tokenSprites";
 
 export type TilePalette = {
   void: string;
@@ -75,6 +75,8 @@ export type RenderTileOpts = {
   battleTokens?: BattleToken[] | null;
   /** Loaded images for `BattleToken.portraitUrl` / `spriteUrl` (keyed by URL). */
   tokenImages?: Map<string, HTMLImageElement> | null;
+  /** Loaded monster SVGs for scripted map entities (`cell.eType === "monster"` + `slug`), keyed like `tokenImages`. */
+  entityTokenImages?: Map<string, HTMLImageElement> | null;
   /**
    * Draw a sight ring (grid radius) around **player** tokens instead of relying on volumetric lights.
    * Used on DM + player TV for performance.
@@ -257,6 +259,7 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
         sanitize,
         hideDeco,
         animPhase,
+        opts.entityTokenImages ?? null,
       );
 
       if (lightDarkBuf) {
@@ -775,6 +778,7 @@ function drawOverlays(
   sanitize: boolean,
   hideDeco: Set<string>,
   animPhase: number,
+  entityTokenImages: Map<string, HTMLImageElement> | null,
 ): void {
   const hideEntity =
     !showEnts &&
@@ -805,22 +809,43 @@ function drawOverlays(
           : cell.eType === "item"
             ? ep.item
             : ep.riddle;
-    ctx.globalAlpha = 0.25;
-    ctx.fillStyle = bg;
-    ctx.beginPath();
-    ctx.arc(cx, cy, radius * 1.4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = bg;
-    ctx.beginPath();
-    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    ctx.fill();
-    if (s >= 10) {
-      ctx.fillStyle = "#ffffff";
-      ctx.font = `bold ${Math.floor(s * 0.55)}px monospace`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(cell.ch, cx, cy + 1);
+
+    let drewMonsterSprite = false;
+    if (cell.eType === "monster" && entityTokenImages && cell.extra && typeof cell.extra === "object") {
+      const slug = (cell.extra as { slug?: string }).slug;
+      if (slug) {
+        const url = publicAssetUrl(monsterTokenSprite(String(slug)));
+        const img = entityTokenImages.get(url);
+        if (img && img.complete && img.naturalWidth > 0) {
+          ctx.globalAlpha = 0.35;
+          ctx.fillStyle = bg;
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius * 1.45, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+          drewMonsterSprite = drawTokenImageInCircle(ctx, cx, cy, radius * 1.05, img);
+        }
+      }
+    }
+
+    if (!drewMonsterSprite) {
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = bg;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius * 1.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = bg;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.fill();
+      if (s >= 10) {
+        ctx.fillStyle = "#ffffff";
+        ctx.font = `bold ${Math.floor(s * 0.55)}px monospace`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(cell.ch, cx, cy + 1);
+      }
     }
     return;
   }

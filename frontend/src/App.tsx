@@ -27,6 +27,7 @@ export default function App() {
             <Route path="/characters/:id"    element={<CharacterSheetPage />} />
             <Route path="/play/monster/:slug" element={<PlayMonsterPage />} />
             <Route path="/play"              element={<PlayPage />} />
+            <Route path="/encounters"        element={<Navigate to="/play" replace />} />
             <Route path="/dungeons"          element={<DungeonsPage />} />
             <Route path="/monsters"          element={<MonstersPage />} />
             <Route path="/reference"         element={<ReferencePage />} />

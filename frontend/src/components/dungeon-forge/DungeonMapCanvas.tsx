@@ -7,6 +7,7 @@ import {
 } from "@/lib/dungeonTileRenderer";
 import type { BattleToken, SceneLight } from "@/lib/playerMapBroadcast";
 import { useBattleTokenImages } from "@/lib/useBattleTokenImages";
+import { useMapEntityTokenImages } from "@/lib/useMapEntityTokenImages";
 
 export type DungeonMapCanvasProps = {
   grid: RenderCell[][];
@@ -30,7 +31,20 @@ export type DungeonMapCanvasProps = {
   className?: string;
   style?: React.CSSProperties;
   onCellClick?: (x: number, y: number, cell: RenderCell) => void;
-  onCellHover?: (x: number, y: number, cell: RenderCell | null) => void;
+  onCellHover?: (
+    x: number,
+    y: number,
+    cell: RenderCell | null,
+    pointer?: { clientX: number; clientY: number },
+  ) => void;
+  /** Right-click on a player battle token (world grid coords). */
+  onPlayerTokenContextMenu?: (payload: {
+    tokenId: string;
+    worldGx: number;
+    worldGy: number;
+    clientX: number;
+    clientY: number;
+  }) => void;
   /** Sight ring radius in grid cells (player tokens); avoids volumetric token lights. */
   playerSightRingCells?: number | null;
   tokenDragEnabled?: boolean;
@@ -54,6 +68,7 @@ export type DungeonMapCanvasProps = {
       tokensHere: BattleToken[];
       clientX: number;
       clientY: number;
+      cell: RenderCell;
     } | null,
   ) => void;
   /**
@@ -61,6 +76,19 @@ export type DungeonMapCanvasProps = {
    * Token drag wins when over a token.
    */
   mapPanEnabled?: boolean;
+  /**
+   * When provided with `onMapViewportPanChange`, pan updates the parent transform instead of scrolling.
+   */
+  mapViewportPan?: { x: number; y: number };
+  onMapViewportPanChange?: (pan: { x: number; y: number }) => void;
+  /** Right-click on a scripted map tile (loot / creature / trap / riddle marker). */
+  onMapCellContextMenu?: (payload: {
+    worldGx: number;
+    worldGy: number;
+    cell: RenderCell;
+    clientX: number;
+    clientY: number;
+  }) => void;
 };
 
 function DungeonMapCanvasInner({
@@ -91,6 +119,10 @@ function DungeonMapCanvasInner({
   onTokenDragEnd,
   onTokensAtCell,
   mapPanEnabled,
+  onPlayerTokenContextMenu,
+  mapViewportPan,
+  onMapViewportPanChange,
+  onMapCellContextMenu,
 }: DungeonMapCanvasProps) {
   const ox = worldOffset?.x ?? 0;
   const oy = worldOffset?.y ?? 0;
@@ -105,10 +137,15 @@ function DungeonMapCanvasInner({
   const didDragRef = useRef(false);
   const suppressClickRef = useRef(false);
   const [isDraggingToken, setIsDraggingToken] = useState(false);
-  const mapPanRef = useRef<{ sl: number; st: number; x: number; y: number } | null>(null);
+  const mapPanRef = useRef<
+    | { kind: "scroll"; sl: number; st: number; x: number; y: number }
+    | { kind: "delta"; panX: number; panY: number; sx: number; sy: number }
+    | null
+  >(null);
   const [isPanningMap, setIsPanningMap] = useState(false);
   const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
   const { images: tokenImages, version: tokenImagesVersion } = useBattleTokenImages(battleTokens);
+  const { images: entityTokenImages, version: entityTokenImagesVersion } = useMapEntityTokenImages(grid);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -130,6 +167,7 @@ function DungeonMapCanvasInner({
       sceneLights: sceneLights ?? null,
       battleTokens: battleTokens ?? null,
       tokenImages,
+      entityTokenImages,
       inkSaver: false,
       playerSightRingCells: playerSightRingCells ?? null,
     });
@@ -151,6 +189,7 @@ function DungeonMapCanvasInner({
     sceneLights,
     battleTokens,
     tokenImagesVersion,
+    entityTokenImagesVersion,
     playerSightRingCells,
   ]);
 
@@ -215,18 +254,29 @@ function DungeonMapCanvasInner({
       const p = mapPanRef.current;
       const canvas = canvasRef.current;
       if (!p || !canvas) return;
-      const sp = canvas.closest("[data-dm-map-viewport]") as HTMLElement | null;
-      if (!sp) return;
-      sp.scrollLeft = p.sl - (ev.clientX - p.x);
-      sp.scrollTop = p.st - (ev.clientY - p.y);
+      if (p.kind === "delta" && onMapViewportPanChange) {
+        onMapViewportPanChange({
+          x: p.panX + (ev.clientX - p.sx),
+          y: p.panY + (ev.clientY - p.sy),
+        });
+        return;
+      }
+      if (p.kind === "scroll") {
+        const sp = canvas.closest("[data-dm-map-viewport]") as HTMLElement | null;
+        if (!sp) return;
+        sp.scrollLeft = p.sl - (ev.clientX - p.x);
+        sp.scrollTop = p.st - (ev.clientY - p.y);
+      }
     };
-    const onUp = (ev: MouseEvent) => {
+    const onUp = (ev: Event) => {
       const p = mapPanRef.current;
       mapPanRef.current = null;
       setIsPanningMap(false);
-      if (p) {
-        const dx = ev.clientX - p.x;
-        const dy = ev.clientY - p.y;
+      if (p && ev instanceof MouseEvent) {
+        const sx = p.kind === "scroll" ? p.x : p.sx;
+        const sy = p.kind === "scroll" ? p.y : p.sy;
+        const dx = ev.clientX - sx;
+        const dy = ev.clientY - sy;
         if (dx * dx + dy * dy > 25) suppressClickRef.current = true;
       }
     };
@@ -238,7 +288,7 @@ function DungeonMapCanvasInner({
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("blur", onUp);
     };
-  }, [isPanningMap]);
+  }, [isPanningMap, onMapViewportPanChange]);
 
   const hoverCursor =
     tokenDragEnabled &&
@@ -280,12 +330,30 @@ function DungeonMapCanvasInner({
           return;
         }
         if (mapPanEnabled && !suppressTokenInteraction) {
-          const canvas = canvasRef.current;
-          const sp = canvas?.closest("[data-dm-map-viewport]") as HTMLElement | null;
-          if (sp) {
-            mapPanRef.current = { sl: sp.scrollLeft, st: sp.scrollTop, x: e.clientX, y: e.clientY };
+          if (onMapViewportPanChange && mapViewportPan) {
+            mapPanRef.current = {
+              kind: "delta",
+              panX: mapViewportPan.x,
+              panY: mapViewportPan.y,
+              sx: e.clientX,
+              sy: e.clientY,
+            };
             setIsPanningMap(true);
             e.preventDefault();
+          } else {
+            const canvas = canvasRef.current;
+            const sp = canvas?.closest("[data-dm-map-viewport]") as HTMLElement | null;
+            if (sp) {
+              mapPanRef.current = {
+                kind: "scroll",
+                sl: sp.scrollLeft,
+                st: sp.scrollTop,
+                x: e.clientX,
+                y: e.clientY,
+              };
+              setIsPanningMap(true);
+              e.preventDefault();
+            }
           }
         }
       }}
@@ -297,12 +365,46 @@ function DungeonMapCanvasInner({
         const r = cellFromEvent(e);
         if (r) onCellClick?.(r.x, r.y, r.cell);
       }}
+      onContextMenu={(e) => {
+        if (suppressTokenInteraction) return;
+        const r = cellFromEvent(e);
+        if (!r) return;
+        const lx = r.x - ox;
+        const ly = r.y - oy;
+        const top = pickTopTokenAtLocal(lx, ly);
+        if (top?.kind === "player" && top.id && onPlayerTokenContextMenu) {
+          e.preventDefault();
+          onPlayerTokenContextMenu({
+            tokenId: top.id,
+            worldGx: r.x,
+            worldGy: r.y,
+            clientX: e.clientX,
+            clientY: e.clientY,
+          });
+          return;
+        }
+        const et = r.cell.eType;
+        if (
+          onMapCellContextMenu &&
+          et &&
+          (et === "monster" || et === "item" || et === "trap" || et === "riddle")
+        ) {
+          e.preventDefault();
+          onMapCellContextMenu({
+            worldGx: r.x,
+            worldGy: r.y,
+            cell: r.cell,
+            clientX: e.clientX,
+            clientY: e.clientY,
+          });
+        }
+      }}
       onMouseMove={(e) => {
         if (isPanningMap) return;
         const r = cellFromEvent(e);
         const hx = r ? r.x : -1;
         const hy = r ? r.y : -1;
-        onCellHover?.(hx, hy, r?.cell ?? null);
+        onCellHover?.(hx, hy, r?.cell ?? null, { clientX: e.clientX, clientY: e.clientY });
 
         if (isDraggingToken && dragRef.current && r && onTokenDragTo) {
           const d = dragRef.current;
@@ -323,6 +425,7 @@ function DungeonMapCanvasInner({
             tokensHere: tokensAtLocal(lx, ly),
             clientX: e.clientX,
             clientY: e.clientY,
+            cell: r.cell,
           });
         } else if (!suppressTokenInteraction) {
           onTokensAtCell?.(null);

@@ -6,7 +6,7 @@ import { clsx } from "clsx";
 
 const NAV = [
   { to: "/characters", icon: Users, label: "Characters", shortLabel: "Chars", description: "Create and edit player characters." },
-  { to: "/play", icon: Swords, label: "Play (DM)", shortLabel: "Play", description: "Generate a map, pick your party, run the fight." },
+  { to: "/play", icon: Swords, label: "Play (DM)", shortLabel: "Play", description: "Map, party, battle map, and rolls." },
   { to: "/dungeons", icon: Map, label: "Map Library", shortLabel: "Library", description: "Author and save maps for re-use." },
   { to: "/monsters", icon: Skull, label: "Monsters", shortLabel: "Monsters", description: "Browse the monster compendium." },
   { to: "/reference/spells", icon: BookOpen, label: "Reference", shortLabel: "Ref", description: "Spells, rules, and quick reference." },

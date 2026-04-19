@@ -14,25 +14,52 @@ export function greedyStepToward(
   const H = grid.length;
   const W = grid[0]?.length ?? 0;
   if (W < 1 || H < 1) return null;
-  const dx = Math.sign(to.gx - fx);
-  const dy = Math.sign(to.gy - fy);
-  const preferX = Math.abs(to.gx - fx) >= Math.abs(to.gy - fy);
-  const tryOrder = preferX
-    ? [
-        [fx + dx, fy],
-        [fx, fy + dy],
-      ]
-    : [
-        [fx, fy + dy],
-        [fx + dx, fy],
-      ];
-  for (const [nx, ny] of tryOrder) {
+  const ortho: [number, number][] = [
+    [fx + 1, fy],
+    [fx - 1, fy],
+    [fx, fy + 1],
+    [fx, fy - 1],
+  ];
+  type Cand = { nx: number; ny: number; dist: number };
+  const cands: Cand[] = [];
+  for (const [nx, ny] of ortho) {
     if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
     const tile = grid[ny]![nx]!;
     if (!isDungeonGridWalkable(tile)) continue;
     const nk = `${nx},${ny}`;
     if (occupied.has(nk) && nk !== selfKey) continue;
-    return { gx: nx, gy: ny };
+    const dist = Math.abs(to.gx - nx) + Math.abs(to.gy - ny);
+    cands.push({ nx, ny, dist });
   }
-  return null;
+  if (cands.length === 0) return null;
+  cands.sort((a, b) => a.dist - b.dist || a.nx - b.nx || a.ny - b.ny);
+  const best = cands[0]!;
+  return { gx: best.nx, gy: best.ny };
+}
+
+/**
+ * Repeated greedy steps along walkable cells (updates `occupied` like marching).
+ * Stops at target, no progress, or max steps.
+ */
+export function walkGreedyStepsOnGrid(
+  grid: number[][],
+  from: { gx: number; gy: number },
+  to: { gx: number; gy: number },
+  occupied: Set<string>,
+  maxSteps: number,
+): { gx: number; gy: number } {
+  let x = Math.floor(from.gx);
+  let y = Math.floor(from.gy);
+  let selfKey = `${x},${y}`;
+  for (let i = 0; i < maxSteps; i++) {
+    if (x === to.gx && y === to.gy) break;
+    const step = greedyStepToward({ gx: x, gy: y }, to, grid, occupied, selfKey);
+    if (!step) break;
+    occupied.delete(selfKey);
+    selfKey = `${step.gx},${step.gy}`;
+    occupied.add(selfKey);
+    x = step.gx;
+    y = step.gy;
+  }
+  return { gx: x, gy: y };
 }

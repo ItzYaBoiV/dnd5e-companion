@@ -4,7 +4,20 @@ import type { Combatant, PlayerRollInfo, DmRollInfo } from "@/store/sessionStore
 import { characterApi } from "@/services/api";
 import type { CharacterSummary } from "@/types/dnd";
 import { LoadingSpinner, formatModifier, HPBar, Modal } from "@/components/common";
-import { Plus, Sword, Shield, Zap, RefreshCw, SkipForward, X, ChevronDown, ChevronRight, Skull } from "lucide-react";
+import {
+  Plus,
+  Sword,
+  Shield,
+  Zap,
+  RefreshCw,
+  SkipForward,
+  X,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  Skull,
+} from "lucide-react";
 import { clsx } from "clsx";
 import DungeonForge from "@/components/dungeon-forge/DungeonForge";
 import { DungeonMapCanvas } from "@/components/dungeon-forge/DungeonMapCanvas";
@@ -20,7 +33,7 @@ import {
   isOpenFloorLocation,
   maxFogHopsForLocationType,
 } from "@/lib/dungeonForgeFog";
-import { greedyStepToward } from "@/lib/dungeonGridMovement";
+import { greedyStepToward, walkGreedyStepsOnGrid } from "@/lib/dungeonGridMovement";
 import { DEFAULT_PLAYER_VISION_FOG_CELLS, PLAYER_SIGHT_RING_CELLS } from "@/lib/playerMapVision";
 import { visionRadiusCellsFromCharacter } from "@/lib/playerVisionFromCharacter";
 import {
@@ -72,7 +85,7 @@ export default function PlayPage() {
     deleteSession,
   } = useSessionStore();
   const [step, setStep] = useState<FlowStep>("map");
-  const [workspacePane, setWorkspacePane] = useState<WorkspacePane>("combat");
+  const [workspacePane, setWorkspacePane] = useState<WorkspacePane>("rolls");
   const [creatingName, setCreatingName] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [dungeonHasRooms, setDungeonHasRooms] = useState(false);
@@ -123,7 +136,7 @@ export default function PlayPage() {
       const hasDungeon = Array.isArray(j?.rooms) && j.rooms.length > 0;
       const hasParty = (activeSession.characters?.length ?? 0) > 0;
       if (hasDungeon && hasParty) setStep("workspace");
-      else if (hasDungeon && !hasParty) setStep("party");
+      else if (hasDungeon) setStep("party");
       else setStep("map");
     })();
     return () => {
@@ -143,7 +156,7 @@ export default function PlayPage() {
   const stepperItems: { id: FlowStep; label: string; done: boolean }[] = [
     { id: "map", label: "1. Map", done: step !== "map" },
     { id: "party", label: "2. Party", done: step === "workspace" },
-    { id: "workspace", label: "3. Dungeon", done: false },
+    { id: "workspace", label: "3. Battle", done: false },
   ];
 
   return (
@@ -151,7 +164,7 @@ export default function PlayPage() {
       <div className="flex shrink-0 items-center justify-between border-b border-gray-800 bg-dnd-dark px-4 py-3 sm:px-6">
         <div>
           <h1 className="font-display text-xl font-bold text-dnd-gold sm:text-2xl">DM Play Mode</h1>
-          <p className="text-xs text-gray-500">Map → party → run encounters in one workspace.</p>
+          <p className="text-xs text-gray-500">Map and party setup, then run battles from the Battle step.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {activeSession && (
@@ -254,7 +267,7 @@ export default function PlayPage() {
 }
 
 // ── Session Picker ────────────────────────────────────────────────
-function SessionPicker({
+export function SessionPicker({
   sessions,
   onSelect,
   onDelete,
@@ -462,7 +475,7 @@ function PartyStep({
             partyCharacters.length === 0 && "cursor-not-allowed opacity-50",
           )}
         >
-          Continue to Dungeon →
+          Continue to Battle →
         </button>
       </div>
     </div>
@@ -544,16 +557,68 @@ async function buildForgeMonsterCombatants(
   return monsterRows;
 }
 
+function cellBlocksPartyMarch(cell: RenderCell): boolean {
+  return (
+    cell.eType === "item" ||
+    cell.eType === "monster" ||
+    cell.eType === "riddle" ||
+    cell.eType === "trap"
+  );
+}
+
+/** Pull NdM from trap damage text like "1d10 piercing" for rolling. */
+function trapDamageDiceFromText(dmg: string | null | undefined): string | null {
+  return extractDiceNotation(String(dmg ?? ""));
+}
+
+function mapEntityCellHoverLines(cell: RenderCell | null | undefined): string[] | null {
+  if (!cell?.eType) return null;
+  if (cell.eType === "deco" || cell.eType === "label" || cell.eType === "theme") return null;
+  if (!cell.extra || typeof cell.extra !== "object") return null;
+  const ex = cell.extra as Record<string, unknown>;
+  switch (cell.eType) {
+    case "item":
+      return [
+        `Item: ${String(ex.name ?? ex.slug ?? "?")}`,
+        ...(ex.slug ? [`Ref: ${String(ex.slug)}`] : []),
+      ];
+    case "monster":
+      return [`Creature: ${String(ex.name ?? "?")}`, ...(ex.slug ? [`${String(ex.slug)}`] : [])];
+    case "trap": {
+      const lines = [
+        `Trap${ex.name ? `: ${String(ex.name)}` : ""}`,
+        [ex.detectDC, ex.saveDC].some((x) => x != null)
+          ? `Spot DC ${String(ex.detectDC ?? "—")} · ${String(ex.saveType ?? "?")} DC ${String(ex.saveDC ?? "—")}`
+          : "",
+        ex.dmg ? `Damage: ${String(ex.dmg)}` : "",
+        ex.effect ? String(ex.effect) : "",
+      ].filter((s) => s && String(s).trim() !== "");
+      return lines.length ? lines : [`Trap`];
+    }
+    case "riddle":
+      return [`Riddle`, String(ex.prompt ?? "").slice(0, 200)];
+    default:
+      return null;
+  }
+}
+
 // ── Encounter workspace (map + combat + rolls) ───────────────────
-function EncounterWorkspace({
+export function EncounterWorkspace({
   pane,
   onPaneChange,
 }: {
   pane: WorkspacePane;
   onPaneChange: (p: WorkspacePane) => void;
 }) {
-  const { activeSession, activeCombat, partyCharacters, startCombat, appendCombatantsToCombat, loadPartyChars } =
-    useSessionStore();
+  const {
+    activeSession,
+    activeCombat,
+    partyCharacters,
+    startCombat,
+    appendCombatantsToCombat,
+    loadPartyChars,
+    damageCombatant,
+  } = useSessionStore();
   const [dungeon, setDungeon] = useState<any | null>(null);
   const [selectedRoomId, setSelectedRoomId] = useState<number | null>(null);
   const [launching, setLaunching] = useState(false);
@@ -563,8 +628,16 @@ function EncounterWorkspace({
   /** DM laser dot on /dungeons/player (same browser; high-rate sync via BroadcastChannel). */
   const [laserPointerMode, setLaserPointerMode] = useState(false);
   const laserThrottleRef = useRef(0);
-  /** When false and a room is selected, the map crops to that room (like the old “zoom to room”). */
-  const [showFullMap, setShowFullMap] = useState(false);
+  /** `global` = show whole dungeon; `room` = pan/zoom to frame the selected room (grid is never cropped). */
+  const [mapCamera, setMapCamera] = useState<"global" | "room">("global");
+  const [dmSecRolls, setDmSecRolls] = useState(true);
+  const [dmSecCombat, setDmSecCombat] = useState(true);
+  const [dmSecRoom, setDmSecRoom] = useState(true);
+  const [dmRightSidebarCollapsed, setDmRightSidebarCollapsed] = useState(false);
+  const [trapMenuDamageRoll, setTrapMenuDamageRoll] = useState<DamageRollResult | null>(null);
+  const [trapDmTargetId, setTrapDmTargetId] = useState<string>("");
+  const [trapModalRoll, setTrapModalRoll] = useState<DamageRollResult | null>(null);
+  const [trapModalTargetId, setTrapModalTargetId] = useState<string>("");
   const [battleTokens, setBattleTokens] = useState<BattleToken[]>([]);
   const [placementCombatantId, setPlacementCombatantId] = useState<string | null>(null);
   const [mapEntityModal, setMapEntityModal] = useState<
@@ -572,6 +645,7 @@ function EncounterWorkspace({
     | { kind: "item"; x: number; y: number; ent: Record<string, unknown> }
     | { kind: "monster"; x: number; y: number; ent: Record<string, unknown> }
     | { kind: "riddle"; x: number; y: number; ent: Record<string, unknown> }
+    | { kind: "trap"; x: number; y: number; ent: Record<string, unknown> }
   >(null);
   const [giveQty, setGiveQty] = useState(1);
   const [giveCharId, setGiveCharId] = useState("");
@@ -580,9 +654,26 @@ function EncounterWorkspace({
   const [dmMapZoom, setDmMapZoom] = useState(1);
   const [partyLeaderId, setPartyLeaderId] = useState<string | null>(null);
   const [partyFollowIds, setPartyFollowIds] = useState<string[]>([]);
-  const [partyMarchMode, setPartyMarchMode] = useState(false);
   const [tokenHoverTip, setTokenHoverTip] = useState<{
     tokens: BattleToken[];
+    clientX: number;
+    clientY: number;
+    cell?: RenderCell | null;
+  } | null>(null);
+  const [mapCellHover, setMapCellHover] = useState<{
+    lines: string[];
+    clientX: number;
+    clientY: number;
+  } | null>(null);
+  const [marchMenu, setMarchMenu] = useState<{
+    tokenId: string;
+    clientX: number;
+    clientY: number;
+  } | null>(null);
+  const [mapEncounterMenu, setMapEncounterMenu] = useState<{
+    cell: RenderCell;
+    worldGx: number;
+    worldGy: number;
     clientX: number;
     clientY: number;
   } | null>(null);
@@ -618,13 +709,6 @@ function EncounterWorkspace({
     };
   }, []);
 
-  useEffect(() => {
-    if (!partyMarchMode && marchIntervalRef.current != null) {
-      clearInterval(marchIntervalRef.current);
-      marchIntervalRef.current = null;
-    }
-  }, [partyMarchMode]);
-
   const reloadDungeon = useCallback(() => {
     const sid = activeSession?.id;
     if (!sid) return;
@@ -656,10 +740,6 @@ function EncounterWorkspace({
     reloadDungeon();
   }, [reloadDungeon]);
 
-  useEffect(() => {
-    if (selectedRoomId != null) setShowFullMap(false);
-  }, [selectedRoomId]);
-
   const sendLaserHover = useCallback((gx: number, gy: number) => {
     const now = Date.now();
     if (now - laserThrottleRef.current < 40) return;
@@ -669,7 +749,10 @@ function EncounterWorkspace({
 
   useEffect(() => {
     if (!laserPointerMode) broadcastLaserPointer(null);
-    else setTokenHoverTip(null);
+    else {
+      setTokenHoverTip(null);
+      setMapCellHover(null);
+    }
   }, [laserPointerMode]);
 
   useEffect(() => {
@@ -690,6 +773,24 @@ function EncounterWorkspace({
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
   }, [activeSession?.id, reloadDungeon]);
+
+  useEffect(() => {
+    if (!marchMenu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMarchMenu(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [marchMenu]);
+
+  useEffect(() => {
+    if (!mapEncounterMenu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMapEncounterMenu(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mapEncounterMenu]);
 
   useEffect(() => {
     if (mapEntityModal?.kind !== "item") return;
@@ -760,41 +861,25 @@ function EncounterWorkspace({
   const palette =
     (dungeon?.locationType && LOCATION_PALETTE[dungeon.locationType]) ?? DEFAULT_PALETTE;
 
-  /** Padding around the focused room (DM crop + player TV crop). */
+  /** Padding around the focused room (player TV crop, wall lights). */
   const mapPad = 5;
-  const focusCellPxFallback = 20;
   const fullCellPx = 12;
 
   const { displayGrid, worldOffset, cellPx } = useMemo(() => {
     if (!renderGrid || !dungeon) {
       return { displayGrid: null as ReturnType<typeof buildRenderGrid> | null, worldOffset: { x: 0, y: 0 }, cellPx: fullCellPx };
     }
-    const gh = renderGrid.length;
-    const gw = renderGrid[0]?.length ?? 0;
-    if (showFullMap || !room) {
-      return { displayGrid: renderGrid, worldOffset: { x: 0, y: 0 }, cellPx: fullCellPx };
-    }
-    const minX = Math.max(0, room.x - mapPad);
-    const minY = Math.max(0, room.y - mapPad);
-    const maxX = Math.min(gw - 1, room.x + room.w + mapPad - 1);
-    const maxY = Math.min(gh - 1, room.y + room.h + mapPad - 1);
-    const sub: typeof renderGrid = [];
-    for (let y = minY; y <= maxY; y++) {
-      const row = [];
-      for (let x = minX; x <= maxX; x++) {
-        row.push(renderGrid[y]![x]!);
-      }
-      sub.push(row);
-    }
-    return { displayGrid: sub, worldOffset: { x: minX, y: minY }, cellPx: focusCellPxFallback };
-  }, [renderGrid, dungeon, room, showFullMap, mapPad]);
+    return { displayGrid: renderGrid, worldOffset: { x: 0, y: 0 }, cellPx: fullCellPx };
+  }, [renderGrid, dungeon]);
 
   const mapViewportRef = useRef<HTMLDivElement>(null);
-  const [fitCellPx, setFitCellPx] = useState<number | null>(null);
+  const [viewPan, setViewPan] = useState({ x: 0, y: 0 });
+  /** Cell size so the whole dungeon fits the viewport (before wheel zoom multiplier). */
+  const [fullMapFitCellPx, setFullMapFitCellPx] = useState<number | null>(null);
 
   useEffect(() => {
-    if (showFullMap || !room || !displayGrid?.length) {
-      setFitCellPx(null);
+    if (!displayGrid?.length) {
+      setFullMapFitCellPx(null);
       return;
     }
     const el = mapViewportRef.current;
@@ -805,17 +890,16 @@ function EncounterWorkspace({
       const w = el.clientWidth;
       const h = el.clientHeight;
       if (w < 24 || h < 24) return;
-      const next = Math.floor(Math.min(w / Math.max(1, bw), h / Math.max(1, bh)));
-      const zoomOutPx = 4;
-      setFitCellPx(Math.max(12, Math.min(64, next - zoomOutPx)));
+      const next = Math.floor(Math.min(w / Math.max(1, bw), h / Math.max(1, bh)) * 0.94);
+      setFullMapFitCellPx(Math.max(6, Math.min(56, next)));
     };
     update();
     const ro = new ResizeObserver(() => update());
     ro.observe(el);
     return () => ro.disconnect();
-  }, [showFullMap, room?.id, displayGrid]);
+  }, [displayGrid, dungeon?.id]);
 
-  const dmCellPx = !showFullMap && room && fitCellPx != null ? fitCellPx : cellPx;
+  const dmCellPx = fullMapFitCellPx != null ? fullMapFitCellPx : cellPx;
 
   const zoomedDmCellPx = useMemo(
     () => Math.max(8, Math.min(128, Math.round(dmCellPx * dmMapZoom))),
@@ -881,21 +965,144 @@ function EncounterWorkspace({
     [tokensForMap, worldOffset],
   );
 
+  const dmMapCamRef = useRef<{ cam: "global" | "room"; room: number | null } | null>(null);
+
+  /**
+   * Pan / zoom the map: never crops the grid. `mapCamera === "room"` frames the selected room; `global` fits the whole dungeon.
+   * Structural camera changes reset zoom appropriately; panel resize preserves wheel zoom and recenters.
+   */
   useLayoutEffect(() => {
-    if (!room || !mapViewportRef.current || zoomedDmCellPx <= 0) return;
+    if (!mapViewportRef.current || !displayGrid?.length) return;
     const el = mapViewportRef.current;
+    if (fullMapFitCellPx == null) return;
+
+    const prev = dmMapCamRef.current;
+    const structural =
+      prev === null || prev.cam !== mapCamera || prev.room !== selectedRoomId;
+    dmMapCamRef.current = { cam: mapCamera, room: selectedRoomId };
+
+    const gw = displayGrid[0]!.length;
+    const gh = displayGrid.length;
+
+    if (structural) {
+      if (mapCamera === "global" || !room) {
+        setDmMapZoom(1);
+        const zc = dmCellPx;
+        const cx = (gw * zc) / 2;
+        const cy = (gh * zc) / 2;
+        setViewPan({
+          x: el.clientWidth / 2 - cx,
+          y: el.clientHeight / 2 - cy,
+        });
+        return;
+      }
+      const padC = 2;
+      const rw = room.w + 2 * padC;
+      const rh = room.h + 2 * padC;
+      const rwPx = rw * dmCellPx;
+      const rhPx = rh * dmCellPx;
+      const zx = (0.82 * el.clientWidth) / Math.max(1, rwPx);
+      const zy = (0.82 * el.clientHeight) / Math.max(1, rhPx);
+      const targetZ = Math.max(0.35, Math.min(2.5, Math.min(zx, zy)));
+      setDmMapZoom(targetZ);
+      const zc = dmCellPx * targetZ;
+      const cx = (room.x + room.w / 2) * zc;
+      const cy = (room.y + room.h / 2) * zc;
+      setViewPan({
+        x: el.clientWidth / 2 - cx,
+        y: el.clientHeight / 2 - cy,
+      });
+      return;
+    }
+
+    const zc = zoomedDmCellPx;
+    if (zc <= 0) return;
+    if (mapCamera === "global" || !room) {
+      const cx = (gw * zc) / 2;
+      const cy = (gh * zc) / 2;
+      setViewPan({
+        x: el.clientWidth / 2 - cx,
+        y: el.clientHeight / 2 - cy,
+      });
+      return;
+    }
     const pad = 2;
     const rx = room.x - worldOffset.x;
     const ry = room.y - worldOffset.y;
-    const minPxX = Math.max(0, (rx - pad) * zoomedDmCellPx);
-    const minPxY = Math.max(0, (ry - pad) * zoomedDmCellPx);
-    const maxPxX = (rx + room.w + pad) * zoomedDmCellPx;
-    const maxPxY = (ry + room.h + pad) * zoomedDmCellPx;
+    const minPxX = Math.max(0, (rx - pad) * zc);
+    const minPxY = Math.max(0, (ry - pad) * zc);
+    const maxPxX = (rx + room.w + pad) * zc;
+    const maxPxY = (ry + room.h + pad) * zc;
     const cx = (minPxX + maxPxX) / 2;
     const cy = (minPxY + maxPxY) / 2;
-    el.scrollLeft = Math.max(0, cx - el.clientWidth / 2);
-    el.scrollTop = Math.max(0, cy - el.clientHeight / 2);
-  }, [room?.id, selectedRoomId, zoomedDmCellPx, worldOffset.x, worldOffset.y]);
+    setViewPan({
+      x: el.clientWidth / 2 - cx,
+      y: el.clientHeight / 2 - cy,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- do not re-run when only wheel zoom changes
+  }, [
+    mapCamera,
+    fullMapFitCellPx,
+    room?.id,
+    selectedRoomId,
+    worldOffset.x,
+    worldOffset.y,
+    dmCellPx,
+    displayGrid,
+  ]);
+
+  /** Wheel zoom (Dungeon Forge–style) anchored to cursor; updates pan so the map doesn’t jump. */
+  useEffect(() => {
+    const el = mapViewportRef.current;
+    if (!el || laserPointerMode) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) return;
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const delta = e.deltaY > 0 ? 0.92 : 1.08;
+      setDmMapZoom((zPrev) => {
+        const zNew = Math.max(0.35, Math.min(2.5, zPrev * delta));
+        const ratio = zNew / zPrev;
+        setViewPan((p) => ({
+          x: mx - ratio * (mx - p.x),
+          y: my - ratio * (my - p.y),
+        }));
+        return zNew;
+      });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [laserPointerMode]);
+
+  useEffect(() => {
+    if (!mapEncounterMenu) {
+      setTrapMenuDamageRoll(null);
+      return;
+    }
+    if (mapEncounterMenu.cell.eType === "trap") {
+      setTrapMenuDamageRoll(null);
+      const firstPc = playerCombatants.find((c) => c.type === "player" && c.isAlive);
+      setTrapDmTargetId((prev) => {
+        if (prev && playerCombatants.some((c) => c.id === prev && c.isAlive)) return prev;
+        return firstPc?.id ?? "";
+      });
+    }
+  }, [mapEncounterMenu, playerCombatants]);
+
+  useEffect(() => {
+    if (mapEntityModal?.kind !== "trap") {
+      setTrapModalRoll(null);
+      return;
+    }
+    setTrapModalRoll(null);
+    const firstPc = playerCombatants.find((c) => c.type === "player" && c.isAlive);
+    setTrapModalTargetId((prev) => {
+      if (prev && playerCombatants.some((c) => c.id === prev && c.isAlive)) return prev;
+      return firstPc?.id ?? "";
+    });
+  }, [mapEntityModal, playerCombatants]);
 
   const broadcastToPlayer = useCallback(
     (opts: { cropToRoom: boolean }) => {
@@ -1112,8 +1319,9 @@ function EncounterWorkspace({
       didDrag: boolean;
     }) => {
       if (!p.didDrag) return;
-      const dx = p.worldGx - p.startWorldGx;
-      const dy = p.worldGy - p.startWorldGy;
+      const dx = Math.round(p.worldGx - p.startWorldGx);
+      const dy = Math.round(p.worldGy - p.startWorldGy);
+      const grid = dungeon?.grid as number[][] | undefined;
       setBattleTokens((prev) => {
         if (!partyLeaderId || p.tokenId !== partyLeaderId || !followerSnapRef.current) {
           followerSnapRef.current = null;
@@ -1121,17 +1329,50 @@ function EncounterWorkspace({
         }
         const snap = followerSnapRef.current;
         followerSnapRef.current = null;
+        if (!grid?.length) {
+          return prev.map((t) => {
+            if (t.id === p.tokenId) return { ...t, gx: p.worldGx, gy: p.worldGy };
+            if (t.id && snap[t.id]) {
+              const o = snap[t.id]!;
+              return { ...t, gx: o.gx + dx, gy: o.gy + dy };
+            }
+            return t;
+          });
+        }
+
+        const movingIds = new Set<string>([partyLeaderId, ...Object.keys(snap)]);
+        const occ = new Set<string>();
+        for (const t of prev) {
+          if (!t.id || !movingIds.has(t.id)) {
+            occ.add(`${Math.floor(t.gx)},${Math.floor(t.gy)}`);
+          }
+        }
+        const lx = Math.floor(p.worldGx);
+        const ly = Math.floor(p.worldGy);
+        occ.add(`${lx},${ly}`);
+
+        const nextFollowerPos = new Map<string, { gx: number; gy: number }>();
+        for (const fid of Object.keys(snap)) {
+          const o = snap[fid]!;
+          const start = { gx: Math.floor(o.gx), gy: Math.floor(o.gy) };
+          const target = { gx: Math.floor(o.gx + dx), gy: Math.floor(o.gy + dy) };
+          const maxSteps = Math.min(200, Math.abs(dx) + Math.abs(dy) + 48);
+          const end = walkGreedyStepsOnGrid(grid, start, target, occ, maxSteps);
+          nextFollowerPos.set(fid, end);
+          occ.add(`${end.gx},${end.gy}`);
+        }
+
         return prev.map((t) => {
           if (t.id === p.tokenId) return { ...t, gx: p.worldGx, gy: p.worldGy };
-          if (t.id && snap[t.id]) {
-            const o = snap[t.id]!;
-            return { ...t, gx: o.gx + dx, gy: o.gy + dy };
+          if (t.id && nextFollowerPos.has(t.id)) {
+            const pos = nextFollowerPos.get(t.id)!;
+            return { ...t, gx: pos.gx, gy: pos.gy };
           }
           return t;
         });
       });
     },
-    [partyLeaderId],
+    [partyLeaderId, dungeon?.grid],
   );
 
   useEffect(() => {
@@ -1209,6 +1450,14 @@ function EncounterWorkspace({
     }
   };
 
+  const findRoomAtWorld = useCallback(
+    (gx: number, gy: number) =>
+      (dungeon?.rooms as { x: number; y: number; w: number; h: number; id: number }[] | undefined)?.find(
+        (rm) => gx >= rm.x && gx < rm.x + rm.w && gy >= rm.y && gy < rm.y + rm.h,
+      ) ?? null,
+    [dungeon?.rooms],
+  );
+
   const appendRoomMonstersToActiveCombat = async () => {
     if (!activeSession?.id || !activeCombat || !room) return;
     if (roomMonsters.length === 0) return;
@@ -1225,6 +1474,93 @@ function EncounterWorkspace({
       onPaneChange("combat");
       setLaunchMsg(`Added ${monsterRows.length} monster(s). Use the initiative list to find their turns.`);
       setTimeout(() => setLaunchMsg(null), 5000);
+    } catch (err) {
+      setLaunchMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLaunching(false);
+    }
+  };
+
+  const appendMonstersForEntities = async (
+    ents: { slug?: string; name?: string; count?: number }[],
+  ) => {
+    if (!activeSession?.id || !activeCombat || ents.length === 0) return;
+    setLaunching(true);
+    setLaunchMsg(null);
+    try {
+      const monsterRows = await buildForgeMonsterCombatants(ents);
+      if (monsterRows.length === 0) {
+        throw new Error("Could not resolve monsters against the compendium.");
+      }
+      await appendCombatantsToCombat(monsterRows);
+      onPaneChange("combat");
+      setLaunchMsg(`Added ${monsterRows.length} monster(s) to initiative.`);
+      setTimeout(() => setLaunchMsg(null), 5000);
+      setMapEncounterMenu(null);
+    } catch (err) {
+      setLaunchMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLaunching(false);
+    }
+  };
+
+  const addCellMonsterToInitiative = async () => {
+    if (!mapEncounterMenu || !activeCombat) return;
+    const ex = mapEncounterMenu.cell.extra;
+    if (!ex || typeof ex !== "object" || (ex as { type?: string }).type !== "monster") return;
+    const ent = ex as { slug?: string; name?: string; count?: number };
+    await appendMonstersForEntities([ent]);
+  };
+
+  const addAllRoomMonstersAtMenuPosition = async () => {
+    if (!mapEncounterMenu || !activeCombat || !dungeon) return;
+    const rm = findRoomAtWorld(mapEncounterMenu.worldGx, mapEncounterMenu.worldGy);
+    if (!rm) {
+      setLaunchMsg("Could not find a room for this tile.");
+      return;
+    }
+    const ents = (dungeon.entities ?? []).filter(
+      (e: { roomId?: number; type?: string }) => e.roomId === rm.id && e.type === "monster",
+    ) as { slug?: string; name?: string; count?: number }[];
+    if (ents.length === 0) {
+      setLaunchMsg("No scripted monsters in that room.");
+      return;
+    }
+    await appendMonstersForEntities(ents);
+  };
+
+  const startCombatFromMapMonsterCell = async () => {
+    if (!mapEncounterMenu || activeCombat || !dungeon || !activeSession?.id) return;
+    if (partyCharacters.length === 0) {
+      setLaunchMsg("Add party members first (Party step).");
+      return;
+    }
+    const ex = mapEncounterMenu.cell.extra;
+    if (!ex || typeof ex !== "object" || (ex as { type?: string }).type !== "monster") return;
+    setLaunching(true);
+    setLaunchMsg(null);
+    try {
+      const monsterRows = await buildForgeMonsterCombatants([
+        ex as { slug?: string; name?: string; count?: number },
+      ]);
+      if (monsterRows.length === 0) throw new Error("Could not resolve this creature.");
+      const players = partyCharacters.map((char) => {
+        const dex = char.computed?.modifiers?.dexterity ?? 0;
+        return {
+          type: "player" as const,
+          characterId: char.id,
+          label: char.name,
+          initiative: Math.floor(Math.random() * 20) + 1 + dex,
+          maxHp: char.maxHp,
+          armorClass: char.computed.armorClass,
+        };
+      });
+      await startCombat(
+        `Map — ${dungeon.mapName ?? "Encounter"}`,
+        [...players, ...monsterRows],
+      );
+      onPaneChange("combat");
+      setMapEncounterMenu(null);
     } catch (err) {
       setLaunchMsg(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1296,12 +1632,18 @@ function EncounterWorkspace({
 
   return (
     <>
-    <div className="grid h-full min-h-0 grid-cols-1 gap-3 lg:grid-cols-[1.4fr_1fr_0.9fr]">
+    <div
+      className={clsx(
+        "grid h-full min-h-0 grid-cols-1 gap-3",
+        dmRightSidebarCollapsed ? "lg:grid-cols-[minmax(0,1fr)_2.75rem]" : "lg:grid-cols-[minmax(0,1fr)_minmax(300px,420px)]",
+      )}
+    >
       <div className="dnd-card flex min-h-0 flex-col overflow-hidden">
         <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
           <span>
-            {dungeon?.mapName ?? "Dungeon"} · select a room to zoom; use Full map to see everything{" "}
-            {placementCombatantId ? "(placing token)" : ""}
+            {dungeon?.mapName ?? "Dungeon"} · pick a room to focus notes &amp; camera (full dungeon stays visible; drag to
+            pan, wheel to zoom)
+            {placementCombatantId ? " (placing token)" : ""}
           </span>
           {dungeon && renderGrid && (
             <>
@@ -1323,26 +1665,23 @@ function EncounterWorkspace({
                 />
                 Laser for TV
               </label>
+              <button
+                type="button"
+                onClick={() => setMapCamera("global")}
+                className="rounded border border-gray-600 px-2 py-0.5 text-gray-300 hover:bg-gray-800"
+                title="Reset view to show the entire dungeon at the default zoom"
+              >
+                Fit entire dungeon
+              </button>
               {room && (
-                <>
-                  {!showFullMap ? (
-                    <button
-                      type="button"
-                      onClick={() => setShowFullMap(true)}
-                      className="rounded border border-gray-600 px-2 py-0.5 text-gray-300 hover:bg-gray-800"
-                    >
-                      Full map
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setShowFullMap(false)}
-                      className="rounded border border-dnd-gold/50 px-2 py-0.5 text-dnd-gold hover:bg-dnd-gold/10"
-                    >
-                      Zoom to room
-                    </button>
-                  )}
-                </>
+                <button
+                  type="button"
+                  onClick={() => setMapCamera("room")}
+                  className="rounded border border-dnd-gold/50 px-2 py-0.5 text-dnd-gold hover:bg-dnd-gold/10"
+                  title="Pan and zoom to frame the selected room (map is not cropped)"
+                >
+                  Focus selected room
+                </button>
               )}
               <button
                 type="button"
@@ -1360,32 +1699,9 @@ function EncounterWorkspace({
               >
                 Sync full map (fog)
               </button>
-              <span className="text-gray-600">|</span>
-              <span className="text-gray-500">Zoom</span>
-              <button
-                type="button"
-                className="rounded border border-gray-600 px-1.5 py-0.5 text-gray-300 hover:bg-gray-800"
-                aria-label="Zoom out"
-                onClick={() => setDmMapZoom((z) => Math.max(0.35, Math.round((z - 0.1) * 10) / 10))}
-              >
-                −
-              </button>
-              <span className="tabular-nums text-gray-400">{Math.round(dmMapZoom * 100)}%</span>
-              <button
-                type="button"
-                className="rounded border border-gray-600 px-1.5 py-0.5 text-gray-300 hover:bg-gray-800"
-                aria-label="Zoom in"
-                onClick={() => setDmMapZoom((z) => Math.min(2.5, Math.round((z + 0.1) * 10) / 10))}
-              >
-                +
-              </button>
-              <button
-                type="button"
-                className="rounded border border-gray-700 px-1.5 py-0.5 text-gray-400 hover:bg-gray-800"
-                onClick={() => setDmMapZoom(1)}
-              >
-                Reset
-              </button>
+              <span className="tabular-nums text-gray-500" title="Mouse wheel zooms toward the cursor; drag empty map to pan.">
+                {Math.round(dmMapZoom * 100)}%
+              </span>
             </>
           )}
         </div>
@@ -1418,114 +1734,121 @@ function EncounterWorkspace({
         )}
         {activeCombat && room && (
           <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-gray-800 pt-2 text-[11px] text-gray-400">
-            <label className="flex cursor-pointer items-center gap-1">
-              <input
-                type="checkbox"
-                checked={partyMarchMode}
-                onChange={(e) => {
-                  setPartyMarchMode(e.target.checked);
-                  if (e.target.checked) setPlacementCombatantId(null);
-                }}
-                className="rounded border-gray-600"
-              />
-              Party march
-            </label>
-            <span title="Click a walkable floor tile; party moves step-by-step. Pan with scrollbars.">
-              (click floor)
+            <span title="Right-click a PC token to set march leader and who follows. Click empty walkable floor to march the party.">
+              March: right-click a PC token for leader &amp; followers · click walkable floor to move
             </span>
             <span className="text-gray-600">|</span>
-            <span>Leader</span>
-            <select
-              className="input-field max-w-[9rem] py-0.5 text-xs"
-              value={partyLeaderId ?? ""}
-              onChange={(e) => setPartyLeaderId(e.target.value || null)}
-            >
-              <option value="">— none —</option>
-              {playerCombatants.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
-            <span>Follow:</span>
-            {playerCombatants
-              .filter((c) => c.id !== partyLeaderId)
-              .map((c) => (
-                <label key={c.id} className="flex cursor-pointer items-center gap-0.5">
-                  <input
-                    type="checkbox"
-                    className="rounded border-gray-600"
-                    checked={partyFollowIds.includes(c.id)}
-                    onChange={(e) =>
-                      setPartyFollowIds((prev) =>
-                        e.target.checked ? [...prev, c.id] : prev.filter((id) => id !== c.id),
-                      )
-                    }
-                  />
-                  {c.label}
-                </label>
-              ))}
+            <span>
+              Leader:{" "}
+              <span className="text-gray-200">
+                {partyLeaderId
+                  ? playerCombatants.find((c) => c.id === partyLeaderId)?.label ?? "—"
+                  : "—"}
+              </span>
+            </span>
+            {partyFollowIds.length > 0 && (
+              <span title="These characters path behind the leader when you march.">
+                Follow:{" "}
+                {partyFollowIds
+                  .map((id) => playerCombatants.find((c) => c.id === id)?.label ?? id)
+                  .join(", ")}
+              </span>
+            )}
             <span
               className="text-gray-500"
-              title="Set a leader: player TV crops around them and follows when they move. Fog uses each PC’s race/features for sight."
+              title="Player TV crops around the leader. Fog uses each PC’s sight. Drag empty map to pan when zoomed."
             >
-              TV follows leader · drag empty map to pan when zoomed
+              TV follows leader
             </span>
           </div>
         )}
         <div
           ref={mapViewportRef}
-          data-dm-map-viewport
-          className={clsx(
-            "relative flex min-h-0 flex-1 items-center justify-center overflow-auto p-1",
-            partyMarchMode && "ring-1 ring-dnd-gold/30",
-          )}
+          className="relative flex min-h-0 flex-1 overflow-hidden rounded border border-gray-800/50 bg-black/90 p-0"
         >
           {dungeon && renderGrid && displayGrid ? (
+            <div
+              className="relative inline-block"
+              style={{
+                transform: `translate(${viewPan.x}px, ${viewPan.y}px)`,
+                transformOrigin: "0 0",
+              }}
+            >
             <DungeonMapCanvas
               grid={displayGrid}
               cellPx={zoomedDmCellPx}
               palette={palette}
               entities={ENTITY_PALETTE}
-              highlightRoom={null}
+              highlightRoom={
+                room && mapCamera === "room"
+                  ? { x: room.x, y: room.y, w: room.w, h: room.h }
+                  : null
+              }
               worldOffset={worldOffset}
               animPhase={animPhase}
               sceneLights={sceneLightsLocal}
               battleTokens={tokensLocal.length ? tokensLocal : undefined}
               playerSightRingCells={PLAYER_SIGHT_RING_CELLS}
-              tokenDragEnabled={!!activeCombat && !laserPointerMode && !partyMarchMode}
+              tokenDragEnabled={!!activeCombat && !laserPointerMode}
               suppressTokenInteraction={laserPointerMode}
+              mapViewportPan={viewPan}
+              onMapViewportPanChange={setViewPan}
               onTokenDragTo={handleTokenDragTo}
               onTokenDragEnd={handleTokenDragEnd}
               onTokensAtCell={
                 laserPointerMode
                   ? undefined
                   : (p) => {
-                      if (!p || p.tokensHere.length === 0) setTokenHoverTip(null);
-                      else
-                        setTokenHoverTip({
-                          tokens: p.tokensHere,
-                          clientX: p.clientX,
-                          clientY: p.clientY,
-                        });
+                      if (!p || p.tokensHere.length === 0) {
+                        setTokenHoverTip(null);
+                        return;
+                      }
+                      setTokenHoverTip({
+                        tokens: p.tokensHere,
+                        clientX: p.clientX,
+                        clientY: p.clientY,
+                        cell: p.cell,
+                      });
+                      setMapCellHover(null);
                     }
               }
               mapPanEnabled={!laserPointerMode}
-              style={laserPointerMode ? { cursor: "crosshair" } : partyMarchMode ? { cursor: "cell" } : undefined}
+              style={laserPointerMode ? { cursor: "crosshair" } : undefined}
+              onPlayerTokenContextMenu={
+                laserPointerMode || !activeCombat
+                  ? undefined
+                  : (payload) => {
+                      setMarchMenu({
+                        tokenId: payload.tokenId,
+                        clientX: payload.clientX,
+                        clientY: payload.clientY,
+                      });
+                    }
+              }
               onCellHover={
                 laserPointerMode
                   ? (hx, hy) => {
                       if (hx < 0 || hy < 0) broadcastLaserPointer(null);
                       else sendLaserHover(hx, hy);
                     }
-                  : undefined
+                  : (hx, hy, cell, ptr) => {
+                      if (hx < 0 || hy < 0 || !ptr) {
+                        setMapCellHover(null);
+                        return;
+                      }
+                      const lines = mapEntityCellHoverLines(cell);
+                      if (lines?.length) {
+                        setMapCellHover({
+                          lines,
+                          clientX: ptr.clientX,
+                          clientY: ptr.clientY,
+                        });
+                      } else {
+                        setMapCellHover(null);
+                      }
+                    }
               }
               onCellClick={(gx, gy, cell: RenderCell) => {
-                if (partyMarchMode && activeCombat && dungeon?.grid) {
-                  const tile = (dungeon.grid as number[][])[gy]?.[gx];
-                  if (isDungeonGridWalkable(tile)) startPartyMarch(gx, gy);
-                  return;
-                }
                 if (placementCombatantId && activeCombat) {
                   const c = activeCombat.combatants.find((x) => x.id === placementCombatantId);
                   if (c?.isAlive) {
@@ -1573,13 +1896,52 @@ function EncounterWorkspace({
                   });
                   return;
                 }
+                if (cell.eType === "trap" && cell.extra && typeof cell.extra === "object") {
+                  setMapEntityModal({
+                    kind: "trap",
+                    x: gx,
+                    y: gy,
+                    ent: cell.extra as Record<string, unknown>,
+                  });
+                  return;
+                }
+                if (
+                  partyLeaderId &&
+                  activeCombat &&
+                  dungeon?.grid &&
+                  !placementCombatantId
+                ) {
+                  const tile = (dungeon.grid as number[][])[gy]?.[gx];
+                  if (isDungeonGridWalkable(tile) && !cellBlocksPartyMarch(cell)) {
+                    startPartyMarch(gx, gy);
+                    return;
+                  }
+                }
                 const r = dungeon.rooms.find(
                   (rm: { x: number; y: number; w: number; h: number; id: number }) =>
                     gx >= rm.x && gx < rm.x + rm.w && gy >= rm.y && gy < rm.y + rm.h,
                 );
-                if (r) setSelectedRoomId((prev) => (prev === r.id ? null : r.id));
+                if (r) {
+                  if (selectedRoomId === r.id) {
+                    setSelectedRoomId(null);
+                    setMapCamera("global");
+                  } else {
+                    setSelectedRoomId(r.id);
+                    setMapCamera("room");
+                  }
+                }
               }}
+              onMapCellContextMenu={(p) =>
+                setMapEncounterMenu({
+                  cell: p.cell,
+                  worldGx: p.worldGx,
+                  worldGy: p.worldGy,
+                  clientX: p.clientX,
+                  clientY: p.clientY,
+                })
+              }
             />
+            </div>
           ) : dungeon && Array.isArray(dungeon.rooms) && dungeon.rooms.length > 0 ? (
             <p className="text-sm italic text-amber-200/90">
               Map tiles could not be rebuilt (older save). Open{" "}
@@ -1594,7 +1956,7 @@ function EncounterWorkspace({
         </div>
         {tokenHoverTip && tokenHoverTip.tokens.length > 0 && !laserPointerMode && (
           <div
-            className="pointer-events-none fixed z-[200] max-w-[16rem] rounded border border-dnd-gold/35 bg-gray-950/95 px-2 py-1.5 text-[11px] leading-snug text-gray-100 shadow-xl"
+            className="pointer-events-none fixed z-[200] max-w-[18rem] rounded border border-dnd-gold/35 bg-gray-950/95 px-2 py-1.5 text-[11px] leading-snug text-gray-100 shadow-xl"
             style={{
               left: Math.min(
                 tokenHoverTip.clientX + 14,
@@ -1609,6 +1971,33 @@ function EncounterWorkspace({
               const line = c ? `${c.label} · ${role}` : `${t.label || "?"} · ${role}`;
               return <div key={t.id ?? `${t.gx}-${t.gy}-${t.label}`}>{line}</div>;
             })}
+            {(() => {
+              const ent = mapEntityCellHoverLines(tokenHoverTip.cell ?? null);
+              if (!ent?.length) return null;
+              return (
+                <div className="mt-1.5 border-t border-gray-700 pt-1.5 text-[10px] text-gray-300">
+                  {ent.map((line, i) => (
+                    <div key={i}>{line}</div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        )}
+        {mapCellHover && mapCellHover.lines.length > 0 && !laserPointerMode && !tokenHoverTip && (
+          <div
+            className="pointer-events-none fixed z-[199] max-w-[18rem] rounded border border-cyan-900/50 bg-gray-950/95 px-2 py-1.5 text-[11px] leading-snug text-gray-100 shadow-xl"
+            style={{
+              left: Math.min(
+                mapCellHover.clientX + 14,
+                (typeof window !== "undefined" ? window.innerWidth : 1200) - 16,
+              ),
+              top: mapCellHover.clientY + 14,
+            }}
+          >
+            {mapCellHover.lines.map((line, i) => (
+              <div key={i}>{line}</div>
+            ))}
           </div>
         )}
         <div className="mt-2 flex flex-wrap gap-1 text-xs">
@@ -1617,7 +2006,15 @@ function EncounterWorkspace({
               <button
                 key={r.id}
                 type="button"
-                onClick={() => setSelectedRoomId((prev) => (prev === r.id ? null : r.id))}
+                onClick={() => {
+                  if (selectedRoomId === r.id) {
+                    setSelectedRoomId(null);
+                    setMapCamera("global");
+                  } else {
+                    setSelectedRoomId(r.id);
+                    setMapCamera("room");
+                  }
+                }}
                 className={clsx(
                   "rounded border px-2 py-0.5",
                   selectedRoomId === r.id
@@ -1635,177 +2032,509 @@ function EncounterWorkspace({
         </div>
       </div>
 
-      <div className="dnd-card flex min-h-0 flex-col gap-3 overflow-auto">
-        <div className="flex gap-1 lg:hidden">
-          {(["combat", "rolls"] as WorkspacePane[]).map((p) => (
-            <button
-              key={p}
-              type="button"
-              onClick={() => onPaneChange(p)}
-              className={clsx(
-                "rounded px-3 py-1 text-sm capitalize",
-                pane === p ? "bg-dnd-red text-white" : "bg-gray-800 text-gray-400",
-              )}
-            >
-              {p === "rolls" ? "Rolls" : "Combat"}
-            </button>
-          ))}
-        </div>
-
-        {!room ? (
-          <p className="text-sm italic text-gray-500">Select a room on the map to view encounter details.</p>
+      <div
+        className={clsx(
+          "dnd-card flex min-h-0 flex-col gap-2 overflow-hidden",
+          dmRightSidebarCollapsed
+            ? "lg:max-w-[2.75rem] lg:min-w-0 lg:items-center lg:py-2"
+            : "lg:min-w-[300px] lg:max-w-md",
+        )}
+      >
+        {dmRightSidebarCollapsed ? (
+          <button
+            type="button"
+            className="flex min-h-[8rem] w-full flex-col items-center justify-start gap-2 rounded border border-gray-700 bg-gray-900/40 p-1 text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+            title="Show rolls, combat, and room notes"
+            onClick={() => setDmRightSidebarCollapsed(false)}
+          >
+            <ChevronLeft size={18} className="shrink-0" />
+            <span className="hidden text-[9px] font-semibold uppercase leading-tight tracking-wide sm:block [writing-mode:vertical-rl]">
+              Sidebar
+            </span>
+          </button>
         ) : (
           <>
-            <div>
-              <h3 className="font-display font-bold text-dnd-gold">
-                {(room as { isSecretRoom?: boolean }).isSecretRoom ? (
-                  <span className="mr-2 rounded border border-cyan-500/60 bg-cyan-950/40 px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-cyan-200">
-                    Secret room
-                  </span>
-                ) : null}
-                {room.namedRoom || `Room ${room.id}`} — {room.label || room.type}
-              </h3>
-              {(room as { secretHint?: string | null }).secretHint ? (
-                <p className="mt-1 text-xs text-cyan-200/90">
-                  Secret clue (DM): {(room as { secretHint?: string }).secretHint}
-                </p>
-              ) : null}
-              <p className="text-xs text-gray-500">
-                {room.w}×{room.h} · {roomEntities.length} entities
-              </p>
-              {roomEntities.length > 0 && (
-                <ul className="mt-2 space-y-1 text-xs text-gray-400">
-                  {roomEntities.map(
-                    (
-                      e: {
-                        type?: string;
-                        name?: string;
-                        count?: number;
-                        detectDC?: number;
-                        saveDC?: number;
-                        saveType?: string;
-                        dmg?: string;
-                        effect?: string;
-                        prompt?: string;
-                        answer?: string;
-                        rewardName?: string;
-                        rewardSlug?: string;
-                        slug?: string;
-                      },
-                      i: number,
-                    ) => (
-                      <li key={i}>
-                        <span className="font-semibold capitalize text-gray-300">{e.type ?? "?"}</span>
-                        {e.name ? `: ${e.name}` : ""}
-                        {e.type === "monster" && (e.count ?? 1) > 1 ? ` ×${e.count}` : ""}
-                        {e.slug && e.type === "item" ? (
-                          <span className="text-gray-500"> [{e.slug}]</span>
-                        ) : null}
-                        {e.type === "trap" ? (
-                          <span className="mt-0.5 block pl-1 text-[11px] leading-snug text-gray-500">
-                            Spot DC {e.detectDC ?? "—"} · {e.saveType || "?"} DC {e.saveDC ?? "—"}
-                            {e.dmg ? ` · ${e.dmg}` : ""}
-                            {e.effect ? ` — ${e.effect}` : ""}
-                          </span>
-                        ) : null}
-                        {e.type === "riddle" ? (
-                          <span className="mt-0.5 block pl-1 text-[11px] leading-snug text-purple-200/95">
-                            <span className="font-semibold text-purple-300/90">Q:</span> {e.prompt ?? ""}
-                            <span className="mt-0.5 block text-purple-200/80">
-                              <span className="font-semibold">Answer (DM):</span> {e.answer ?? ""}
-                            </span>
-                            {(e.rewardName || e.rewardSlug) && (
-                              <span className="mt-0.5 block text-dnd-gold/90">
-                                If solved: {e.rewardName ?? e.rewardSlug}
-                                {e.rewardSlug ? ` [${e.rewardSlug}]` : ""}
-                              </span>
-                            )}
-                          </span>
-                        ) : null}
-                      </li>
-                    ),
-                  )}
-                </ul>
-              )}
-            </div>
-            {roomMonsters.length === 0 && (
-              <div className="text-xs italic text-gray-500">No monsters scripted for this room.</div>
-            )}
-            {roomMonsters.length > 0 && !activeCombat && (
-              <div className="space-y-1">
-                <p className="text-xs text-gray-500">
-                  Starts a new encounter with your party and every monster listed for this room.
-                </p>
+            <div className="flex shrink-0 items-center justify-end gap-2 border-b border-gray-800 pb-2 lg:justify-between">
+              <div className="hidden flex-wrap gap-1 lg:flex">
                 <button
                   type="button"
-                  onClick={() => void launchCombatForRoom()}
-                  disabled={launching}
-                  className={clsx(
-                    "btn-primary flex items-center gap-2",
-                    launching && "opacity-60",
-                  )}
+                  className="rounded border border-gray-700 px-1.5 py-0.5 text-[10px] text-gray-400 hover:bg-gray-800"
+                  onClick={() => {
+                    setDmSecRolls(true);
+                    setDmSecCombat(true);
+                    setDmSecRoom(true);
+                  }}
                 >
-                  <Sword size={14} />{" "}
-                  {launching
-                    ? "Starting…"
-                    : `Start combat (${roomMonsters.reduce((a: number, m: { count?: number }) => a + (m.count || 1), 0)} monsters)`}
+                  Expand all
                 </button>
-              </div>
-            )}
-            {roomMonsters.length > 0 && activeCombat && (
-              <div className="space-y-1">
-                <p className="text-xs text-gray-500">
-                  A fight is already running. Add this room&apos;s creatures to the same initiative list (e.g. after
-                  you started with Ad-hoc or players only).
-                </p>
                 <button
                   type="button"
-                  onClick={() => void appendRoomMonstersToActiveCombat()}
-                  disabled={launching}
-                  className={clsx(
-                    "btn-primary flex items-center gap-2",
-                    launching && "opacity-60",
-                  )}
+                  className="rounded border border-gray-700 px-1.5 py-0.5 text-[10px] text-gray-400 hover:bg-gray-800"
+                  onClick={() => {
+                    setDmSecRolls(false);
+                    setDmSecCombat(false);
+                    setDmSecRoom(false);
+                  }}
                 >
-                  <Sword size={14} />{" "}
-                  {launching
-                    ? "Adding…"
-                    : `Add room monsters to this combat (${roomMonsters.reduce((a: number, m: { count?: number }) => a + (m.count || 1), 0)})`}
+                  Collapse all
                 </button>
               </div>
-            )}
-            {launchMsg && <div className="text-xs text-amber-200/90">{launchMsg}</div>}
-
-            {activeCombat && (
-              <div
-                className={clsx(
-                  "min-h-0 flex-1",
-                  pane === "combat" ? "block" : "hidden",
-                  "lg:block",
-                )}
+              <button
+                type="button"
+                className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+                title="Minimize sidebar"
+                onClick={() => setDmRightSidebarCollapsed(true)}
               >
-                <InlineCombatPanel />
-              </div>
-            )}
-            {activeCombat && (
-              <div className={clsx(pane === "rolls" ? "block" : "hidden", "lg:hidden")}>
+                <ChevronRight size={18} />
+              </button>
+            </div>
+
+            <div className="flex shrink-0 gap-1 lg:hidden">
+              {(["combat", "rolls"] as WorkspacePane[]).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => onPaneChange(p)}
+                  className={clsx(
+                    "rounded px-3 py-1 text-sm capitalize",
+                    pane === p ? "bg-dnd-red text-white" : "bg-gray-800 text-gray-400",
+                  )}
+                >
+                  {p === "rolls" ? "Rolls" : "Combat"}
+                </button>
+              ))}
+            </div>
+
+            {launchMsg && <div className="shrink-0 text-xs text-amber-200/90">{launchMsg}</div>}
+
+            <div className="shrink-0 border-b border-gray-800 pb-2 lg:border-0 lg:pb-0">
+              <button
+                type="button"
+                className="mb-1 flex w-full items-center justify-between gap-2 text-left lg:mb-0"
+                onClick={() => setDmSecRolls((v) => !v)}
+              >
+                <span className="dnd-label text-xs">Players roll</span>
+                {dmSecRolls ? <ChevronUp size={14} className="shrink-0 text-gray-500" /> : <ChevronDown size={14} className="shrink-0 text-gray-500" />}
+              </button>
+            </div>
+
+            <div
+              className={clsx(
+                "min-h-0 flex-1 overflow-auto",
+                pane === "rolls" ? "block" : "hidden",
+                dmSecRolls ? "lg:block lg:min-h-[180px]" : "lg:hidden",
+              )}
+            >
+              <div className="min-h-0 w-full">
                 <InlineRollHelper />
               </div>
+            </div>
+
+            {activeCombat && (
+              <>
+                <div className="shrink-0 border-t border-gray-800 pt-2">
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between gap-2 text-left"
+                    onClick={() => setDmSecCombat((v) => !v)}
+                  >
+                    <span className="dnd-label text-xs">Combat</span>
+                    {dmSecCombat ? <ChevronUp size={14} className="shrink-0 text-gray-500" /> : <ChevronDown size={14} className="shrink-0 text-gray-500" />}
+                  </button>
+                </div>
+                <div
+                  className={clsx(
+                    "min-h-0 flex-1 overflow-auto",
+                    pane === "combat" ? "block" : "hidden",
+                    dmSecCombat ? "lg:block lg:min-h-[200px]" : "lg:hidden",
+                  )}
+                >
+                  <div className="min-h-0 w-full">
+                    <InlineCombatPanel />
+                  </div>
+                </div>
+              </>
             )}
+
             {!activeCombat && (
-              <div className="mt-2 border-t border-gray-800 pt-3">
-                <p className="dnd-label mb-2">Ad-hoc encounter</p>
-                <StartCombatPanel />
+              <div
+                className={clsx(
+                  "shrink-0 border-t border-gray-800 pt-2",
+                  pane === "combat" ? "block" : "hidden",
+                  dmSecCombat ? "lg:block" : "lg:hidden",
+                )}
+              >
+                <button
+                  type="button"
+                  className="mb-2 flex w-full items-center justify-between gap-2 text-left"
+                  onClick={() => setDmSecCombat((v) => !v)}
+                >
+                  <span className="dnd-label text-xs">Ad-hoc encounter</span>
+                  {dmSecCombat ? <ChevronUp size={14} className="shrink-0 text-gray-500" /> : <ChevronDown size={14} className="shrink-0 text-gray-500" />}
+                </button>
+                {dmSecCombat && <StartCombatPanel />}
               </div>
             )}
+
+            <div className="shrink-0 border-t border-gray-800 pt-2">
+              <button
+                type="button"
+                className="mb-1 flex w-full items-center justify-between gap-2 text-left text-xs font-semibold text-gray-400 hover:text-gray-200"
+                onClick={() => setDmSecRoom((v) => !v)}
+              >
+                <span>Room notes &amp; scripted content</span>
+                {dmSecRoom ? <ChevronUp size={14} className="shrink-0" /> : <ChevronDown size={14} className="shrink-0" />}
+              </button>
+              {dmSecRoom && (
+          <div className="mt-2 max-h-56 overflow-y-auto text-xs">
+            {!room ? (
+              <p className="italic text-gray-500">
+                Click the map or a room chip to focus notes and the camera. Right-click creatures, loot, traps, or riddles
+                on the map for quick actions.
+              </p>
+            ) : (
+              <>
+                <h3 className="font-display font-bold text-dnd-gold">
+                  {(room as { isSecretRoom?: boolean }).isSecretRoom ? (
+                    <span className="mr-2 rounded border border-cyan-500/60 bg-cyan-950/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-cyan-200">
+                      Secret
+                    </span>
+                  ) : null}
+                  {room.namedRoom || `Room ${room.id}`} — {room.label || room.type}
+                </h3>
+                {(room as { secretHint?: string | null }).secretHint ? (
+                  <p className="mt-1 text-[11px] text-cyan-200/90">
+                    Secret clue (DM): {(room as { secretHint?: string }).secretHint}
+                  </p>
+                ) : null}
+                <p className="text-[11px] text-gray-500">
+                  {room.w}×{room.h} · {roomEntities.length} entities
+                </p>
+                {roomEntities.length > 0 && (
+                  <ul className="mt-2 space-y-1 text-[11px] text-gray-400">
+                    {roomEntities.map(
+                      (
+                        e: {
+                          type?: string;
+                          name?: string;
+                          count?: number;
+                          detectDC?: number;
+                          saveDC?: number;
+                          saveType?: string;
+                          dmg?: string;
+                          effect?: string;
+                          prompt?: string;
+                          answer?: string;
+                          rewardName?: string;
+                          rewardSlug?: string;
+                          slug?: string;
+                        },
+                        i: number,
+                      ) => (
+                        <li key={i}>
+                          <span className="font-semibold capitalize text-gray-300">{e.type ?? "?"}</span>
+                          {e.name ? `: ${e.name}` : ""}
+                          {e.type === "monster" && (e.count ?? 1) > 1 ? ` ×${e.count}` : ""}
+                          {e.slug && e.type === "item" ? (
+                            <span className="text-gray-500"> [{e.slug}]</span>
+                          ) : null}
+                          {e.type === "trap" ? (
+                            <span className="mt-0.5 block pl-1 text-[10px] leading-snug text-gray-500">
+                              Spot DC {e.detectDC ?? "—"} · {e.saveType || "?"} DC {e.saveDC ?? "—"}
+                              {e.dmg ? ` · ${e.dmg}` : ""}
+                              {e.effect ? ` — ${e.effect}` : ""}
+                            </span>
+                          ) : null}
+                          {e.type === "riddle" ? (
+                            <span className="mt-0.5 block pl-1 text-[10px] leading-snug text-purple-200/95">
+                              <span className="font-semibold text-purple-300/90">Q:</span> {e.prompt ?? ""}
+                              <span className="mt-0.5 block text-purple-200/80">
+                                <span className="font-semibold">Answer (DM):</span> {e.answer ?? ""}
+                              </span>
+                              {(e.rewardName || e.rewardSlug) && (
+                                <span className="mt-0.5 block text-dnd-gold/90">
+                                  If solved: {e.rewardName ?? e.rewardSlug}
+                                  {e.rewardSlug ? ` [${e.rewardSlug}]` : ""}
+                                </span>
+                              )}
+                            </span>
+                          ) : null}
+                        </li>
+                      ),
+                    )}
+                  </ul>
+                )}
+                {roomMonsters.length === 0 && (
+                  <div className="mt-2 text-[11px] italic text-gray-500">No monsters scripted for this room.</div>
+                )}
+                {roomMonsters.length > 0 && !activeCombat && (
+                  <div className="mt-2 space-y-1">
+                    <button
+                      type="button"
+                      onClick={() => void launchCombatForRoom()}
+                      disabled={launching}
+                      className={clsx(
+                        "btn-primary flex w-full items-center justify-center gap-2 text-xs",
+                        launching && "opacity-60",
+                      )}
+                    >
+                      <Sword size={14} />{" "}
+                      {launching
+                        ? "Starting…"
+                        : `Start combat (${roomMonsters.reduce((a: number, m: { count?: number }) => a + (m.count || 1), 0)} foes)`}
+                    </button>
+                  </div>
+                )}
+                {roomMonsters.length > 0 && activeCombat && (
+                  <div className="mt-2 space-y-1">
+                    <button
+                      type="button"
+                      onClick={() => void appendRoomMonstersToActiveCombat()}
+                      disabled={launching}
+                      className={clsx(
+                        "btn-primary flex w-full items-center justify-center gap-2 text-xs",
+                        launching && "opacity-60",
+                      )}
+                    >
+                      <Sword size={14} />{" "}
+                      {launching
+                        ? "Adding…"
+                        : `Add all room monsters (${roomMonsters.reduce((a: number, m: { count?: number }) => a + (m.count || 1), 0)})`}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+              )}
+            </div>
           </>
         )}
       </div>
-
-      <div className="dnd-card hidden min-h-0 flex-col overflow-auto lg:flex">
-        <InlineRollHelper />
-      </div>
     </div>
+
+    {mapEncounterMenu && (
+      <>
+        <button
+          type="button"
+          className="fixed inset-0 z-[150] cursor-default bg-transparent"
+          aria-label="Close menu"
+          onClick={() => setMapEncounterMenu(null)}
+        />
+        <div
+          className="fixed z-[160] min-w-[12rem] max-w-[90vw] rounded border border-gray-600 bg-gray-950/98 p-2 text-xs text-gray-200 shadow-2xl"
+          style={{
+            left: Math.min(
+              mapEncounterMenu.clientX,
+              (typeof window !== "undefined" ? window.innerWidth : 800) - 220,
+            ),
+            top: Math.min(
+              mapEncounterMenu.clientY,
+              (typeof window !== "undefined" ? window.innerHeight : 600) - 280,
+            ),
+          }}
+        >
+          {mapEncounterMenu.cell.eType === "monster" ? (
+            <>
+              <p className="mb-2 font-semibold text-dnd-gold">Map creature</p>
+              {!activeCombat && partyCharacters.length > 0 && (
+                <button
+                  type="button"
+                  disabled={launching}
+                  className="mb-2 w-full rounded border border-dnd-gold/50 bg-dnd-gold/10 px-2 py-1.5 text-left text-dnd-gold hover:bg-dnd-gold/20 disabled:opacity-50"
+                  onClick={() => void startCombatFromMapMonsterCell()}
+                >
+                  {launching ? "Starting…" : "Start combat (party + this creature)"}
+                </button>
+              )}
+              {!activeCombat && partyCharacters.length === 0 && (
+                <p className="mb-2 text-[11px] text-gray-500">Add party members on the Party step first.</p>
+              )}
+              {activeCombat && (
+                <>
+                  <button
+                    type="button"
+                    disabled={launching}
+                    className="mb-2 w-full rounded border border-gray-600 px-2 py-1.5 text-left hover:bg-gray-800 disabled:opacity-50"
+                    onClick={() => void addCellMonsterToInitiative()}
+                  >
+                    {launching ? "Adding…" : "Add this creature to initiative"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={launching}
+                    className="mb-2 w-full rounded border border-gray-600 px-2 py-1.5 text-left hover:bg-gray-800 disabled:opacity-50"
+                    onClick={() => void addAllRoomMonstersAtMenuPosition()}
+                  >
+                    {launching ? "Adding…" : "Add all monsters in this room"}
+                  </button>
+                </>
+              )}
+            </>
+          ) : mapEncounterMenu.cell.eType === "trap" ? (
+            (() => {
+              const ex = mapEncounterMenu.cell.extra as Record<string, unknown>;
+              const dice = trapDamageDiceFromText(String(ex.dmg ?? ""));
+              const detect = ex.detectDC != null ? String(ex.detectDC) : "—";
+              const saveT = String(ex.saveType ?? "DEX");
+              const saveDc = ex.saveDC != null ? String(ex.saveDC) : "—";
+              return (
+                <>
+                  <p className="mb-1 font-semibold text-amber-200/90">Trap</p>
+                  {ex.name ? <p className="text-[11px] text-gray-200">{String(ex.name)}</p> : null}
+                  <div className="mb-2 space-y-1 rounded border border-gray-800 bg-black/30 p-2 text-[10px] text-gray-400">
+                    <p>
+                      <span className="font-semibold text-gray-300">Notice (before it fires):</span> compare passive
+                      Perception or an active check to <span className="text-gray-200">DC {detect}</span> (Perception to
+                      spot, Investigation to study mechanisms, etc.).
+                    </p>
+                    <p>
+                      <span className="font-semibold text-gray-300">If it triggers:</span>{" "}
+                      <span className="text-gray-200">{saveT}</span> save <span className="text-gray-200">DC {saveDc}</span>
+                      {ex.dmg ? (
+                        <>
+                          {" "}
+                          — on a failed save, typical damage:{" "}
+                          <span className="text-amber-100/90">{String(ex.dmg)}</span>
+                        </>
+                      ) : null}
+                    </p>
+                    {ex.effect ? <p className="text-gray-500">{String(ex.effect)}</p> : null}
+                  </div>
+                  {dice ? (
+                    <div className="mb-2 space-y-1">
+                      <button
+                        type="button"
+                        className="w-full rounded border border-amber-700/50 bg-amber-950/30 px-2 py-1.5 text-left text-amber-100/90 hover:bg-amber-950/50"
+                        onClick={() => {
+                          const r = rollMonsterDamage(dice, 0);
+                          setTrapMenuDamageRoll(r);
+                        }}
+                      >
+                        Roll damage ({dice})
+                      </button>
+                      {trapMenuDamageRoll ? (
+                        <p className="rounded border border-gray-700 px-2 py-1 font-mono text-[11px] text-gray-200">
+                          {trapMenuDamageRoll.breakdown}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className="mb-2 text-[10px] text-gray-500">No NdM damage in this trap text — apply harm manually.</p>
+                  )}
+                  {activeCombat && playerCombatants.length > 0 ? (
+                    <div className="mb-2 space-y-1">
+                      <label className="block text-[10px] text-gray-500">
+                        Apply rolled damage to
+                        <select
+                          className="input-field mt-0.5 w-full py-1 text-xs"
+                          value={trapDmTargetId}
+                          onChange={(e) => setTrapDmTargetId(e.target.value)}
+                        >
+                          {playerCombatants
+                            .filter((c) => c.type === "player" && c.isAlive)
+                            .map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.label}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        disabled={!trapDmTargetId || trapMenuDamageRoll == null}
+                        className="w-full rounded border border-dnd-red/40 bg-dnd-red/15 px-2 py-1.5 text-left text-red-100/90 hover:bg-dnd-red/25 disabled:opacity-40"
+                        onClick={() => {
+                          if (!trapMenuDamageRoll || !trapDmTargetId) return;
+                          void damageCombatant(trapDmTargetId, trapMenuDamageRoll.total);
+                          setMapEncounterMenu(null);
+                        }}
+                      >
+                        Apply {trapMenuDamageRoll ? trapMenuDamageRoll.total : "—"} damage to selected character
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="mb-2 text-[10px] text-gray-500">
+                      Start combat with party members to apply trap damage from here.
+                    </p>
+                  )}
+                </>
+              );
+            })()
+          ) : (
+            <p className="text-[11px] text-gray-400">Left-click this tile for full details.</p>
+          )}
+          <button
+            type="button"
+            className="mt-1 w-full rounded border border-gray-700 py-1 text-[11px] text-gray-500 hover:bg-gray-800"
+            onClick={() => setMapEncounterMenu(null)}
+          >
+            Close
+          </button>
+        </div>
+      </>
+    )}
+
+    {marchMenu && activeCombat && (
+      <>
+        <button
+          type="button"
+          className="fixed inset-0 z-[150] cursor-default bg-transparent"
+          aria-label="Close menu"
+          onClick={() => setMarchMenu(null)}
+        />
+        <div
+          className="fixed z-[160] min-w-[14rem] max-w-[90vw] rounded border border-gray-600 bg-gray-950/98 p-2 text-xs text-gray-200 shadow-2xl"
+          style={{
+            left: Math.min(
+              marchMenu.clientX,
+              (typeof window !== "undefined" ? window.innerWidth : 800) - 220,
+            ),
+            top: Math.min(
+              marchMenu.clientY,
+              (typeof window !== "undefined" ? window.innerHeight : 600) - 240,
+            ),
+          }}
+        >
+          <p className="mb-2 font-semibold text-dnd-gold">
+            {activeCombat.combatants.find((c) => c.id === marchMenu.tokenId)?.label ?? "Token"}
+          </p>
+          <button
+            type="button"
+            className="mb-3 w-full rounded border border-dnd-gold/50 bg-dnd-gold/10 px-2 py-1.5 text-left font-medium text-dnd-gold hover:bg-dnd-gold/20"
+            onClick={() => {
+              setPartyLeaderId(marchMenu.tokenId);
+              setMarchMenu(null);
+            }}
+          >
+            Set as march leader (TV follows)
+          </button>
+          <p className="mb-1 text-[10px] uppercase tracking-wide text-gray-500">Follow when marching</p>
+          <div className="space-y-1.5">
+            {playerCombatants
+              .filter((c) => c.id !== (partyLeaderId ?? marchMenu.tokenId))
+              .map((c) => (
+                <label key={c.id} className="flex cursor-pointer items-center gap-2 text-[11px]">
+                  <input
+                    type="checkbox"
+                    className="rounded border-gray-600"
+                    checked={partyFollowIds.includes(c.id)}
+                    onChange={(e) =>
+                      setPartyFollowIds((prev) =>
+                        e.target.checked ? [...prev, c.id] : prev.filter((id) => id !== c.id),
+                      )
+                    }
+                  />
+                  <span>{c.label}</span>
+                </label>
+              ))}
+          </div>
+          {playerCombatants.filter((c) => c.id !== (partyLeaderId ?? marchMenu.tokenId)).length === 0 && (
+            <p className="text-[10px] text-gray-500">No other PCs in combat.</p>
+          )}
+        </div>
+      </>
+    )}
 
     {mapEntityModal?.kind === "item" && (
       <Modal
@@ -1926,6 +2655,96 @@ function EncounterWorkspace({
         <p className="mt-3 text-xs text-gray-500">
           This marker is hidden on the player map. Read the prompt aloud; keep the answer to yourself.
         </p>
+      </Modal>
+    )}
+
+    {mapEntityModal?.kind === "trap" && (
+      <Modal
+        title={`Trap: ${String(mapEntityModal.ent.name ?? "Hazard")}`}
+        onClose={() => setMapEntityModal(null)}
+        footer={
+          <>
+            <button type="button" onClick={() => setMapEntityModal(null)} className="btn-secondary">
+              Close
+            </button>
+            {activeCombat && playerCombatants.length > 0 && trapModalRoll && trapModalTargetId ? (
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  void damageCombatant(trapModalTargetId, trapModalRoll.total);
+                  setMapEntityModal(null);
+                }}
+              >
+                Apply {trapModalRoll.total} damage
+              </button>
+            ) : null}
+          </>
+        }
+      >
+        {(() => {
+          const ex = mapEntityModal.ent;
+          const dice = trapDamageDiceFromText(String(ex.dmg ?? ""));
+          const detect = ex.detectDC != null ? String(ex.detectDC) : "—";
+          const saveT = String(ex.saveType ?? "DEX");
+          const saveDc = ex.saveDC != null ? String(ex.saveDC) : "—";
+          return (
+            <div className="space-y-3 text-sm text-gray-300">
+              <div className="space-y-1 rounded border border-amber-900/40 bg-amber-950/20 p-3 text-xs text-gray-400">
+                <p>
+                  <span className="font-semibold text-gray-200">Notice:</span> DC {detect} (passive Perception or active
+                  Perception / Investigation before it fires).
+                </p>
+                <p>
+                  <span className="font-semibold text-gray-200">Save if triggered:</span> {saveT} DC {saveDc}
+                  {ex.dmg ? (
+                    <>
+                      {" "}
+                      — damage on a failed save: <span className="text-amber-100/90">{String(ex.dmg)}</span>
+                    </>
+                  ) : null}
+                </p>
+                {ex.effect ? <p className="text-gray-500">{String(ex.effect)}</p> : null}
+              </div>
+              {dice ? (
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    className="rounded border border-amber-700/50 bg-amber-950/30 px-3 py-2 text-xs text-amber-100/90 hover:bg-amber-950/50"
+                    onClick={() => setTrapModalRoll(rollMonsterDamage(dice, 0))}
+                  >
+                    Roll damage ({dice})
+                  </button>
+                  {trapModalRoll ? (
+                    <p className="font-mono text-xs text-gray-200">{trapModalRoll.breakdown}</p>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-500">No dice pattern found in the damage text.</p>
+              )}
+              {activeCombat && playerCombatants.length > 0 ? (
+                <label className="block text-xs text-gray-500">
+                  Apply to
+                  <select
+                    className="input-field mt-1 w-full"
+                    value={trapModalTargetId}
+                    onChange={(e) => setTrapModalTargetId(e.target.value)}
+                  >
+                    {playerCombatants
+                      .filter((c) => c.type === "player" && c.isAlive)
+                      .map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.label}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              ) : (
+                <p className="text-xs text-gray-500">Start combat to apply damage to a character from this dialog.</p>
+              )}
+            </div>
+          );
+        })()}
       </Modal>
     )}
     </>
