@@ -14,7 +14,16 @@ export function maxSpellSlotLevel(characterLevel: number, spellcastingType: stri
     const m = Math.floor((lv + 1) / 3);
     return m <= 0 ? 0 : Math.min(5, m);
   }
-  return Math.min(9, Math.max(1, Math.ceil(lv / 2)));
+  // Full caster max spell slot level (PHB p.114)
+  if (lv <= 2) return 1;
+  if (lv <= 4) return 2;
+  if (lv <= 6) return 3;
+  if (lv <= 8) return 4;
+  if (lv <= 10) return 5;
+  if (lv <= 12) return 6;
+  if (lv <= 14) return 7;
+  if (lv <= 16) return 8;
+  return 9;
 }
 
 /** Uses actual spell slot rows (correct for multiclass + warlock). */

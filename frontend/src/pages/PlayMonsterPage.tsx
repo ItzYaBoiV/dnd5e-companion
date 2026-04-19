@@ -59,7 +59,7 @@ export default function PlayMonsterPage() {
               AC {m.armorClass} · HP {m.hitPoints} · CR {m.challengeRating}
             </p>
           ) : (
-            <p className="text-3xl md:text-5xl font-mono">AC ? · HP ? · CR {m.challengeRating}</p>
+            <p className="text-3xl md:text-5xl font-mono">AC ? · HP ? · CR ?</p>
           )}
         </div>
       ) : (

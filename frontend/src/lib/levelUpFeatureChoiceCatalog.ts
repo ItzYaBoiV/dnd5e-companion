@@ -96,41 +96,76 @@ const SRD_FAVORED_TERRAINS: FeatureOption[] = [
   meta("underdark", "Underdark", "Favored terrain."),
 ];
 
-const SRD_TOTEM_BEASTS: FeatureOption[] = [
+/** PHB Totem Spirit (level 3) — Bear, Eagle, or Wolf only. */
+const SRD_TOTEM_SPIRIT: FeatureOption[] = [
   meta("bear", "Bear", "Totem option — resistance while raging (levels vary by feature)."),
   meta("eagle", "Eagle", "Totem option — mobility and vision benefits."),
-  meta("elk", "Elk", "Totem option — travel speed for the party."),
-  meta("tiger", "Tiger", "Totem option — leap and stalking benefits."),
   meta("wolf", "Wolf", "Totem option — pack tactics while raging."),
 ];
 
-const SRD_ELDRITCH_INVOCATIONS: FeatureOption[] = [
-  meta("agonizing-blast", "Agonizing Blast", "Eldritch Blast adds Charisma mod to damage (any)."),
-  meta("armor-of-shadows", "Armor of Shadows", "Cast mage armor on yourself at will (any)."),
-  meta("ascendant-step", "Ascendant Step", "Levitate on self at will (9th+ warlock)."),
-  meta("beast-speech", "Beast Speech", "Speak with animals at will (any)."),
-  meta("beguiling-influence", "Beguiling Influence", "Proficiency in Deception and Persuasion (any)."),
-  meta("devils-sight", "Devil's Sight", "See in darkness (any)."),
-  meta("eldritch-spear", "Eldritch Spear", "Eldritch Blast range 300 ft (any)."),
-  meta("eyes-of-the-rune-keeper", "Eyes of the Rune Keeper", "Read all writing (any)."),
-  meta("fiendish-vigor", "Fiendish Vigor", "False life at will on yourself (any)."),
-  meta("gaze-of-two-minds", "Gaze of Two Minds", "Perceive through a willing humanoid (any)."),
-  meta("lifedrinker", "Lifedrinker", "Weapon pact attacks add Cha to damage (12th+)."),
-  meta("mask-of-many-faces", "Mask of Many Faces", "Disguise self at will (any)."),
-  meta("master-of-myriad-forms", "Master of Myriad Forms", "Alter self at will (15th+)."),
-  meta("minions-of-chaos", "Minions of Chaos", "Conjure elemental once per long rest (9th+)."),
-  meta("mire-the-mind", "Mire the Mind", "Slow once per long rest (5th+)."),
-  meta("misty-visions", "Misty Visions", "Silent image at will (any)."),
-  meta("one-with-shadows", "One with Shadows", "Invisibility in dim light (5th+)."),
-  meta("otherworldly-leap", "Otherworldly Leap", "Jump at will (9th+)."),
-  meta("repelling-blast", "Repelling Blast", "Eldritch Blast can push 10 ft (any)."),
-  meta("sculptor-of-flesh", "Sculptor of Flesh", "Polymorph once per long rest (7th+)."),
-  meta("sign-of-ill-omen", "Sign of Ill Omen", "Bestow curse once per long rest (5th+)."),
-  meta("thief-of-five-fates", "Thief of Five Fates", "Bane once per long rest (any)."),
-  meta("voice-of-the-chain-master", "Voice of the Chain Master", "Speak through familiar telepathically (any)."),
-  meta("whispers-of-the-grave", "Whispers of the Grave", "Speak with dead once per long rest (9th+)."),
-  meta("witch-sight", "Witch Sight", "See creatures’ true forms (15th+)."),
+/** PHB Aspect of the Beast (level 6+) — includes Elk and Tiger. */
+const SRD_ASPECT_BEASTS: FeatureOption[] = [
+  ...SRD_TOTEM_SPIRIT,
+  meta("elk", "Elk", "Totem option — travel speed for the party."),
+  meta("tiger", "Tiger", "Totem option — leap and stalking benefits."),
 ];
+
+type EldritchInvocationDef = { key: string; title: string; detail: string; minLevel?: number };
+
+/** PHB minimum warlock level; default 1 when omitted. */
+const RAW_SRD_ELDRITCH_INVOCATIONS: EldritchInvocationDef[] = [
+  { key: "agonizing-blast", title: "Agonizing Blast", detail: "Eldritch Blast adds Charisma mod to damage (any)." },
+  { key: "armor-of-shadows", title: "Armor of Shadows", detail: "Cast mage armor on yourself at will (any)." },
+  { key: "ascendant-step", title: "Ascendant Step", detail: "Levitate on self at will (9th+ warlock).", minLevel: 9 },
+  { key: "beast-speech", title: "Beast Speech", detail: "Speak with animals at will (any)." },
+  { key: "beguiling-influence", title: "Beguiling Influence", detail: "Proficiency in Deception and Persuasion (any)." },
+  { key: "devils-sight", title: "Devil's Sight", detail: "See in darkness (any)." },
+  { key: "eldritch-spear", title: "Eldritch Spear", detail: "Eldritch Blast range 300 ft (any)." },
+  { key: "eyes-of-the-rune-keeper", title: "Eyes of the Rune Keeper", detail: "Read all writing (any)." },
+  { key: "fiendish-vigor", title: "Fiendish Vigor", detail: "False life at will on yourself (any)." },
+  { key: "gaze-of-two-minds", title: "Gaze of Two Minds", detail: "Perceive through a willing humanoid (any)." },
+  { key: "lifedrinker", title: "Lifedrinker", detail: "Weapon pact attacks add Cha to damage (12th+).", minLevel: 12 },
+  { key: "mask-of-many-faces", title: "Mask of Many Faces", detail: "Disguise self at will (any)." },
+  {
+    key: "master-of-myriad-forms",
+    title: "Master of Myriad Forms",
+    detail: "Alter self at will (15th+).",
+    minLevel: 15,
+  },
+  { key: "minions-of-chaos", title: "Minions of Chaos", detail: "Conjure elemental once per long rest (9th+).", minLevel: 9 },
+  { key: "mire-the-mind", title: "Mire the Mind", detail: "Slow once per long rest (5th+).", minLevel: 5 },
+  { key: "misty-visions", title: "Misty Visions", detail: "Silent image at will (any)." },
+  { key: "one-with-shadows", title: "One with Shadows", detail: "Invisibility in dim light (5th+).", minLevel: 5 },
+  { key: "otherworldly-leap", title: "Otherworldly Leap", detail: "Jump at will (9th+).", minLevel: 9 },
+  { key: "repelling-blast", title: "Repelling Blast", detail: "Eldritch Blast can push 10 ft (any)." },
+  { key: "sculptor-of-flesh", title: "Sculptor of Flesh", detail: "Polymorph once per long rest (7th+).", minLevel: 7 },
+  { key: "sign-of-ill-omen", title: "Sign of Ill Omen", detail: "Bestow curse once per long rest (5th+).", minLevel: 5 },
+  { key: "thief-of-five-fates", title: "Thief of Five Fates", detail: "Bane once per long rest (any)." },
+  { key: "voice-of-the-chain-master", title: "Voice of the Chain Master", detail: "Speak through familiar telepathically (any)." },
+  {
+    key: "whispers-of-the-grave",
+    title: "Whispers of the Grave",
+    detail: "Speak with dead once per long rest (9th+).",
+    minLevel: 9,
+  },
+  { key: "witch-sight", title: "Witch Sight", detail: "See creatures’ true forms (15th+).", minLevel: 15 },
+];
+
+function eldritchInvocationOptionsForWarlockLevel(warlockClassLevel: number): FeatureOption[] {
+  return RAW_SRD_ELDRITCH_INVOCATIONS.filter((inv) => (inv.minLevel ?? 1) <= warlockClassLevel).map((inv) =>
+    meta(inv.key, inv.title, inv.detail),
+  );
+}
+
+/** Cumulative invocations known by warlock class tier (PHB). */
+function warlockInvocationsKnownAtClassLevel(L: number): number {
+  if (L < 2) return 0;
+  let n = 2;
+  for (const b of [5, 7, 9, 12, 15, 18]) {
+    if (L >= b) n++;
+  }
+  return n;
+}
 
 const HUNTERS_PREY: FeatureOption[] = [
   meta("colossus-slayer", "Colossus Slayer", "Extra damage once per turn vs wounded foe."),
@@ -169,10 +204,14 @@ const SRD_DRAGON_ANCESTORS: FeatureOption[] = [
 ];
 
 const CIRCLE_LAND_TERRAIN: FeatureOption[] = [
-  meta("arid", "Arid", "Circle of the Land — arid spell list."),
-  meta("polar", "Polar", "Circle of the Land — polar spell list."),
-  meta("temperate", "Temperate", "Circle of the Land — temperate spell list."),
-  meta("tropical", "Tropical", "Circle of the Land — tropical spell list."),
+  meta("arctic", "Arctic", "Circle of the Land — arctic spell list."),
+  meta("coast", "Coast", "Circle of the Land — coast spell list."),
+  meta("desert", "Desert", "Circle of the Land — desert spell list."),
+  meta("forest", "Forest", "Circle of the Land — forest spell list."),
+  meta("grassland", "Grassland", "Circle of the Land — grassland spell list."),
+  meta("mountain", "Mountain", "Circle of the Land — mountain spell list."),
+  meta("swamp", "Swamp", "Circle of the Land — swamp spell list."),
+  meta("underdark", "Underdark", "Circle of the Land — underdark spell list."),
 ];
 
 const PACT_BOONS: FeatureOption[] = [
@@ -209,8 +248,9 @@ const CD_TURN_UNDEAD: FeatureOption = meta(
   "As an action, each undead that can see or hear you within 30 ft makes a Wisdom save.",
 );
 
-function clericDomainChannelOptions(subLower: string): FeatureOption[] {
+function clericDomainChannelOptions(subLower: string, classLevel: number): FeatureOption[] {
   const s = subLower;
+  const L = classLevel;
   const domain = (name: string, detail: string) => meta(slugifyOptionKey(name), name, detail);
   if (s.includes("life"))
     return [CD_TURN_UNDEAD, domain("Preserve Life", "Restore hit points divided among creatures in 30 ft.")];
@@ -234,12 +274,26 @@ function clericDomainChannelOptions(subLower: string): FeatureOption[] {
       CD_TURN_UNDEAD,
       domain("Invoke Duplicity", "Create an illusory duplicate; spells can originate from it."),
     ];
-  if (s.includes("war"))
-    return [
-      CD_TURN_UNDEAD,
-      domain("Guided Strike", "After an attack roll, add +10 with your Channel Divinity."),
-      domain("War God's Bless", "When a creature within 60 ft hits, add +10 to the attack with Channel Divinity."),
-    ];
+  if (s.includes("war")) {
+    const out: FeatureOption[] = [CD_TURN_UNDEAD];
+    if (L >= 2) {
+      out.push(
+        domain(
+          "Guided Strike",
+          "When you make an attack roll, you can use Channel Divinity to add +10 to the roll (PHB).",
+        ),
+      );
+    }
+    if (L >= 6) {
+      out.push(
+        domain(
+          "War God's Blessing",
+          "When a creature within 60 feet of you that you can see hits with a weapon attack, you can use Channel Divinity to add +10 to that attack roll (PHB).",
+        ),
+      );
+    }
+    return out;
+  }
   if (s.includes("knowledge"))
     return [
       CD_TURN_UNDEAD,
@@ -299,7 +353,15 @@ function isFourElementsSubclass(sub: string): boolean {
   return sub.includes("four-elements") || (sub.includes("four") && sub.includes("element"));
 }
 
-function battleMasterManeuverPicks(
+/** PHB Battle Master: 3 at 3; 2 more at 7, 10, 15. */
+function battleMasterManeuverPicksHardcoded(subLower: string, classLevel: number): number {
+  if (!isBattleMasterSubclass(subLower)) return 0;
+  if (classLevel === 3) return 3;
+  if ([7, 10, 15].includes(classLevel)) return 2;
+  return 0;
+}
+
+function battleMasterManeuverPicksFromDescription(
   nameLower: string,
   description: string,
   classLevel: number,
@@ -316,6 +378,12 @@ function battleMasterManeuverPicks(
       return 2;
     if (/additional maneuvers/i.test(blob) && /two|\b2\b/.test(blob)) return 2;
   }
+  return 0;
+}
+
+function fourElementsDisciplinePicks(classLevel: number): number {
+  if (classLevel === 3) return 2;
+  if ([6, 11, 17].includes(classLevel)) return 1;
   return 0;
 }
 
@@ -336,15 +404,31 @@ export function resolveGrantPickSpec(input: ResolveGrantPickInput): GrantPickSpe
   const sub = input.subclassSlugLower;
 
   if (slug === "wizard" && n.includes("spell mastery") && L >= 18) {
-    return {
-      kind: "spells",
-      pickCount: 2,
-      maxSpellLevel: 3,
-      spellList: "wizard",
-      allowCantrips: false,
-      fromKnownSpellbookOnly: true,
-      addToSpellbook: false,
-    };
+    if (n.includes("1st-level") || n.includes("1st level")) {
+      return {
+        kind: "spells",
+        pickCount: 1,
+        minSpellLevel: 1,
+        maxSpellLevel: 1,
+        spellList: "wizard",
+        allowCantrips: false,
+        fromKnownSpellbookOnly: true,
+        addToSpellbook: false,
+      };
+    }
+    if (n.includes("2nd-level") || n.includes("2nd level")) {
+      return {
+        kind: "spells",
+        pickCount: 1,
+        minSpellLevel: 2,
+        maxSpellLevel: 2,
+        spellList: "wizard",
+        allowCantrips: false,
+        fromKnownSpellbookOnly: true,
+        addToSpellbook: false,
+      };
+    }
+    return null;
   }
 
   if (slug === "wizard" && (n.includes("signature spell") || n.includes("signature spells")) && L >= 20) {
@@ -355,7 +439,7 @@ export function resolveGrantPickSpec(input: ResolveGrantPickInput): GrantPickSpe
       spellList: "wizard",
       allowCantrips: false,
       fromKnownSpellbookOnly: true,
-      addToSpellbook: true,
+      addToSpellbook: false,
       alwaysPrepared: true,
     };
   }
@@ -363,7 +447,7 @@ export function resolveGrantPickSpec(input: ResolveGrantPickInput): GrantPickSpe
   if (slug === "bard" && n.includes("magical secret")) {
     const maxLv = maxSpellLevelForFullCaster(L);
     const isLoreSix = L === 6 && sub.includes("lore");
-    if (L === 10 || L === 18 || isLoreSix) {
+    if (L === 10 || L === 14 || L === 18 || isLoreSix) {
       return {
         kind: "spells",
         pickCount: 2,
@@ -377,13 +461,13 @@ export function resolveGrantPickSpec(input: ResolveGrantPickInput): GrantPickSpe
   }
 
   if (slug === "cleric" && n.includes("channel divinity") && L >= 2) {
-    const opts = clericDomainChannelOptions(sub);
+    const opts = clericDomainChannelOptions(sub, L);
     return { kind: "channel-divinity", options: opts, pickCount: opts.length };
   }
 
   if (slug === "monk" && isFourElementsSubclass(sub) && (n.includes("discipline") || n.includes("elemental"))) {
-    if ([3, 6, 11, 17].includes(L))
-      return { kind: "options", options: FOUR_ELEMENTS_DISCIPLINES, pickCount: 1 };
+    const picks = fourElementsDisciplinePicks(L);
+    if (picks > 0) return { kind: "options", options: FOUR_ELEMENTS_DISCIPLINES, pickCount: picks };
   }
 
   if (slug === "ranger" && isBeastMasterSubclass(sub) && (n.includes("companion") || n.includes("beast"))) {
@@ -401,11 +485,17 @@ export function resolveGrantPickSpec(input: ResolveGrantPickInput): GrantPickSpe
   }
 
   if (slug === "fighter" && isBattleMasterSubclass(sub)) {
-    const picks = battleMasterManeuverPicks(n, desc, L);
+    const hard = battleMasterManeuverPicksHardcoded(sub, L);
+    const picks = hard > 0 ? hard : battleMasterManeuverPicksFromDescription(n, desc, L);
     if (picks > 0) return { kind: "options", options: SRD_MANEUVERS, pickCount: picks };
   }
 
   if (slug === "ranger" && isHunterSubclass(sub)) {
+    if (
+      L === 11 &&
+      (n.includes("multiattack") || n.includes("volley") || n.includes("whirlwind") || /volley|whirlwind/i.test(desc))
+    )
+      return { kind: "options", options: HUNTER_MULTIATTACK, pickCount: 1 };
     if (n.includes("hunter") && n.includes("prey"))
       return { kind: "options", options: HUNTERS_PREY, pickCount: 1 };
     if (n.includes("defensive tactic"))
@@ -423,7 +513,7 @@ export function resolveGrantPickSpec(input: ResolveGrantPickInput): GrantPickSpe
 
   if (n.includes("expertise")) {
     let pick = 0;
-    if (slug === "bard" && L === 3) pick = 2;
+    if (slug === "bard" && (L === 3 || L === 10)) pick = 2;
     if (slug === "rogue" && (L === 1 || L === 6)) pick = 2;
     if (pick === 0) return null;
     const fromProf = skillsFromProficiencyList(input.proficientSkillSlugs);
@@ -445,16 +535,24 @@ export function resolveGrantPickSpec(input: ResolveGrantPickInput): GrantPickSpe
   }
 
   if (slug === "barbarian" && isTotemSubclass(sub)) {
-    if (L === 3 && (n.includes("totem spirit") || n.includes("spirit seeker") || n.includes("totem warrior")))
-      return { kind: "options", options: SRD_TOTEM_BEASTS, pickCount: 1 };
+    if (L === 3 && n.includes("totem spirit") && !n.includes("spirit seeker"))
+      return { kind: "options", options: SRD_TOTEM_SPIRIT, pickCount: 1 };
     if (L === 6 && n.includes("aspect") && n.includes("beast"))
-      return { kind: "options", options: SRD_TOTEM_BEASTS, pickCount: 1 };
+      return { kind: "options", options: SRD_ASPECT_BEASTS, pickCount: 1 };
     if (L === 14 && (n.includes("totemic") || n.includes("attunement")))
-      return { kind: "options", options: SRD_TOTEM_BEASTS, pickCount: 1 };
+      return { kind: "options", options: SRD_ASPECT_BEASTS, pickCount: 1 };
   }
 
   if (slug === "warlock" && (n.includes("invocation") || n.includes("eldritch invocation"))) {
-    return { kind: "options", options: SRD_ELDRITCH_INVOCATIONS, pickCount: 1 };
+    const prev = warlockInvocationsKnownAtClassLevel(L - 1);
+    const curr = warlockInvocationsKnownAtClassLevel(L);
+    const pickCount = curr - prev;
+    if (pickCount < 1) return null;
+    return {
+      kind: "options",
+      options: eldritchInvocationOptionsForWarlockLevel(L),
+      pickCount,
+    };
   }
 
   if (n === "pact boon" || (n.includes("pact") && n.includes("boon"))) {
@@ -487,7 +585,9 @@ export function filterSpellsForGrantSpec(
   wizardSpellSlugs: Set<string>,
   knownSpellSlugs: Set<string>,
 ): Spell[] {
+  const minLv = spec.minSpellLevel ?? 0;
   return allSpells.filter((s) => {
+    if (s.level < minLv) return false;
     if (s.level > spec.maxSpellLevel) return false;
     if (!spec.allowCantrips && s.level === 0) return false;
     if (spec.fromKnownSpellbookOnly && !knownSpellSlugs.has(s.slug)) return false;

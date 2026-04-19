@@ -85,15 +85,25 @@ export function GrantPickControls({
     const heading =
       spec.addToSpellbook && spec.spellList === "any"
         ? "Magical Secrets — add these spells to your known list"
-        : spec.alwaysPrepared
-          ? "Signature Spells — always prepared (record choices)"
-          : "Spell Mastery — 3rd-level wizard spells you can cast at will";
+        : spec.alwaysPrepared && !spec.addToSpellbook
+          ? "Signature Spells — from your spellbook (always prepared)"
+          : spec.minSpellLevel === 1 && spec.maxSpellLevel === 1
+            ? "Spell Mastery — one 1st-level wizard spell (at will)"
+            : spec.minSpellLevel === 2 && spec.maxSpellLevel === 2
+              ? "Spell Mastery — one 2nd-level wizard spell (at will)"
+              : "Spell Mastery — wizard spells from your spellbook (at will)";
 
     return (
       <div className={clsx("mt-2 space-y-2 rounded border bg-black/20 p-2", b)}>
         <p className={clsx("text-[11px] uppercase tracking-wide", gold)}>
           {heading} ({pickedSpells.length}/{spec.pickCount})
         </p>
+        {spec.alwaysPrepared && !spec.addToSpellbook ? (
+          <p className={clsx("text-[10px] opacity-90", tMuted)}>
+            Choose 2 wizard spells (3rd level or lower) you already have in your spellbook. They are always prepared;
+            each can be cast once per short rest without a slot, or using a slot for additional casts (PHB).
+          </p>
+        ) : null}
         <p className={clsx("text-[10px] opacity-80", tMuted)}>
           {spec.fromKnownSpellbookOnly
             ? "Only spells already in your spellbook / known list qualify."

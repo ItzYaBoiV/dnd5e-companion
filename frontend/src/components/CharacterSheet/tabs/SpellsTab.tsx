@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import type { Character, Spell, CharacterSpell } from "@/types/dnd";
+import type { Character, Spell, CharacterSpell, SpellSlot as SpellSlotRow } from "@/types/dnd";
 import { useCharacterStore } from "@/store/characterStore";
 import { referenceApi } from "@/services/api";
 import { SectionHeader, SpellLevelBadge, LoadingSpinner, Modal } from "@/components/common";
@@ -72,15 +72,22 @@ export default function SpellsTab({ character }: Props) {
           <SectionHeader title="Spell Slots" />
           <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-2">
             {character.spellSlots
-              .sort((a, b) => a.level - b.level)
+              .slice()
+              .sort(
+                (a, b) =>
+                  a.level - b.level ||
+                  ((a.source ?? "spellcasting") === "pact" ? 1 : 0) -
+                    ((b.source ?? "spellcasting") === "pact" ? 1 : 0),
+              )
               .map((slot) => (
                 <SpellSlotWidget
-                  key={slot.level}
+                  key={slot.id}
                   level={slot.level}
                   total={slot.total}
                   used={slot.used}
-                  onUse={() => useSpellSlot(slot.level)}
-                  onRecover={() => recoverSpellSlot(slot.level)}
+                  source={slot.source}
+                  onUse={() => useSpellSlot(slot.level, slot.source)}
+                  onRecover={() => recoverSpellSlot(slot.level, 1, slot.source)}
                 />
               ))}
           </div>
@@ -163,15 +170,27 @@ export default function SpellsTab({ character }: Props) {
 
 // ── Spell Slot Widget ─────────────────────────────────────────────
 function SpellSlotWidget({
-  level, total, used, onUse, onRecover,
+  level, total, used, source, onUse, onRecover,
 }: {
-  level: number; total: number; used: number;
-  onUse: () => void; onRecover: () => void;
+  level: number;
+  total: number;
+  used: number;
+  source?: SpellSlotRow["source"];
+  onUse: () => void;
+  onRecover: () => void;
 }) {
   const remaining = total - used;
+  const isPact = source === "pact";
   return (
     <div className="flex flex-col items-center gap-1">
-      <SpellLevelBadge level={level} />
+      <div className="flex flex-col items-center gap-0.5">
+        <SpellLevelBadge level={level} />
+        {isPact && (
+          <span className="text-[10px] uppercase tracking-wide font-display px-1.5 py-0.5 rounded bg-amber-900/60 text-amber-100 border border-amber-700/50">
+            Short rest
+          </span>
+        )}
+      </div>
       <div className="flex flex-wrap gap-0.5 justify-center">
         {Array.from({ length: total }).map((_, i) => (
           <button

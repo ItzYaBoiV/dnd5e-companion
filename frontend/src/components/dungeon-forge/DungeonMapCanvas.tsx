@@ -3,6 +3,7 @@ import {
   renderDungeonToCanvas,
   type EntityPalette,
   type RenderCell,
+  type RenderTileOpts,
   type TilePalette,
 } from "@/lib/dungeonTileRenderer";
 import type { BattleToken, SceneLight } from "@/lib/playerMapBroadcast";
@@ -25,6 +26,9 @@ export type DungeonMapCanvasProps = {
   animPhase?: number;
   lighting?: { gx: number; gy: number; radiusCells: number; intensity?: number } | null;
   sceneLights?: SceneLight[] | null;
+  forgeDmHints?: NonNullable<RenderTileOpts["forgeDmHints"]>;
+  dungeonLighting?: RenderTileOpts["dungeonLighting"];
+  graveyardAmbience?: RenderTileOpts["graveyardAmbience"];
   battleTokens?: BattleToken[] | null;
   /** When the `grid` prop is a cropped window, pass the top-left of that window in full-map coords. */
   worldOffset?: { x: number; y: number };
@@ -114,6 +118,9 @@ function DungeonMapCanvasInner({
   animPhase,
   lighting,
   sceneLights,
+  forgeDmHints,
+  dungeonLighting,
+  graveyardAmbience,
   battleTokens,
   worldOffset,
   className,
@@ -179,6 +186,9 @@ function DungeonMapCanvasInner({
       entityTokenImages,
       inkSaver: false,
       playerSightRingCells: playerSightRingCells ?? null,
+      forgeDmHints: forgeDmHints ?? null,
+      dungeonLighting,
+      graveyardAmbience,
     });
   }, [
     grid,
@@ -196,6 +206,9 @@ function DungeonMapCanvasInner({
     animPhase,
     lighting,
     sceneLights,
+    forgeDmHints,
+    dungeonLighting,
+    graveyardAmbience,
     battleTokens,
     tokenImagesVersion,
     entityTokenImagesVersion,

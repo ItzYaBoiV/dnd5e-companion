@@ -92,11 +92,11 @@ export const characterApi = {
       ...(hitDiceFrom?.length ? { hitDiceFrom } : {}),
     }),
 
-  // Spell slots
-  useSpellSlot:     (id: string, level: number) =>
-    patch<SpellSlot>(`/characters/${id}/spell-slots/${level}`, { action: "use", amount: 1 }),
-  recoverSpellSlot: (id: string, level: number, amount = 1) =>
-    patch<SpellSlot>(`/characters/${id}/spell-slots/${level}`, { action: "recover", amount }),
+  // Spell slots (source distinguishes pact vs spellcasting when same spell level)
+  useSpellSlot:     (id: string, level: number, source: SpellSlot["source"] = "spellcasting") =>
+    patch<SpellSlot>(`/characters/${id}/spell-slots/${level}`, { action: "use", amount: 1, source }),
+  recoverSpellSlot: (id: string, level: number, amount = 1, source: SpellSlot["source"] = "spellcasting") =>
+    patch<SpellSlot>(`/characters/${id}/spell-slots/${level}`, { action: "recover", amount, source }),
 
   // Conditions
   addCondition:    (id: string, conditionSlug: string, notes = "") =>

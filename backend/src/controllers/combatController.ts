@@ -5,6 +5,7 @@ import {
   allModifiers, allSkills, allSavingThrows, weaponAttack,
   initiativeModifier, rollDie, proficiencyBonus, AbilityName,
 } from "../services/calculationService";
+import { doubleDiceOnly } from "../util/doubleDiceOnly";
 
 function getCharacterStats(char: any) {
   const scores = {
@@ -64,7 +65,7 @@ export const rollAttack = async (req: Request<{ id: string }>, res: Response) =>
     attackBonus: result.attackBonus,
     total,
     isCrit, isFumble,
-    damageDice:  isCrit ? `${result.damageDice}+${result.damageDice}` : result.damageDice,
+    damageDice:  isCrit ? doubleDiceOnly(result.damageDice) : result.damageDice,
     damageBonus: result.damageBonus,
     damageType:  result.damageType,
     abilityUsed: result.abilityUsed,

@@ -32,6 +32,10 @@ export type ComputeVisibleFogOpts = {
    * and adjacent walls outline the entire structure. Omit or `undefined` for unlimited (yards / towns).
    */
   maxFogHops?: number;
+  /** Graveyard mausoleum interiors: full floor visible only for these room ids (door threshold only otherwise). */
+  graveyardInteriorRevealed?: Set<number> | null;
+  /** Swamp: water tiles cost double hop budget in fog BFS. */
+  locationType?: string;
 };
 
 /** Default hop limit for dungeon-like interiors (castle, sewer, cave, …). */
@@ -100,8 +104,8 @@ export function computeVisibleCellsForPlayer(
   function doorKeyForStep(x: number, y: number, nx: number, ny: number): string | null {
     const t1 = g[y]?.[x];
     const t2 = g[ny]?.[nx];
-    if (t1 === T.D) return `${x},${y}`;
-    if (t2 === T.D) return `${nx},${ny}`;
+    if (t1 === T.D || t1 === T.SECRET_DOOR || t1 === T.GATE || t1 === T.DRAWBRIDGE) return `${x},${y}`;
+    if (t2 === T.D || t2 === T.SECRET_DOOR || t2 === T.GATE || t2 === T.DRAWBRIDGE) return `${nx},${ny}`;
     return null;
   }
 
@@ -122,7 +126,10 @@ export function computeVisibleCellsForPlayer(
       const dk = doorKeyForStep(x, y, nx, ny);
       if (dk && !doorPassableAt(dk, doorOpen, doorStates ?? null)) {
         const nt = g[ny][nx];
-        if (nt === T.D && (maxFogHops == null || d <= maxFogHops)) {
+        if (
+          (nt === T.D || nt === T.SECRET_DOOR || nt === T.GATE || nt === T.DRAWBRIDGE) &&
+          (maxFogHops == null || d <= maxFogHops)
+        ) {
           cells.add(nk);
           if (!visited.has(nk)) visited.add(nk);
         }
@@ -132,17 +139,31 @@ export function computeVisibleCellsForPlayer(
       if (visited.has(nk)) continue;
 
       const tile = g[ny][nx];
-      const nd = d + 1;
+      const hop =
+        fogOpts?.locationType === "swamp" && tile === T.WA ? 2 : 1;
+      const nd = d + hop;
       if (maxFogHops != null && nd > maxFogHops) {
         if (tile === T.W && d <= maxFogHops) cells.add(nk);
         continue;
       }
 
-      if (tile === T.C || tile === T.D || tile === T.ROAD || tile === T.BRIDGE || tile === T.LAVA) {
+      const secretOpen =
+        tile === T.SECRET_DOOR && doorPassableAt(`${nx},${ny}`, doorOpen, doorStates ?? null);
+      if (
+        tile === T.C ||
+        tile === T.D ||
+        tile === T.GATE ||
+        tile === T.DRAWBRIDGE ||
+        tile === T.ROAD ||
+        tile === T.BRIDGE ||
+        tile === T.LAVA ||
+        tile === T.WA ||
+        secretOpen
+      ) {
         visited.add(nk);
         cells.add(nk);
         queue.push({ key: nk, d: nd });
-      } else if (openFloor && tile === T.F) {
+      } else if (openFloor && (tile === T.F || tile === T.PIT || tile === T.ALLEY)) {
         const interiorRid = cellRoomId(dg, nx, ny);
         if (interiorRid != null && !rev.has(interiorRid)) {
           continue;
@@ -156,23 +177,95 @@ export function computeVisibleCellsForPlayer(
     }
   }
 
+  clipGraveyardMausoleumFog(cells, dg, rev, fogOpts?.graveyardInteriorRevealed ?? null);
+
   return cells;
 }
 
+/** Hide mausoleum floor until DM marks interior revealed — only door threshold + 1 tile deep stays visible. */
+function clipGraveyardMausoleumFog(
+  cells: Set<string>,
+  dg: FogDungeonGrid,
+  revealed: Set<number>,
+  interiorRevealed: Set<number> | null,
+): void {
+  const rooms = dg.rooms ?? [];
+  const g = dg.grid;
+  for (const rm of rooms) {
+    if (!(rm as { interiorFogGate?: boolean }).interiorFogGate) continue;
+    if (!revealed.has(rm.id)) continue;
+    if (interiorRevealed?.has(rm.id)) continue;
+    const doorCells: { x: number; y: number }[] = [];
+    for (let y = rm.y; y < rm.y + rm.h; y++) {
+      for (let x = rm.x; x < rm.x + rm.w; x++) {
+        const t = g[y]?.[x];
+        if (t !== T.D && t !== T.SECRET_DOOR) continue;
+        for (const [dx, dy] of [
+          [0, 1],
+          [0, -1],
+          [1, 0],
+          [-1, 0],
+        ] as const) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < rm.x || nx >= rm.x + rm.w || ny < rm.y || ny >= rm.y + rm.h) continue;
+          if (g[ny]?.[nx] === T.F || g[ny]?.[nx] === T.PIT) doorCells.push({ x: nx, y: ny });
+        }
+      }
+    }
+    const allow = new Set<string>();
+    for (const d of doorCells) {
+      allow.add(`${d.x},${d.y}`);
+      for (const [dx, dy] of [
+        [0, 1],
+        [0, -1],
+        [1, 0],
+        [-1, 0],
+      ] as const) {
+        const nx = d.x + dx;
+        const ny = d.y + dy;
+        if (nx < rm.x || nx >= rm.x + rm.w || ny < rm.y || ny >= rm.y + rm.h) continue;
+        const t = g[ny]?.[nx];
+        if (t === T.F || t === T.PIT || t === T.SD || t === T.SU) allow.add(`${nx},${ny}`);
+      }
+    }
+    for (let y = rm.y; y < rm.y + rm.h; y++) {
+      for (let x = rm.x; x < rm.x + rm.w; x++) {
+        const t = g[y]?.[x];
+        if (t !== T.F && t !== T.PIT && t !== T.SD && t !== T.SU) continue;
+        const k = `${x},${y}`;
+        if (!allow.has(k)) cells.delete(k);
+      }
+    }
+  }
+}
+
 /** Floors / corridors / doors / roads the party can stand on for token placement and marching. */
-export function isDungeonGridWalkable(tile: number): boolean {
-  return (
+export function isDungeonGridWalkable(tile: number, locationType?: string): boolean {
+  if (tile === T.HEADSTONE || tile === T.ARROW_SLIT || tile === T.MURDER_HOLE || tile === T.CELL_BARS)
+    return false;
+  const always =
     tile === T.F ||
     tile === T.C ||
     tile === T.D ||
+    tile === T.SECRET_DOOR ||
+    tile === T.GATE ||
+    tile === T.DRAWBRIDGE ||
     tile === T.ROAD ||
     tile === T.BRIDGE ||
+    tile === T.PIT ||
+    tile === T.ALLEY ||
     tile === T.SD ||
-    tile === T.SU
-  );
+    tile === T.SU;
+  if (always) return true;
+  const waterWalk = locationType === "sewer" || locationType === "swamp";
+  return waterWalk && tile === T.WA;
 }
 
 function isDungeonTileVisionTransparent(tile: number): boolean {
+  if (tile === T.SECRET_DOOR) return false;
+  if (tile === T.HEADSTONE || tile === T.ARROW_SLIT || tile === T.MURDER_HOLE || tile === T.CELL_BARS)
+    return false;
   return tile !== T.V && tile !== T.W;
 }
 
@@ -185,6 +278,7 @@ export function expandFogWithPlayerTokenVision(
   grid: number[][],
   tokens: (Pick<BattleToken, "gx" | "gy" | "kind"> & { sightRadiusCells?: number })[] | null | undefined,
   defaultRadiusCells: number,
+  locationType?: string,
 ): void {
   if (!tokens?.length) return;
   const H = grid.length;
@@ -197,12 +291,19 @@ export function expandFogWithPlayerTokenVision(
     const ty = Math.floor(t.gy);
     for (let dy = -R; dy <= R; dy++) {
       for (let dx = -R; dx <= R; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) > R) continue;
+        if (dx * dx + dy * dy > R * R) continue;
         const x = tx + dx;
         const y = ty + dy;
         if (x < 0 || y < 0 || x >= W || y >= H) continue;
         const tile = grid[y]![x]!;
         if (!isDungeonTileVisionTransparent(tile)) continue;
+        if (
+          locationType === "swamp" &&
+          tile === T.WA &&
+          dx * dx + dy * dy > 2 * 2
+        ) {
+          continue;
+        }
         cells.add(`${x},${y}`);
       }
     }

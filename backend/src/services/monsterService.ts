@@ -28,6 +28,7 @@ export async function listMonsters(filters: {
       slug: true, name: true, type: true, subtype: true,
       size: true, challengeRating: true, xp: true,
       hitPoints: true, armorClass: true, alignment: true,
+      dexterity: true,
     },
     orderBy: [{ name: "asc" }],
   });

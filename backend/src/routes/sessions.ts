@@ -24,6 +24,7 @@ sessionRouter.post("/:id/combats",                                        ctrl.s
 sessionRouter.post("/:id/combats/:combatId/append-combatants",            ctrl.appendCombatantsToCombat);
 sessionRouter.get("/:id/combats/:combatId",                               ctrl.getCombat);
 sessionRouter.post("/:id/combats/:combatId/next-round",                   ctrl.nextRound);
+sessionRouter.post("/:id/combats/:combatId/next-turn",                    ctrl.nextTurn);
 sessionRouter.post("/:id/combats/:combatId/end",                          ctrl.endCombat);
 sessionRouter.patch("/:id/combats/:combatId/combatants/:combatantId",     ctrl.updateCombatant);
 sessionRouter.post("/:id/combats/:combatId/combatants/:combatantId/damage", ctrl.damageCombatant);

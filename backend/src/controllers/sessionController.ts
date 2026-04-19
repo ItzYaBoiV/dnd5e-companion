@@ -47,6 +47,9 @@ export const getCombat = async (req: Request<{ id: string; combatId: string }>, 
 export const nextRound = async (req: Request<{ id: string; combatId: string }>, res: Response) =>
   res.json(await svc.nextRound(req.params.combatId));
 
+export const nextTurn = async (req: Request<{ id: string; combatId: string }>, res: Response) =>
+  res.json(await svc.nextTurn(req.params.combatId));
+
 export const endCombat = async (req: Request<{ id: string; combatId: string }>, res: Response) =>
   res.json(await svc.endCombat(req.params.combatId));
 

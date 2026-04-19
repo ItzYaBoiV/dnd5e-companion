@@ -13,6 +13,7 @@ import {
   UpdateSpellInput,
   LevelUpInput,
   AddFeatureInput,
+  SpellSlotInput,
 } from "../services/characterSchemas";
 
 export const listCharacters = async (_req: Request, res: Response) => {
@@ -65,9 +66,15 @@ export const takeRest = async (req: Request<{ id: string }, {}, RestInput>, res:
   res.json(result);
 };
 
-export const updateSpellSlot = async (req: Request<{ id: string; level: string }>, res: Response) => {
-  const { action, amount } = req.body as { action: string; amount: number };
-  const result = await svc.updateSpellSlot(req.params.id, parseInt(req.params.level, 10), action, amount ?? 1);
+export const updateSpellSlot = async (req: Request<{ id: string; level: string }, {}, SpellSlotInput>, res: Response) => {
+  const { action, amount, source } = req.body;
+  const result = await svc.updateSpellSlot(
+    req.params.id,
+    parseInt(req.params.level, 10),
+    action,
+    amount ?? 1,
+    source ?? "spellcasting",
+  );
   res.json(result);
 };
 

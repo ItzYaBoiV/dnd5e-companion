@@ -239,6 +239,7 @@ export type AddFeatureInput = z.infer<typeof AddFeatureSchema>;
 export const SpellSlotSchema = z.object({
   action: z.enum(["use", "recover", "set"]),
   amount: z.number().int().min(0).default(1),
+  source: z.enum(["spellcasting", "pact"]).optional().default("spellcasting"),
 });
 
 export type SpellSlotInput = z.infer<typeof SpellSlotSchema>;

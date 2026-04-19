@@ -23,6 +23,18 @@ export type PlayerDungeonData = {
   locationType?: string;
   floor?: number;
   glyphs?: Record<string, string>;
+  forgeLocationMeta?: {
+    caveBioluminescent?: boolean;
+    templeCondition?: "active" | "abandoned" | "desecrated";
+    [k: string]: unknown;
+  } | null;
+  forgeRenderOverlay?: {
+    streamFlow?: Record<string, "n" | "s" | "e" | "w">;
+    slippery?: string[];
+    lurkZones?: string[];
+    sewerMainCells?: string[];
+    caveSymbolCells?: string[];
+  } | null;
 };
 
 export type BattleToken = {

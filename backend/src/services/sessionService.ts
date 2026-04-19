@@ -151,6 +151,27 @@ export async function nextRound(combatId: string) {
   return getCombat(combatId);
 }
 
+export async function nextTurn(combatId: string) {
+  const c = await prisma.combat.findUnique({
+    where: { id: combatId },
+    include: { combatants: true },
+  });
+  if (!c) throw new NotFoundError("Combat");
+  const alive = [...c.combatants]
+    .filter((x) => x.isAlive)
+    .sort((a, b) => b.initiative - a.initiative);
+  const next = ((c.currentTurnIndex ?? 0) + 1) % Math.max(1, alive.length);
+  const newRound = next === 0;
+  await prisma.combat.update({
+    where: { id: combatId },
+    data: {
+      currentTurnIndex: next,
+      ...(newRound ? { round: { increment: 1 } } : {}),
+    },
+  });
+  return getCombat(combatId);
+}
+
 export async function endCombat(combatId: string) {
   const c = await prisma.combat.findUnique({ where: { id: combatId }, select: { id: true } });
   if (!c) throw new NotFoundError("Combat");
@@ -186,7 +207,7 @@ export async function damageCombatant(combatantId: string, amount: number) {
 
   return prisma.combatant.update({
     where: { id: combatantId },
-    data:  { currentHp, temporaryHp, isAlive: currentHp > 0 },
+    data:  { currentHp, temporaryHp },
   });
 }
 
@@ -253,6 +274,9 @@ export async function getSessionRollSummary(sessionId: string) {
       ? mods[char.spellcastingAbility as AbilityName] + profB
       : null;
 
+    const meleeMod = Math.max(mods.strength, mods.dexterity);
+    const meleeLabel = mods.dexterity > mods.strength ? "DEX/finesse melee" : "STR melee";
+
     return {
       characterId:       char.id,
       characterName:     char.name,
@@ -264,7 +288,7 @@ export async function getSessionRollSummary(sessionId: string) {
       passivePerception: 10 + skills["perception"].bonus,
       keyRolls: {
         attacks: {
-          melee:  { bonus: mods.strength  + profB, label: "STR melee" },
+          melee:  { bonus: meleeMod + profB, label: meleeLabel },
           ranged: { bonus: mods.dexterity + profB, label: "DEX ranged" },
           spell:  spellBonus !== null
             ? { bonus: spellBonus, dc: 8 + spellBonus, label: `${char.spellcastingAbility?.slice(0,3).toUpperCase()} spell` }
@@ -274,7 +298,9 @@ export async function getSessionRollSummary(sessionId: string) {
           strength:     { bonus: saves.strength.bonus,     proficient: saves.strength.proficient },
           dexterity:    { bonus: saves.dexterity.bonus,    proficient: saves.dexterity.proficient },
           constitution: { bonus: saves.constitution.bonus, proficient: saves.constitution.proficient },
+          intelligence: { bonus: saves.intelligence.bonus, proficient: saves.intelligence.proficient },
           wisdom:       { bonus: saves.wisdom.bonus,       proficient: saves.wisdom.proficient },
+          charisma:     { bonus: saves.charisma.bonus,     proficient: saves.charisma.proficient },
         },
         skills: {
           perception:    skills["perception"].bonus,
@@ -341,14 +367,13 @@ export async function getSessionRollSummary(sessionId: string) {
               saveType:    null,
             },
           ],
+          legendaryActions: [],
+          legendaryActionPoints: 3,
         };
       }
 
       const actionsRaw = monster.actions;
       let actions = actionsFromJson(actionsRaw);
-      if (actions.length === 0 && monster.legendaryActions != null) {
-        actions = actionsFromJson(monster.legendaryActions);
-      }
       if (actions.length === 0 && monster.specialAbilities != null) {
         actions = actionsFromJson(monster.specialAbilities);
       }
@@ -367,6 +392,10 @@ export async function getSessionRollSummary(sessionId: string) {
         ];
       }
 
+      const legendaryActions = monster.legendaryActions
+        ? actionsFromJson(monster.legendaryActions)
+        : [];
+
       return {
         combatantId:  c.id,
         label:        c.label,
@@ -376,6 +405,8 @@ export async function getSessionRollSummary(sessionId: string) {
         maxHp:        c.maxHp,
         armorClass:   c.armorClass,
         actions,
+        legendaryActions,
+        legendaryActionPoints: 3,
       };
     });
 

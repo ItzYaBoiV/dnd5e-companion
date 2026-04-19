@@ -7,6 +7,8 @@ export function openForgePrintPacket(opts: {
   asciiText: string;
   dmMapDataUrl?: string | null;
   roomLines: string[];
+  /** Optional HTML fragment (e.g. mausoleum table for graveyards). */
+  structureTableHtml?: string | null;
 }): void {
   const esc = (s: string) =>
     s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -35,6 +37,7 @@ export function openForgePrintPacket(opts: {
   <div>
     <h1>Room notes</h1>
     <ul>${opts.roomLines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
+    ${opts.structureTableHtml ? `<div class="structure">${opts.structureTableHtml}</div>` : ""}
   </div>
 </body></html>`;
   const w = window.open("", "_blank", "noopener,noreferrer");

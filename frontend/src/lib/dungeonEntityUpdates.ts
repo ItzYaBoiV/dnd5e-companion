@@ -11,24 +11,31 @@ export function removeEntityAtXY(dungeon: unknown, x: number, y: number): unknow
 
 /**
  * When a forge monster stack is killed in combat, drop `count` by 1 for the matching
- * scripted entity (same slug; prefers the selected room).
+ * scripted entity (same slug; prefers the selected room). Falls back to display name when
+ * the entity was placed without a resolved slug.
  */
 export function decrementForgeMonsterBySlug(
   dungeon: unknown,
   monsterSlug: string,
   roomId: number | null,
+  nameHint?: string | null,
 ): unknown | null {
   const d = dungeon as { entities?: unknown[] };
   const entities = [...(d.entities ?? [])] as any[];
-  const slug = String(monsterSlug);
-  let idx = entities.findIndex(
-    (e) =>
-      e?.type === "monster" &&
-      String(e.slug ?? "") === slug &&
-      (roomId == null || e.roomId === roomId),
-  );
+  const slug = String(monsterSlug ?? "").trim();
+  const nameLower = nameHint?.trim().toLowerCase() ?? "";
+
+  const matches = (e: any) => {
+    if (e?.type !== "monster") return false;
+    const es = String(e.slug ?? "").trim();
+    if (slug && es === slug) return true;
+    if (nameLower && e?.name && String(e.name).toLowerCase() === nameLower) return true;
+    return false;
+  };
+
+  let idx = entities.findIndex((e) => matches(e) && (roomId == null || e.roomId === roomId));
   if (idx < 0) {
-    idx = entities.findIndex((e) => e?.type === "monster" && String(e.slug ?? "") === slug);
+    idx = entities.findIndex(matches);
   }
   if (idx < 0) return null;
   const ent = { ...entities[idx] };

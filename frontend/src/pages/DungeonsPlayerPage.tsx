@@ -8,7 +8,7 @@ import {
 } from "@/lib/dungeonForgeFog";
 import { DEFAULT_PLAYER_VISION_FOG_CELLS, PLAYER_SIGHT_RING_CELLS } from "@/lib/playerMapVision";
 import { renderDungeonToCanvas } from "@/lib/dungeonTileRenderer";
-import { DEFAULT_PALETTE, ENTITY_PALETTE, LOCATION_PALETTE } from "@/lib/dungeonTilePalettes";
+import { ENTITY_PALETTE, forgePaletteForDungeon } from "@/lib/dungeonTilePalettes";
 import type { PlayerMapBroadcast } from "@/lib/playerMapBroadcast";
 import {
   PLAYER_LASER_CHANNEL,
@@ -177,16 +177,17 @@ export default function DungeonsPlayerPage() {
     const fogCells = computeVisibleCellsForPlayer(revealed, dg, doorOpen, null, {
       openFloor: isOpenFloorLocation(locType),
       maxFogHops: maxFogHopsForLocationType(locType),
+      locationType: locType,
     });
     expandFogWithPlayerTokenVision(
       fogCells,
       dg.grid as number[][],
       mapState?.battleTokens ?? [],
       DEFAULT_PLAYER_VISION_FOG_CELLS,
+      locType,
     );
 
-    const loc = dg.locationType ?? "dungeon";
-    const palette = LOCATION_PALETTE[loc] ?? DEFAULT_PALETTE;
+    const palette = forgePaletteForDungeon(dg);
     const rg = buildRenderGrid(dg, { showThemes: false });
 
     const vc = mapState?.viewCrop;

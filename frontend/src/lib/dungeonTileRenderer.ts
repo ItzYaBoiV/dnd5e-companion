@@ -71,6 +71,26 @@ export type RenderTileOpts = {
   lighting?: { gx: number; gy: number; radiusCells: number; intensity?: number } | null;
   /** Multiple torches / sconces; combines with max brightness (see render loop). */
   sceneLights?: SceneLight[] | null;
+  /** DM-only: boss room frame, corridor distance labels, throne marker. */
+  forgeDmHints?: {
+    bossRoom?: { x: number; y: number; w: number; h: number };
+    corridorLabels?: { x: number; y: number; text: string }[];
+    throneCx?: number;
+    throneCy?: number;
+    graveyardGate?: { gx: number; gy: number; label?: string };
+    streetLabels?: { x: number; y: number; text: string; rot?: number }[];
+    patrolPaths?: { points: { x: number; y: number }[]; label?: string }[];
+    escapeTunnel?: { points: { x: number; y: number }[] };
+    chaseSegments?: { x: number; y: number; ft: number }[];
+    consecratedCells?: { x: number; y: number; k: "consecrated" | "desecrated" }[];
+    fortifiedDmNote?: string;
+    /** Road wilderness: PHB-style encounter frequency bands (DM overlay). */
+    roadEncounterZones?: { x: number; y: number; w: number; h: number; tier: "safe" | "uncommon" | "danger"; note?: string }[];
+  } | null;
+  /** Graveyard night / dusk / weather — extra darkness or rain drawn in post-pass (DM map). */
+  graveyardAmbience?: { timeOfDay?: "day" | "dusk" | "night"; weather?: "clear" | "rain" | "heavy_rain" };
+  /** Lit dungeons add sconce lights in the renderer; dark suppresses ambient. */
+  dungeonLighting?: "lit" | "dim" | "dark";
   /** DM / player battle pips (drawn above terrain; respect fog when `fogCells` set). Token coords match the `grid` passed in (local if cropped). */
   battleTokens?: BattleToken[] | null;
   /** Loaded images for `BattleToken.portraitUrl` / `spriteUrl` (keyed by URL). */
@@ -105,6 +125,32 @@ const T_PILLAR = 8;
 const T_ROAD = 9;
 const T_BRIDGE = 10;
 const T_LAVA = 11;
+const T_SECRET_DOOR = 12;
+const T_PIT = 13;
+const T_GATE = 14;
+const T_DRAWBRIDGE = 15;
+const T_HEADSTONE = 16;
+const T_ARROW_SLIT = 17;
+const T_MURDER_HOLE = 18;
+const T_CELL_BARS = 19;
+const T_ALLEY = 20;
+
+/** Wall sconce lights along corridors for lit dungeons (~30 ft / 6 tiles). */
+function collectDungeonLitSconces(grid: RenderCell[][], cols: number, rows: number): SceneLight[] {
+  const out: SceneLight[] = [];
+  for (let y = 1; y < rows - 1; y++) {
+    for (let x = 1; x < cols - 1; x++) {
+      const c = grid[y]![x]!;
+      if (c.tile !== T_CORRIDOR) continue;
+      if ((x + y) % 6 !== 0) continue;
+      const n = [grid[y - 1]?.[x]?.tile, grid[y + 1]?.[x]?.tile, grid[y]?.[x - 1]?.tile, grid[y]?.[x + 1]?.tile];
+      if (!n.some((t) => t === T_WALL || t === T_DOOR || t === T_SECRET_DOOR || t === T_GATE || t === T_DRAWBRIDGE))
+        continue;
+      out.push({ gx: x, gy: y, radiusCells: 5, intensity: 0.14, kind: "torch" });
+    }
+  }
+  return out;
+}
 
 function isDoorOpenForRender(
   dk: string | null,
@@ -200,7 +246,11 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
   })();
 
   const fixtureTorchLights = collectTorchFixtureLights(grid, cols, rows);
-  const mergedLights: SceneLight[] = [...sceneLights, ...fixtureTorchLights];
+  const litSconces =
+    opts.dungeonLighting === "lit"
+      ? collectDungeonLitSconces(grid, cols, rows)
+      : [];
+  const mergedLights: SceneLight[] = [...sceneLights, ...fixtureTorchLights, ...litSconces];
   const lightDarkBuf =
     mergedLights.length > 0
       ? computeOccludedLightDarkness(grid, cols, rows, mergedLights, {
@@ -263,13 +313,154 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
       );
 
       if (lightDarkBuf) {
-        const dark = lightDarkBuf[y * cols + x] ?? 0;
+        let dark = lightDarkBuf[y * cols + x] ?? 0;
+        if (opts.dungeonLighting === "dark") dark = Math.min(1, dark + 0.42);
+        else if (opts.dungeonLighting === "dim") dark = Math.min(1, dark + 0.18);
         if (dark > 0.001) {
           ctx.fillStyle = `rgba(0,0,0,${dark})`;
           ctx.fillRect(px, py, cellPx, cellPx);
         }
       }
     }
+  }
+
+  const dmHints = opts.forgeDmHints;
+  if (dmHints && opts.showEnts !== false && !opts.playerSanitize) {
+    ctx.save();
+    const s = cellPx;
+    if (dmHints.bossRoom) {
+      const br = dmHints.bossRoom;
+      const px0 = br.x * s;
+      const py0 = br.y * s;
+      ctx.strokeStyle = "rgba(220, 55, 45, 0.92)";
+      ctx.lineWidth = Math.max(2, s * 0.14);
+      ctx.strokeRect(px0 - 1, py0 - 1, br.w * s + 2, br.h * s + 2);
+      ctx.strokeStyle = "rgba(210, 170, 50, 0.88)";
+      ctx.lineWidth = Math.max(1, s * 0.07);
+      ctx.strokeRect(px0 + 2, py0 + 2, br.w * s - 4, br.h * s - 4);
+    }
+    if (dmHints.throneCx != null && dmHints.throneCy != null) {
+      const tcx = dmHints.throneCx * s + s / 2;
+      const tcy = dmHints.throneCy * s + s / 2;
+      ctx.fillStyle = "rgba(255, 215, 80, 0.95)";
+      ctx.font = `bold ${Math.max(11, s * 0.72)}px monospace`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("★", tcx, tcy);
+      ctx.font = `bold ${Math.max(7, s * 0.26)}px system-ui,sans-serif`;
+      ctx.fillStyle = "rgba(255, 235, 210, 0.92)";
+      ctx.fillText("BOSS ROOM", tcx, tcy - s * 0.65);
+    }
+    for (const cl of dmHints.corridorLabels ?? []) {
+      ctx.font = `${Math.max(7, s * 0.2)}px monospace`;
+      ctx.fillStyle = "rgba(210, 200, 185, 0.88)";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`— ${cl.text} —`, cl.x * s + s / 2, cl.y * s + s / 2);
+    }
+    const gg = dmHints.graveyardGate;
+    if (gg) {
+      ctx.font = `bold ${Math.max(8, s * 0.22)}px monospace`;
+      ctx.fillStyle = "rgba(255, 200, 120, 0.95)";
+      ctx.textAlign = "center";
+      ctx.fillText(gg.label ?? "→ ENTER", gg.gx * s + s / 2, (gg.gy - 0.85) * s);
+    }
+    for (const sl of dmHints.streetLabels ?? []) {
+      ctx.save();
+      ctx.translate(sl.x * s + s / 2, sl.y * s + s / 2);
+      ctx.rotate(sl.rot ?? 0);
+      ctx.font = `${Math.max(7, s * 0.18)}px system-ui,sans-serif`;
+      ctx.fillStyle = "rgba(200, 190, 170, 0.85)";
+      ctx.textAlign = "center";
+      ctx.fillText(sl.text, 0, 0);
+      ctx.restore();
+    }
+    ctx.strokeStyle = "rgba(220, 200, 160, 0.55)";
+    ctx.setLineDash([3, 4]);
+    ctx.lineWidth = Math.max(1, s * 0.06);
+    for (const pp of dmHints.patrolPaths ?? []) {
+      const pts = pp.points;
+      if (pts.length < 2) continue;
+      ctx.beginPath();
+      ctx.moveTo(pts[0]!.x * s + s / 2, pts[0]!.y * s + s / 2);
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineTo(pts[i]!.x * s + s / 2, pts[i]!.y * s + s / 2);
+      }
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    const tun = dmHints.escapeTunnel;
+    if (tun?.points && tun.points.length > 1) {
+      ctx.strokeStyle = "rgba(180, 140, 220, 0.65)";
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(tun.points[0]!.x * s + s / 2, tun.points[0]!.y * s + s / 2);
+      for (let i = 1; i < tun.points.length; i++) {
+        ctx.lineTo(tun.points[i]!.x * s + s / 2, tun.points[i]!.y * s + s / 2);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    for (const cs of dmHints.chaseSegments ?? []) {
+      ctx.font = `${Math.max(6, s * 0.16)}px monospace`;
+      ctx.fillStyle = "rgba(180, 220, 255, 0.75)";
+      ctx.fillText(`${cs.ft}′`, cs.x * s + s / 2, cs.y * s + s / 2);
+    }
+    for (const cc of dmHints.consecratedCells ?? []) {
+      ctx.strokeStyle =
+        cc.k === "consecrated" ? "rgba(255, 215, 120, 0.55)" : "rgba(160, 40, 60, 0.55)";
+      ctx.lineWidth = Math.max(1, s * 0.1);
+      ctx.strokeRect(cc.x * s + 1, cc.y * s + 1, s - 2, s - 2);
+    }
+    for (const rz of dmHints.roadEncounterZones ?? []) {
+      const fill =
+        rz.tier === "safe"
+          ? "rgba(0, 180, 80, 0.18)"
+          : rz.tier === "danger"
+            ? "rgba(220, 60, 40, 0.24)"
+            : "rgba(220, 200, 0, 0.22)";
+      ctx.fillStyle = fill;
+      ctx.fillRect(rz.x * s, rz.y * s, rz.w * s, rz.h * s);
+      ctx.strokeStyle =
+        rz.tier === "safe"
+          ? "rgba(0, 130, 70, 0.45)"
+          : rz.tier === "danger"
+            ? "rgba(180, 40, 30, 0.5)"
+            : "rgba(180, 160, 0, 0.45)";
+      ctx.lineWidth = Math.max(1, s * 0.06);
+      ctx.setLineDash([]);
+      ctx.strokeRect(rz.x * s + 0.5, rz.y * s + 0.5, rz.w * s - 1, rz.h * s - 1);
+    }
+    ctx.restore();
+  }
+
+  const amb = opts.graveyardAmbience;
+  if (amb && opts.showEnts !== false && !opts.playerSanitize) {
+    ctx.save();
+    const Wpx = cols * cellPx;
+    const Hpx = rows * cellPx;
+    if (amb.timeOfDay === "dusk") {
+      ctx.fillStyle = "rgba(25, 20, 55, 0.22)";
+      ctx.fillRect(0, 0, Wpx, Hpx);
+    } else if (amb.timeOfDay === "night") {
+      ctx.fillStyle = "rgba(5, 5, 25, 0.52)";
+      ctx.fillRect(0, 0, Wpx, Hpx);
+    }
+    if (amb.weather === "rain" || amb.weather === "heavy_rain") {
+      const dense = amb.weather === "heavy_rain" ? 1.45 : 1;
+      ctx.strokeStyle = "rgba(180, 200, 255, 0.22)";
+      ctx.lineWidth = 1;
+      const ph = (opts.animPhase ?? 0) * Math.PI * 2;
+      for (let i = 0; i < 420 * dense; i++) {
+        const rx = (Math.sin(i * 12.9898 + ph) * 0.5 + 0.5) * Wpx;
+        const ry = (i / (420 * dense)) * Hpx * 1.2 - Hpx * 0.1;
+        ctx.beginPath();
+        ctx.moveTo(rx, ry);
+        ctx.lineTo(rx + 3, ry + 10);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 
   const tokens = opts.battleTokens;
@@ -435,10 +626,19 @@ function drawBaseTile(
   animPhase = 0,
 ): void {
   const t = cell.tile;
+  if (sanitize && t === T_SECRET_DOOR) {
+    drawTileByKind(ctx, T_WALL, px, py, s, p, true, doorOpen, doorStates, gx, gy, animPhase);
+    return;
+  }
 
   const hideEntityOverlay =
     !showEnts &&
-    (cell.eType === "monster" || cell.eType === "trap" || cell.eType === "item" || cell.eType === "riddle");
+    (cell.eType === "monster" ||
+      cell.eType === "trap" ||
+      cell.eType === "item" ||
+      cell.eType === "riddle" ||
+      cell.eType === "dm_marker" ||
+      cell.eType === "spawn_suggestion");
   const hideLabel = sanitize && cell.eType === "label";
   const hideDecoCell =
     sanitize &&
@@ -687,6 +887,120 @@ function drawTileByKind(
     return;
   }
 
+  if (t === T_SECRET_DOOR) {
+    ctx.fillStyle = "#1e1428";
+    ctx.fillRect(px, py, s, s);
+    ctx.strokeStyle = "#a08038";
+    ctx.lineWidth = Math.max(1, s * 0.09);
+    ctx.strokeRect(px + 1, py + 1, s - 2, s - 2);
+    ctx.fillStyle = "#e8c048";
+    ctx.font = `bold ${Math.max(9, s * 0.52)}px monospace`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("?", px + s / 2, py + s / 2 + 0.5);
+    return;
+  }
+
+  if (t === T_PIT) {
+    ctx.fillStyle = p.floorBg;
+    ctx.globalAlpha = 0.88;
+    ctx.fillRect(px, py, s, s);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = p.floorDetail;
+    ctx.globalAlpha = 0.35;
+    ctx.lineWidth = Math.max(0.5, s * 0.06);
+    for (let i = -s; i < s * 2; i += Math.max(3, Math.floor(s / 4))) {
+      ctx.beginPath();
+      ctx.moveTo(px + i, py);
+      ctx.lineTo(px + i + s, py + s);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = p.corridorFg;
+    ctx.font = `${Math.max(7, s * 0.28)}px monospace`;
+    ctx.textAlign = "center";
+    ctx.fillText("▿▿", px + s / 2, py + s * 0.55);
+    return;
+  }
+
+  if (t === T_GATE) {
+    const dk = gx != null && gy != null ? `${gx},${gy}` : null;
+    const closed = !isDoorOpenForRender(dk, doorOpen ?? null, doorStates ?? null);
+    ctx.fillStyle = closed ? p.wallBg : p.roadBg;
+    ctx.fillRect(px, py, s, s);
+    ctx.strokeStyle = p.doorFg;
+    ctx.lineWidth = Math.max(1, s * 0.1);
+    ctx.strokeRect(px + 2, py + 2, s - 4, s - 4);
+    ctx.fillStyle = p.doorFg;
+    ctx.font = `bold ${Math.max(8, s * 0.42)}px monospace`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(closed ? "Ⅱ" : "◂▸", px + s / 2, py + s / 2 + 0.5);
+    return;
+  }
+
+  if (t === T_DRAWBRIDGE) {
+    const dk = gx != null && gy != null ? `${gx},${gy}` : null;
+    const up = !isDoorOpenForRender(dk, doorOpen ?? null, doorStates ?? null);
+    ctx.fillStyle = up ? p.wallBg : p.bridgeBg ?? p.floorBg;
+    ctx.fillRect(px, py, s, s);
+    ctx.fillStyle = p.doorFg;
+    ctx.font = `bold ${Math.max(8, s * 0.5)}px monospace`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(up ? "‖" : "═", px + s / 2, py + s / 2 + 0.5);
+    return;
+  }
+
+  if (t === T_HEADSTONE) {
+    ctx.fillStyle = p.floorBg;
+    ctx.fillRect(px, py, s, s);
+    ctx.fillStyle = "#7a7a82";
+    ctx.fillRect(px + Math.floor(s * 0.2), py + Math.floor(s * 0.15), Math.floor(s * 0.6), Math.floor(s * 0.7));
+    ctx.fillStyle = "#b0b0b8";
+    ctx.font = `${Math.max(8, s * 0.55)}px monospace`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("†", px + s / 2, py + s / 2 + 0.5);
+    return;
+  }
+
+  if (t === T_ARROW_SLIT || t === T_MURDER_HOLE) {
+    ctx.fillStyle = p.wallBg;
+    ctx.fillRect(px, py, s, s);
+    ctx.fillStyle = "#111";
+    const slotW = t === T_MURDER_HOLE ? Math.max(1, Math.floor(s * 0.22)) : Math.max(1, Math.floor(s * 0.16));
+    const slotTop = t === T_MURDER_HOLE ? Math.floor(s * 0.08) : Math.floor(s * 0.12);
+    ctx.fillRect(px + Math.floor(s * 0.42), py + slotTop, slotW, Math.floor(s * 0.76));
+    return;
+  }
+
+  if (t === T_CELL_BARS) {
+    ctx.fillStyle = p.floorBg;
+    ctx.fillRect(px, py, s, s);
+    ctx.strokeStyle = "#9a9aa4";
+    ctx.lineWidth = Math.max(1, s * 0.08);
+    for (let u = 2; u < s - 1; u += Math.max(2, Math.floor(s / 5))) {
+      ctx.beginPath();
+      ctx.moveTo(px + u, py + 2);
+      ctx.lineTo(px + u, py + s - 2);
+      ctx.stroke();
+    }
+    return;
+  }
+
+  if (t === T_ALLEY) {
+    ctx.fillStyle = p.roadBg;
+    ctx.globalAlpha = 0.55;
+    ctx.fillRect(px, py, s, s);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = p.roadLine;
+    ctx.globalAlpha = 0.35;
+    ctx.strokeRect(px + 1, py + 1, s - 2, s - 2);
+    ctx.globalAlpha = 1;
+    return;
+  }
+
   if (t === T_ROAD) {
     ctx.fillStyle = p.roadBg;
     ctx.fillRect(px, py, s, s);
@@ -780,9 +1094,17 @@ function drawOverlays(
   animPhase: number,
   entityTokenImages: Map<string, HTMLImageElement> | null,
 ): void {
+  const ex = cell.extra && typeof cell.extra === "object" ? (cell.extra as { ghosted?: boolean }) : null;
+  if (!showEnts && ex?.ghosted) return;
+
   const hideEntity =
     !showEnts &&
-    (cell.eType === "monster" || cell.eType === "trap" || cell.eType === "item" || cell.eType === "riddle");
+    (cell.eType === "monster" ||
+      cell.eType === "trap" ||
+      cell.eType === "item" ||
+      cell.eType === "riddle" ||
+      cell.eType === "dm_marker" ||
+      cell.eType === "spawn_suggestion");
   if (hideEntity) return;
 
   if (sanitize && cell.eType === "label") return;
@@ -794,6 +1116,30 @@ function drawOverlays(
     "decoKey" in cell.extra &&
     hideDeco.has(String((cell.extra as { decoKey?: string }).decoKey))
   ) {
+    return;
+  }
+
+  const markerEnt =
+    cell.eType === "headstone" ||
+    cell.eType === "npc" ||
+    cell.eType === "landmark" ||
+    cell.eType === "notice_board" ||
+    cell.eType === "stall" ||
+    cell.eType === "siege" ||
+    cell.eType === "banner" ||
+    cell.eType === "portcullis";
+  if (markerEnt) {
+    const cx = px + s / 2;
+    const cy = py + s / 2;
+    ctx.fillStyle = "rgba(40,40,48,0.35)";
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(2, s * 0.38), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = ep.deco;
+    ctx.font = `${Math.max(8, s * 0.55)}px monospace`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(cell.ch.length > 2 ? cell.ch.slice(0, 2) : cell.ch, cx, cy + 0.5);
     return;
   }
 
@@ -901,6 +1247,23 @@ function drawOverlays(
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(cell.ch.length > 1 ? cell.ch[0] : cell.ch, px + s / 2, py + s / 2 + 1);
+    return;
+  }
+
+  if (cell.eType === "dm_marker") {
+    const cx = px + s / 2;
+    const cy = py + s / 2;
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = "rgba(40, 28, 10, 0.35)";
+    ctx.beginPath();
+    ctx.arc(cx, cy, s * 0.42, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = ep.label;
+    ctx.font = `${Math.max(10, Math.floor(s * 0.52))}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(cell.ch.length > 2 ? cell.ch : "\u{1F441}", cx, cy + 1);
     return;
   }
 }

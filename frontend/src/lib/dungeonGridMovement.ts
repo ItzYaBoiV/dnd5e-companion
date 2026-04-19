@@ -5,6 +5,7 @@ export function shortestWalkablePathBfs(
   grid: number[][],
   start: { gx: number; gy: number },
   end: { gx: number; gy: number },
+  locationType?: string,
 ): { gx: number; gy: number }[] | null {
   const H = grid.length;
   const W = grid[0]?.length ?? 0;
@@ -16,7 +17,8 @@ export function shortestWalkablePathBfs(
   if (sx < 0 || sy < 0 || sx >= W || sy >= H || ex < 0 || ey < 0 || ex >= W || ey >= H) return null;
   const sTile = grid[sy]![sx]!;
   const eTile = grid[ey]![ex]!;
-  if (!isDungeonGridWalkable(sTile) || !isDungeonGridWalkable(eTile)) return null;
+  if (!isDungeonGridWalkable(sTile, locationType) || !isDungeonGridWalkable(eTile, locationType))
+    return null;
   if (sx === ex && sy === ey) return [{ gx: sx, gy: sy }];
 
   const startKey = `${sx},${sy}`;
@@ -47,7 +49,7 @@ export function shortestWalkablePathBfs(
     }
     for (const [nx, ny] of orth(x, y)) {
       if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
-      if (!isDungeonGridWalkable(grid[ny]![nx]!)) continue;
+      if (!isDungeonGridWalkable(grid[ny]![nx]!, locationType)) continue;
       const nk = `${nx},${ny}`;
       if (seen.has(nk)) continue;
       seen.add(nk);
@@ -65,6 +67,7 @@ export function greedyStepToward(
   grid: number[][],
   occupied: Set<string>,
   selfKey: string,
+  locationType?: string,
 ): { gx: number; gy: number } | null {
   const fx = Math.floor(from.gx);
   const fy = Math.floor(from.gy);
@@ -83,7 +86,7 @@ export function greedyStepToward(
   for (const [nx, ny] of ortho) {
     if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
     const tile = grid[ny]![nx]!;
-    if (!isDungeonGridWalkable(tile)) continue;
+    if (!isDungeonGridWalkable(tile, locationType)) continue;
     const nk = `${nx},${ny}`;
     if (occupied.has(nk) && nk !== selfKey) continue;
     const dist = Math.abs(to.gx - nx) + Math.abs(to.gy - ny);
@@ -105,13 +108,14 @@ export function walkGreedyStepsOnGrid(
   to: { gx: number; gy: number },
   occupied: Set<string>,
   maxSteps: number,
+  locationType?: string,
 ): { gx: number; gy: number } {
   let x = Math.floor(from.gx);
   let y = Math.floor(from.gy);
   let selfKey = `${x},${y}`;
   for (let i = 0; i < maxSteps; i++) {
     if (x === to.gx && y === to.gy) break;
-    const step = greedyStepToward({ gx: x, gy: y }, to, grid, occupied, selfKey);
+    const step = greedyStepToward({ gx: x, gy: y }, to, grid, occupied, selfKey, locationType);
     if (!step) break;
     occupied.delete(selfKey);
     selfKey = `${step.gx},${step.gy}`;

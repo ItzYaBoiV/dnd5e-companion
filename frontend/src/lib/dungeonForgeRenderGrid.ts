@@ -47,6 +47,13 @@ const THEME_GLYPH: Record<string, string> = {
   boss: "👑",
   lore: "🕯",
   puzzle: "🧩",
+  SANCTUM: "◇",
+  VESTRY: "⚙",
+  BELL_TOWER: "🔔",
+  PRAYER_CELL: "⚞",
+  /** Sewer waste rooms — poison cloud (DM theme glyph). */
+  WASTE_CHAMBER: "☠",
+  THIEVES_DEN: "⚔",
 };
 
 type ForgeGridDungeon = {
@@ -57,10 +64,20 @@ type ForgeGridDungeon = {
   width: number;
   height: number;
   glyphs?: Record<string, string>;
+  /** Stream arrows, slippery hints, etc. from forgeLocationUpgrades */
+  forgeRenderOverlay?: {
+    streamFlow?: Record<string, "n" | "s" | "e" | "w">;
+    slippery?: string[];
+    lurkZones?: string[];
+    sewerMainCells?: string[];
+    caveSymbolCells?: string[];
+  } | null;
 };
 
-export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: boolean }): RenderCell[][] {
+export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: boolean; playerView?: boolean }): RenderCell[][] {
   const showThemes = !!forgeCfg?.showThemes;
+  const playerView = !!forgeCfg?.playerView;
+  const fo = dg.forgeRenderOverlay;
   const grid = dg.grid;
   const rooms = dg.rooms ?? [];
   const entities = dg.entities ?? [];
@@ -113,7 +130,9 @@ export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: b
     for (let x = 0; x < W; x++) {
       const k = `${x},${y}`;
       const ent = eMap[k];
-      const deco = dMap[k];
+      const decoRaw = dMap[k];
+      const deco =
+        decoRaw && playerView && (decoRaw as { playerHide?: boolean }).playerHide ? undefined : decoRaw;
       const label = labelMap[k];
       const tile = grid[y][x];
       let ch: string;
@@ -122,18 +141,33 @@ export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: b
       let eName: string | null = null;
       let extra: unknown = null;
       if (ent) {
-        ch =
-          ent.type === "monster"
-            ? monsterGlyph(ent.name)
-            : ent.type === "trap"
-              ? trapGlyph(ent.name)
-              : ent.type === "item"
-                ? itemGlyph(ent.name)
-                : ent.type === "riddle"
-                  ? "?"
-                  : "?";
-        eType = ent.type;
-        extra = ent;
+        if (ent.type === "dm_marker") {
+          ch = typeof (ent as { glyph?: string }).glyph === "string" ? String((ent as { glyph?: string }).glyph) : "\u{1F441}";
+          eType = "dm_marker";
+          extra = ent;
+        } else {
+          const mg =
+            typeof (ent as { mapGlyph?: string }).mapGlyph === "string"
+              ? String((ent as { mapGlyph?: string }).mapGlyph)
+              : "";
+          if (mg) {
+            ch = mg.slice(0, 2);
+            eType = String(ent.type ?? "marker");
+          } else {
+            ch =
+              ent.type === "monster"
+                ? monsterGlyph(ent.name)
+                : ent.type === "trap"
+                  ? trapGlyph(ent.name)
+                  : ent.type === "item"
+                    ? itemGlyph(ent.name)
+                    : ent.type === "riddle"
+                      ? "?"
+                      : "?";
+            eType = ent.type;
+          }
+          extra = ent;
+        }
       } else if (deco && String(deco.ch ?? "").trim() !== "") {
         ch = deco.ch;
         fg = deco.fg ?? null;
@@ -169,9 +203,15 @@ export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: b
           case T.SD:
             ch = G.stairsD;
             break;
-          case T.WA:
-            ch = G.water;
+          case T.WA: {
+            const flow = fo?.streamFlow?.[k];
+            if (flow === "e") ch = "≈→";
+            else if (flow === "w") ch = "←≈";
+            else if (flow === "s") ch = "≈↓";
+            else if (flow === "n") ch = "↑≈";
+            else ch = G.water;
             break;
+          }
           case T.P:
             ch = G.pillar;
             break;
@@ -183,6 +223,33 @@ export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: b
             break;
           case T.LAVA:
             ch = G.lava;
+            break;
+          case T.SECRET_DOOR:
+            ch = "?";
+            break;
+          case T.PIT:
+            ch = "▽";
+            break;
+          case T.GATE:
+            ch = "Ⅱ";
+            break;
+          case T.DRAWBRIDGE:
+            ch = "=";
+            break;
+          case T.HEADSTONE:
+            ch = "✝";
+            break;
+          case T.ARROW_SLIT:
+            ch = "|";
+            break;
+          case T.MURDER_HOLE:
+            ch = "⬡";
+            break;
+          case T.CELL_BARS:
+            ch = "▒";
+            break;
+          case T.ALLEY:
+            ch = ":";
             break;
           default:
             ch = G.voidCh;

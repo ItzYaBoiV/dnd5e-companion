@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Character, CharacterDraft, HpChangeType, RestType } from "@/types/dnd";
+import type { Character, CharacterDraft, HpChangeType, RestType, SpellSlot } from "@/types/dnd";
 import { DEFAULT_DRAFT } from "@/types/dnd";
 import { characterApi, referenceApi } from "@/services/api";
 import {
@@ -37,8 +37,8 @@ interface CharacterStore {
     hitDiceFrom?: { characterClassLevelId: string; amount: number }[],
   ) => Promise<void>;
 
-  useSpellSlot:     (level: number) => Promise<void>;
-  recoverSpellSlot: (level: number, amount?: number) => Promise<void>;
+  useSpellSlot:     (level: number, source?: SpellSlot["source"]) => Promise<void>;
+  recoverSpellSlot: (level: number, amount?: number, source?: SpellSlot["source"]) => Promise<void>;
 
   addCondition:    (conditionSlug: string, notes?: string) => Promise<void>;
   removeCondition: (conditionId: string) => Promise<void>;
@@ -140,18 +140,20 @@ export const useCharacterStore = create<CharacterStore>((set, get) => ({
   },
 
   // ── Spell Slots ──────────────────────────────────────────────
-  useSpellSlot: async (level) => {
+  useSpellSlot: async (level, source = "spellcasting") => {
     const char = get().activeCharacter;
     if (!char) return;
     try {
-      await characterApi.useSpellSlot(char.id, level);
+      await characterApi.useSpellSlot(char.id, level, source);
       // Optimistic update
       set((state) => ({
         activeCharacter: state.activeCharacter
           ? {
               ...state.activeCharacter,
               spellSlots: state.activeCharacter.spellSlots.map((s) =>
-                s.level === level ? { ...s, used: Math.min(s.total, s.used + 1) } : s
+                s.level === level && (s.source ?? "spellcasting") === source
+                  ? { ...s, used: Math.min(s.total, s.used + 1) }
+                  : s
               ),
             }
           : null,
@@ -163,17 +165,19 @@ export const useCharacterStore = create<CharacterStore>((set, get) => ({
     }
   },
 
-  recoverSpellSlot: async (level, amount = 1) => {
+  recoverSpellSlot: async (level, amount = 1, source = "spellcasting") => {
     const char = get().activeCharacter;
     if (!char) return;
     try {
-      await characterApi.recoverSpellSlot(char.id, level, amount);
+      await characterApi.recoverSpellSlot(char.id, level, amount, source);
       set((state) => ({
         activeCharacter: state.activeCharacter
           ? {
               ...state.activeCharacter,
               spellSlots: state.activeCharacter.spellSlots.map((s) =>
-                s.level === level ? { ...s, used: Math.max(0, s.used - amount) } : s
+                s.level === level && (s.source ?? "spellcasting") === source
+                  ? { ...s, used: Math.max(0, s.used - amount) }
+                  : s
               ),
             }
           : null,

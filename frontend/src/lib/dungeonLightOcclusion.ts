@@ -9,6 +9,13 @@ const T_VOID = 0;
 const T_WALL = 2;
 const T_DOOR = 3;
 const T_PILLAR = 8;
+const T_SECRET_DOOR = 12;
+const T_GATE = 14;
+const T_DRAWBRIDGE = 15;
+const T_HEADSTONE = 16;
+const T_ARROW_SLIT = 17;
+const T_MURDER_HOLE = 18;
+const T_CELL_BARS = 19;
 
 function isDoorOpenForLight(
   dk: string,
@@ -34,7 +41,14 @@ export function cellBlocksLightPropagation(
   if (t === T_VOID) return true;
   if (t === T_WALL) return true;
   if (t === T_PILLAR) return true;
-  if (t === T_DOOR) {
+  if (
+    t === T_HEADSTONE ||
+    t === T_ARROW_SLIT ||
+    t === T_MURDER_HOLE ||
+    t === T_CELL_BARS
+  )
+    return true;
+  if (t === T_DOOR || t === T_SECRET_DOOR || t === T_GATE || t === T_DRAWBRIDGE) {
     return !isDoorOpenForLight(`${gx},${gy}`, doorOpen, doorStates);
   }
   return false;

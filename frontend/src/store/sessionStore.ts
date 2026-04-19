@@ -34,6 +34,8 @@ export interface Combat {
   name: string;
   status: string;
   round: number;
+  /** Index into initiative-sorted alive combatants (high init first). */
+  currentTurnIndex?: number;
   /** ISO from API — used to pick the current fight when multiple exist */
   createdAt?: string;
   combatants: Combatant[];
@@ -85,6 +87,14 @@ export interface DmRollInfo {
   combatantId: string; label: string; monsterSlug: string; monsterName: string;
   currentHp: number; maxHp: number; armorClass: number;
   actions: { name: string; description: string; attackBonus: number | null; damageDice: string | null; damageBonus: number | null; damageType: string | null; saveDc: number | null; saveType: string | null }[];
+  legendaryActions?: { name: string; description: string; attackBonus: number | null; damageDice: string | null; damageBonus: number | null; damageType: string | null; saveDc: number | null; saveType: string | null }[];
+  legendaryActionPoints?: number;
+}
+
+export interface ConcentrationBanner {
+  name: string;
+  dc: number;
+  characterId: string | null;
 }
 
 interface SessionStore {
@@ -95,6 +105,8 @@ interface SessionStore {
   partyCharacters: Character[];
   isLoading:       boolean;
   error:           string | null;
+  /** Shown when a concentrating combatant takes damage (any source). */
+  concentrationBanner: ConcentrationBanner | null;
 
   loadSessions:     () => Promise<void>;
   loadSession:      (id: string) => Promise<void>;
@@ -109,15 +121,18 @@ interface SessionStore {
   appendCombatantsToCombat: (combatants: Partial<Combatant>[]) => Promise<void>;
   endCombat:        () => Promise<void>;
   nextRound:        () => Promise<void>;
+  nextTurn:         () => Promise<void>;
   damageCombatant:  (combatantId: string, amount: number) => Promise<void>;
   healCombatant:    (combatantId: string, amount: number) => Promise<void>;
   updateCombatant:  (combatantId: string, data: Partial<Combatant>) => Promise<void>;
   refreshRolls:     () => Promise<void>;
+  clearConcentrationBanner: () => void;
 }
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
   sessions: [], activeSession: null, activeCombat: null,
   rollSummary: null, partyCharacters: [], isLoading: false, error: null,
+  concentrationBanner: null,
 
   loadSessions: async () => {
     set({ isLoading: true });
@@ -193,7 +208,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const cid = get().activeCombat?.id;
     if (!sid || !cid) return;
     await req("POST", `/sessions/${sid}/combats/${cid}/end`);
-    set({ rollSummary: null });
+    set({ rollSummary: null, concentrationBanner: null });
     await get().loadSession(sid);
   },
 
@@ -205,13 +220,34 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set({ activeCombat: updated });
   },
 
+  nextTurn: async () => {
+    const sid = get().activeSession?.id;
+    const cid = get().activeCombat?.id;
+    if (!sid || !cid) return;
+    const updated = await req<Combat>("POST", `/sessions/${sid}/combats/${cid}/next-turn`);
+    set({ activeCombat: updated });
+  },
+
   damageCombatant: async (combatantId, amount) => {
     const sid = get().activeSession?.id;
     const cid = get().activeCombat?.id;
     if (!sid || !cid) return;
+    const prev = get().activeCombat?.combatants.find((x) => x.id === combatantId);
+    const needConc =
+      Boolean(prev?.isConcentrating && amount > 0 && prev.label);
+    const concPayload = needConc && prev
+      ? {
+          name: prev.label,
+          dc: Math.max(10, Math.floor(amount / 2)),
+          characterId: prev.characterId ?? null,
+        }
+      : null;
     await req("POST", `/sessions/${sid}/combats/${cid}/combatants/${combatantId}/damage`, { amount });
     await get().loadSession(sid);
+    if (concPayload) set({ concentrationBanner: concPayload });
   },
+
+  clearConcentrationBanner: () => set({ concentrationBanner: null }),
 
   healCombatant: async (combatantId, amount) => {
     const sid = get().activeSession?.id;

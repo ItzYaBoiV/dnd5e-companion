@@ -314,7 +314,12 @@ export async function createCharacter(input: CreateCharacterInput) {
         })),
       },
       spellSlots: {
-        create: slots.map((s) => ({ level: s.level, total: s.total, used: 0 })),
+        create: slots.map((s) => ({
+          level: s.level,
+          total: s.total,
+          used: 0,
+          source: s.source ?? "spellcasting",
+        })),
       },
     },
     include: CHARACTER_INCLUDE,
@@ -474,8 +479,10 @@ export async function levelUpCharacter(id: string, input: LevelUpInput) {
       if (seen.has(b.ability)) throw new ValidationError("Each ability can only be increased once.");
       seen.add(b.ability);
       const cur = char[b.ability as keyof typeof char] as number;
-      if (typeof cur !== "number" || cur + b.increase > 30) {
-        throw new ValidationError("Ability scores cannot exceed 30.");
+      if (typeof cur !== "number" || cur + b.increase > 20) {
+        throw new ValidationError(
+          "Ability scores cannot exceed 20 without a special class feature (PHB-style ASI).",
+        );
       }
     }
   }
@@ -584,7 +591,10 @@ export async function levelUpCharacter(id: string, input: LevelUpInput) {
         prepared: s.prepared ?? false,
         alwaysPrepared: s.alwaysPrepared ?? false,
       },
-      update: {},
+      update: {
+        ...(s.alwaysPrepared ? { alwaysPrepared: true } : {}),
+        ...(s.prepared ? { prepared: true } : {}),
+      },
     });
   }
 
@@ -601,11 +611,12 @@ async function sumClassHitDiceUsed(characterId: string): Promise<number> {
 
 async function syncSpellSlotsMulticlass(characterId: string, slices: MulticlassSlice[]) {
   const desired = spellSlotsForMulticlass(slices);
-  const desiredLevels = new Set(desired.map((d) => d.level));
+  const desiredKeys = new Set(desired.map((d) => `${d.level}:${d.source ?? "spellcasting"}`));
   const existing = await prisma.spellSlot.findMany({ where: { characterId } });
 
   for (const d of desired) {
-    const ex = existing.find((s) => s.level === d.level);
+    const src = d.source ?? "spellcasting";
+    const ex = existing.find((s) => s.level === d.level && s.source === src);
     if (ex) {
       await prisma.spellSlot.update({
         where: { id: ex.id },
@@ -613,12 +624,13 @@ async function syncSpellSlotsMulticlass(characterId: string, slices: MulticlassS
       });
     } else {
       await prisma.spellSlot.create({
-        data: { characterId, level: d.level, total: d.total, used: 0 },
+        data: { characterId, level: d.level, total: d.total, used: 0, source: src },
       });
     }
   }
   for (const ex of existing) {
-    if (!desiredLevels.has(ex.level)) {
+    const key = `${ex.level}:${ex.source}`;
+    if (!desiredKeys.has(key)) {
       await prisma.spellSlot.delete({ where: { id: ex.id } });
     }
   }
@@ -738,6 +750,13 @@ async function getClassHitDie(classSlug: string): Promise<number> {
   return c?.hitDie ?? 8;
 }
 
+async function recoverPactSlotsOnShortRest(characterId: string) {
+  await prisma.spellSlot.updateMany({
+    where: { characterId, source: "pact" },
+    data: { used: 0 },
+  });
+}
+
 async function shortRest(
   char: any,
   hitDiceToSpend: number,
@@ -760,6 +779,7 @@ async function shortRest(
   if (!rows.length) throw new ValidationError("Character has no class rows.");
 
   if (hitDiceToSpend <= 0) {
+    await recoverPactSlotsOnShortRest(char.id);
     const re = await prisma.character.findUnique({ where: { id: char.id }, include: CHARACTER_INCLUDE });
     return { ...(await enrichCharacter(re!)), hpRecovered: 0, hitDiceSpent: 0 };
   }
@@ -805,6 +825,7 @@ async function shortRest(
   }
 
   const usedSum = await sumClassHitDiceUsed(char.id);
+  await recoverPactSlotsOnShortRest(char.id);
   const updated = await prisma.character.update({
     where: { id: char.id },
     data: {
@@ -842,17 +863,23 @@ async function longRest(char: any) {
   return { ...(await enrichCharacter(updated)), hitDiceRecovered: spentBefore };
 }
 
-export async function updateSpellSlot(id: string, slotLevel: number, action: string, amount: number) {
+export async function updateSpellSlot(
+  id: string,
+  slotLevel: number,
+  action: string,
+  amount: number,
+  source: "spellcasting" | "pact" = "spellcasting",
+) {
   const slot = await prisma.spellSlot.findUnique({
-    where: { characterId_level: { characterId: id, level: slotLevel } },
+    where: { characterId_level_source: { characterId: id, level: slotLevel, source } },
   });
-  if (!slot) throw new NotFoundError(`Spell slot level ${slotLevel}`);
+  if (!slot) throw new NotFoundError(`Spell slot level ${slotLevel} (${source})`);
   let used = slot.used;
   if (action === "use") used = Math.min(slot.total, used + amount);
   else if (action === "recover") used = Math.max(0, used - amount);
   else if (action === "set") used = Math.max(0, Math.min(slot.total, amount));
   return prisma.spellSlot.update({
-    where: { characterId_level: { characterId: id, level: slotLevel } },
+    where: { characterId_level_source: { characterId: id, level: slotLevel, source } },
     data: { used },
   });
 }

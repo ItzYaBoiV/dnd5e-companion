@@ -3,7 +3,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { computeCellSize } from "@/lib/computeCellSize";
 import { buildAsciiMapLegend } from "@/lib/dungeonAsciiMap";
 import { renderDungeonToCanvas } from "@/lib/dungeonTileRenderer";
-import { DEFAULT_PALETTE, ENTITY_PALETTE, LOCATION_PALETTE } from "@/lib/dungeonTilePalettes";
+import { ENTITY_PALETTE, forgePaletteForDungeon } from "@/lib/dungeonTilePalettes";
 import { DungeonMapCanvas } from "@/components/dungeon-forge/DungeonMapCanvas";
 import { DungeonLegend } from "@/components/dungeon-forge/DungeonLegend";
 import { openForgePrintPacket } from "@/lib/forgePrintPacket";
@@ -11,6 +11,7 @@ import { MonsterStatCard } from "@/components/dungeon-forge/MonsterStatCard";
 import { useSessionStore } from "@/store/sessionStore";
 import { DUNGEON_T as T } from "@/lib/dungeonForgeConstants";
 import { buildRenderGrid } from "@/lib/dungeonForgeRenderGrid";
+import { applyForgeLocationUpgrades } from "@/lib/forgeLocationUpgrades";
 import {
   computeVisibleCellsForPlayer,
   inferStartingRoomId,
@@ -20,15 +21,66 @@ import {
 import { broadcastPlayerMapState } from "@/lib/playerMapBroadcast";
 import { pickReferenceLootItem } from "@/lib/forgeLootFromReference";
 import { pickGoofyRiddle } from "@/lib/forgeRiddles";
+import {
+  addEntranceEnterDeco,
+  assignDungeonRoomArchetypes,
+  buildCorridorDistanceLabels,
+  getDungeonWestEntranceRoom,
+  placeDungeonInteriorPillars,
+  placeExtraSecretDoors,
+} from "@/lib/dungeonClassicForge";
+import {
+  enrichCastleFeatures,
+  enrichGraveyardFeatures,
+  enrichTownFeatures,
+} from "@/lib/locationForgeGraveTownCastle";
+import {
+  generateRoadVariantLayout,
+  postProcessRoadWilderness,
+  postProcessVolcanicLair,
+  postProcessFeyForest,
+} from "@/lib/dungeonForgeBiomeFeatures";
+import {
+  collectCaveBiolumSceneLights,
+  collectFeyForestWispLights,
+  collectVolcanicLavaGlowLights,
+} from "@/lib/forgeWallLights";
+import { generateBuildingInteriorSnapshot } from "@/lib/townBuildingInterior";
+
+/** Rotating DM prompts for urban chase rounds (TN-011). */
+const CHASE_ROUND_HINTS = [
+  "Crowds or carts may impose difficult terrain on main streets.",
+  "Alley shortcut: DC 12 Acrobatics or 1d4 bludgeoning from a tipping crate.",
+  "Guard whistle: add a complication or a blocked route next round.",
+];
 
 /* ═══════════════════════════════════════════════════════════════════════
    D&D 5e DUNGEON FORGE v3 — Location-Aware Procedural Map Generator
    ═══════════════════════════════════════════════════════════════════════ */
 
 // ── RNG ──────────────────────────────────────────────────────────────
-function seededRNG(seed) { let s=seed; return()=>{s=(s*16807)%2147483647;return(s-1)/2147483646;}; }
+function seededRNG(seed) {
+  let s = Math.max(1, Math.abs(Math.round(seed)) || 1);
+  return () => {
+    s = (s * 16807) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+}
 function pick(a,r){return a[Math.floor(r()*a.length)];}
 function rI(a,b,r){return Math.floor(r()*(b-a+1))+a;}
+
+function isFloorTile(t){
+  return t===T.F||t===T.C||t===T.ROAD||t===T.BRIDGE||t===T.PIT||t===T.ALLEY;
+}
+
+function entranceRoomForDepth(rooms,H){
+  if(!rooms.length)return null;
+  return rooms.reduce((best,r)=>{
+    const d=Math.abs(r.cx-0)+Math.abs(r.cy-H/2);
+    const bd=Math.abs(best.cx-0)+Math.abs(best.cy-H/2);
+    return d<bd?r:best;
+  },rooms[0]);
+}
 
 // ── Monsters / Traps / Items ─────────────────────────────────────────
 const MONSTERS={0:["Rat","Bat","Spider","Frog"],0.125:["Bandit","Kobold","Skeleton","Zombie","Cultist"],0.25:["Goblin","Wolf","Acolyte"],0.5:["Orc","Gnoll","Shadow","Hobgoblin","Scout"],1:["Ghoul","Bugbear","Giant Spider","Specter"],2:["Ghast","Mimic","Ogre","Gargoyle","Wererat"],3:["Minotaur","Mummy","Owlbear","Werewolf","Hell Hound"],4:["Banshee","Ghost","Flameskull","Ettin"],5:["Troll","Wraith","Umber Hulk","Flesh Golem"],6:["Medusa","Drider","Chimera","Young White Dragon"],7:["Mind Flayer","Stone Giant","Young Black Dragon"],8:["Hydra","Frost Giant","Young Green Dragon","Assassin"],9:["Young Blue Dragon","Fire Giant","Bone Devil"],10:["Young Red Dragon","Aboleth","Stone Golem"],13:["Beholder","Vampire","Adult White Dragon","Rakshasa"],15:["Adult Green Dragon","Purple Worm"],17:["Adult Blue Dragon","Death Knight"],20:["Ancient White Dragon","Pit Fiend"]};
@@ -50,6 +102,17 @@ const TRAPS = [
   { name:"Freezing Floor", minLv:4, dmg:"4d8 cold", detectDC:17, saveDC:15, saveType:"CON", effect:"CON save or speed reduced to 0 until end of next turn." },
 ];
 const ITEMS=[{name:"Healing Potion",r:"common",minLv:1},{name:"Gold (2d6x10)",r:"common",minLv:1},{name:"Scroll",r:"common",minLv:1},{name:"+1 Weapon",r:"uncommon",minLv:2},{name:"Bag of Holding",r:"uncommon",minLv:3},{name:"Cloak of Protection",r:"uncommon",minLv:3},{name:"Ring of Protection",r:"rare",minLv:5},{name:"+2 Weapon",r:"rare",minLv:6},{name:"Flame Tongue",r:"rare",minLv:7},{name:"Staff of Power",r:"vr",minLv:10},{name:"+3 Weapon",r:"vr",minLv:12},{name:"Vorpal Sword",r:"legendary",minLv:15},{name:"Staff of the Magi",r:"legendary",minLv:17},{name:"Gold (4d6x100)",r:"rare",minLv:5},{name:"Gem (500gp)",r:"rare",minLv:7}];
+
+const DUNGEON_ROOM_THEME={
+  entrance:"entrance",
+  corridor_junction:"lore",
+  guard_post:"guard",
+  storage:"treasure",
+  barracks:"guard",
+  throne_room:"boss",
+  shrine:"puzzle",
+  secret_vault:"treasure",
+};
 
 const SECRET_HINTS=[
   "Loose mortar — a cold draft when you tap the third brick from the corner.",
@@ -259,6 +322,30 @@ function applyLocationSpecialFeatures(grid,rooms,locationType,rng,W,H){
     }
   }
   placeNarrowWaterBridges(grid,locationType,rng,W,H);
+}
+
+/** Procedural corridor traps for classic dungeons (~1 per 4 rooms). */
+function applyDungeonCorridorTraps(grid,rooms,entities,rng,W,H){
+  if(!rooms.length)return;
+  const corridor=[];
+  for(let y=1;y<H-1;y++){
+    for(let x=1;x<W-1;x++){
+      if(grid[y][x]===T.C) corridor.push({x,y});
+    }
+  }
+  if(!corridor.length)return;
+  const want=Math.max(1,Math.floor(rooms.length/4));
+  const POOL=[
+    { name:"Concealed Pit", trapKind:"pit", detectDC:13, saveType:"DEX", saveDC:13, dmg:"1d6 bludgeoning", effect:"10 ft fall" },
+    { name:"Dart Emitter", trapKind:"dart", detectDC:14, saveType:"DEX", saveDC:13, dmg:"1d4 piercing" },
+    { name:"Pressure Plate", trapKind:"pressure_plate", detectDC:12, saveType:"", saveDC:0, dmg:"none", effect:"Alarm — nearby creatures may hear" },
+    { name:"Poison Gas Jet", trapKind:"poison_gas", detectDC:15, saveType:"CON", saveDC:14, dmg:"1d6 poison" },
+  ];
+  const sh=[...corridor].sort(()=>rng()-0.5);
+  for(let i=0;i<Math.min(want,sh.length);i++){
+    const p=sh[i], t=pick(POOL,rng);
+    entities.push({type:"trap",...t,triggered:false,x:p.x,y:p.y,roomId:null});
+  }
 }
 
 /** Convert narrow water crossings into bridges where it reads as a plank span (skip graveyards / towns). */
@@ -628,7 +715,7 @@ function placeStairsOnGrid({grid,rooms,stairUp,stairDown,stairUpTo,stairDownTo,r
       const minY=rm.y+1, maxY=rm.y+rm.h-2;
       let sx=clamp(stairUp.x, minX, maxX);
       let sy=clamp(stairUp.y, minY, maxY);
-      const ok=t=>t===T.F||t===T.C||t===T.WA||t===T.ROAD||t===T.BRIDGE||t===T.LAVA;
+      const ok=t=>t===T.F||t===T.C;
       if(!ok(grid[sy]?.[sx])){
         const p=pickFloorCellInRoom(grid,rm,rng); sx=p.x; sy=p.y;
       }
@@ -643,7 +730,7 @@ function placeStairsOnGrid({grid,rooms,stairUp,stairDown,stairUpTo,stairDownTo,r
       const minY=rm.y+1, maxY=rm.y+rm.h-2;
       let sx=clamp(stairDown.x, minX, maxX);
       let sy=clamp(stairDown.y, minY, maxY);
-      const ok=t=>t===T.F||t===T.C||t===T.WA||t===T.ROAD||t===T.BRIDGE||t===T.LAVA;
+      const ok=t=>t===T.F||t===T.C;
       if(!ok(grid[sy]?.[sx])){
         const p=pickFloorCellInRoom(grid,rm,rng); sx=p.x; sy=p.y;
       }
@@ -856,7 +943,7 @@ function carveWindingCorridor(grid,a,b,W,H,rng,widthTiles){
         const nx=x+ox, ny=y+oy;
         if(ny<0||ny>=H||nx<0||nx>=W) continue;
         const t=grid[ny][nx];
-        if(t===T.V || t===T.W || t===T.F) grid[ny][nx]=T.C;
+        if(t===T.V || t===T.W) grid[ny][nx]=T.C;
       }
     }
   }
@@ -900,7 +987,8 @@ function generateCaveLayout(cfg,rng){
         if(d<bd){bd=d;ba=a;bb=b;}
       }
       if(ba<0) break;
-      carveWindingCorridor(grid,rooms[ba],rooms[bb],W,H,rng,2);
+      const corridorWidth=["volcanic_lair","fey_forest","cave"].includes(locationType)?1:2;
+      carveWindingCorridor(grid,rooms[ba],rooms[bb],W,H,rng,corridorWidth);
       conn.add(bb);unconn.delete(bb);
     }
   }
@@ -963,14 +1051,27 @@ function generateGraveyardLayout(cfg,rng){
     // Restore interior after ring.
     for(let y=ry;y<ry+rh;y++) for(let x=rx;x<rx+rw;x++) grid[y][x]=T.F;
 
-    // Door on one wall side, facing the yard.
-    const sides=["N","S","W","E"];
-    const s=pick(sides,rng);
+    // Door on one wall side, facing the yard (retry sides if a prior structure left floor on that edge).
     const dX=rx+Math.floor(rw/2), dY=ry+Math.floor(rh/2);
-    if(s==="N" && grid[ry-1]?.[dX]===T.W) grid[ry-1][dX]=T.D;
-    if(s==="S" && grid[ry+rh]?.[dX]===T.W) grid[ry+rh][dX]=T.D;
-    if(s==="W" && grid[dY]?.[rx-1]===T.W) grid[dY][rx-1]=T.D;
-    if(s==="E" && grid[dY]?.[rx+rw]===T.W) grid[dY][rx+rw]=T.D;
+    const tryDoor=(y,x)=>{
+      const t=grid[y]?.[x];
+      if(t===T.W){ grid[y][x]=T.D; return true; }
+      if(t===T.F||t===T.C) return true;
+      return false;
+    };
+    const sides=[
+      [ry-1,dX],[ry+rh,dX],[dY,rx-1],[dY,rx+rw],
+    ];
+    const order=sides.map((c,i)=>({c,i,r:rng()})).sort((a,b)=>a.r-b.r);
+    let opened=false;
+    for(const {c} of order){
+      if(tryDoor(c[0],c[1])){ opened=true; break; }
+    }
+    if(!opened){
+      for(const c of sides){
+        if(tryDoor(c[0],c[1])) break;
+      }
+    }
   }
 
   // Graveyard is open yard: no carved corridors. The T.F interior connects every
@@ -1092,6 +1193,14 @@ function generateSewerLayout(cfg,rng){
       grid[y][tx+1]=T.F;
     }
   }
+  // Main drainage spine: 2-tile-wide N–S channel (hierarchy over random trunks).
+  const mainX=Math.max(3,Math.min(W-5,Math.floor(W/2)));
+  for(let y=2;y<H-2;y++){
+    grid[y][mainX]=T.WA;
+    grid[y][mainX+1]=T.WA;
+    if(mainX-1>=1) grid[y][mainX-1]=T.F;
+    if(mainX+2<W-1) grid[y][mainX+2]=T.F;
+  }
   for(let i=0;i<rI(2,3,rng);i++){
     const a={cx:pick(vTrunks,rng),cy:pick(hTrunks,rng)};
     const b={cx:Math.max(2,Math.min(W-3,pick(vTrunks,rng)+rI(-3,3,rng))),cy:Math.max(2,Math.min(H-3,pick(hTrunks,rng)+rI(-2,2,rng)))};
@@ -1196,11 +1305,12 @@ function generateSwampLayout(cfg,rng){
     }
   }
 
-  // Bridges: carve T.F paths through water.
-  const carveBridge=(a,b)=>{
+  // Bridges: BFS paths through water, then place bridge tiles, then flank remaining water (avoids sealing parallel routes).
+  const collectBridgePath=(a,b)=>{
     let x=a.cx,y=a.cy;
     const tx=b.cx,ty=b.cy;
     const maxSteps=W*H;
+    const cells=[];
     for(let steps=0;steps<maxSteps;steps++){
       const dx=tx-x, dy=ty-y;
       if(Math.abs(dx)+Math.abs(dy)<=1) break;
@@ -1208,20 +1318,17 @@ function generateSwampLayout(cfg,rng){
       let nx=x, ny=y;
       if(preferX) nx=x + (dx>0?1:-1);
       else ny=y + (dy>0?1:-1);
-      if(rng()<0.2){ // detour
+      if(rng()<0.2){
         if(preferX) ny=y + (rng()<0.5?(dy>0?1:-1):0);
         else nx=x + (rng()<0.5?(dx>0?1:-1):0);
       }
       x=clamp(nx,1,W-2); y=clamp(ny,1,H-2);
-      if(grid[y][x]===T.WA) grid[y][x]=T.BRIDGE;
-      // Surround bridge tile with shoreline walls where adjacent is water.
-      for(const[dy2,dx2] of [[-1,0],[1,0],[0,-1],[0,1]]){
-        const ay=y+dy2, ax=x+dx2;
-        if(ay>=0&&ay<H&&ax>=0&&ax<W && grid[ay][ax]===T.WA) grid[ay][ax]=T.W;
-      }
+      if(grid[y][x]===T.WA) cells.push([y,x]);
     }
+    return cells;
   };
 
+  const bridgeCells=new Set();
   if(rooms.length>1){
     const conn=new Set([0]);const unconn=new Set(rooms.map((_,i)=>i).filter(i=>i>0));
     while(unconn.size>0){
@@ -1231,70 +1338,28 @@ function generateSwampLayout(cfg,rng){
         if(d<bd){bd=d;ba=a;bb=b;}
       }
       if(ba<0) break;
-      carveBridge(rooms[ba],rooms[bb]);
+      for(const [py,px] of collectBridgePath(rooms[ba],rooms[bb])) bridgeCells.add(`${px},${py}`);
       conn.add(bb);unconn.delete(bb);
+    }
+  }
+  for(const key of bridgeCells){
+    const [px,py]=key.split(",").map(Number);
+    if(grid[py]?.[px]===T.WA) grid[py][px]=T.BRIDGE;
+  }
+  for(const key of bridgeCells){
+    const [px,py]=key.split(",").map(Number);
+    for(const[dy2,dx2] of [[-1,0],[1,0],[0,-1],[0,1]]){
+      const ay=py+dy2, ax=px+dx2;
+      if(ay>=0&&ay<H&&ax>=0&&ax<W && grid[ay][ax]===T.WA) grid[ay][ax]=T.W;
     }
   }
 
   return {grid,rooms};
 }
 
-/** Linear road spine with roadside lots — session travel / encounter strips. */
+/** Linear road spine — Dirt Trail / King's Highway / Mountain Pass (see dungeonForgeBiomeFeatures). */
 function generateRoadLayout(cfg,rng){
-  const {width:W,height:H,roomCount}=cfg;
-  const grid=Array.from({length:H},()=>Array(W).fill(T.V));
-  const mid=Math.floor(H/2);
-  const hubLoc=LOCATIONS.road;
-  const rooms=[];
-  for(let x=2;x<W-2;x++){
-    grid[mid][x]=T.ROAD;
-    if(mid-1>=0) grid[mid-1][x]=T.F;
-    if(mid+1<H) grid[mid+1][x]=T.F;
-  }
-  const n=Math.min(roomCount,Math.max(2,Math.floor(W/22)));
-  for(let i=0;i<n;i++){
-    const cx=8+Math.floor(((i+1)/(n+1))*(W-16));
-    const rw=rI(6,10,rng), rh=rI(4,7,rng);
-    const rx=clamp(cx-Math.floor(rw/2),3,W-rw-3);
-    const north=rng()<0.5;
-    const ry=north?mid-rh-2:mid+2;
-    if(ry<2||ry+rh>=H-2) continue;
-    let bad=false;
-    for(const r of rooms){
-      if(rx<r.x+r.w+3&&rx+rw+3>r.x&&ry<r.y+r.h+3&&ry+rh+3>r.y){bad=true;break;}
-    }
-    if(bad) continue;
-    for(let y=ry;y<ry+rh;y++)for(let x=rx;x<rx+rw;x++) grid[y][x]=T.F;
-    for(let y=ry-1;y<=ry+rh;y++)for(let x=rx-1;x<=rx+rw;x++){
-      if(y>=0&&y<H&&x>=0&&x<W&&grid[y][x]===T.V) grid[y][x]=T.W;
-    }
-    for(let y=ry;y<ry+rh;y++)for(let x=rx;x<rx+rw;x++) grid[y][x]=T.F;
-    const roomType=pickRoomType(hubLoc,"road",rng);
-    const rm={id:rooms.length+1,x:rx,y:ry,w:rw,h:rh,cx:Math.floor(rx+rw/2),cy:Math.floor(ry+rh/2),type:roomType,label:roomType};
-    rooms.push(rm);
-    const linkCy=north?mid+1:mid-1;
-    carvePath(grid,rm,{cx:rm.cx,cy:linkCy},W,H,rng,false);
-    if(rooms.length>1) carvePath(grid,rooms[rooms.length-2],rm,W,H,rng,false);
-  }
-  if(rooms.length===0){
-    const rw=12,rh=6;
-    const rx=Math.floor((W-rw)/2), ry=mid-rh-3;
-    for(let y=ry;y<ry+rh;y++)for(let x=rx;x<rx+rw;x++) if(y>1&&y<H-2&&x>1&&x<W-2) grid[y][x]=T.F;
-    for(let y=ry-1;y<=ry+rh;y++)for(let x=rx-1;x<=rx+rw;x++) if(y>=0&&y<H&&x>=0&&x<W&&grid[y][x]===T.V) grid[y][x]=T.W;
-    for(let y=ry;y<ry+rh;y++)for(let x=rx;x<rx+rw;x++) grid[y][x]=T.F;
-    rooms.push({id:1,x:rx,y:ry,w:rw,h:rh,cx:Math.floor(rx+rw/2),cy:Math.floor(ry+rh/2),type:"Crossroads",label:"Crossroads"});
-    carvePath(grid,rooms[0],{cx:rooms[0].cx,cy:mid+1},W,H,rng,false);
-  }
-  for(let y=1;y<H-1;y++){
-    for(let x=1;x<W-1;x++){
-      if(grid[y][x]!==T.V) continue;
-      for(const[dy,dx] of [[-1,0],[1,0],[0,-1],[0,1]]){
-        const t=grid[y+dy]?.[x+dx];
-        if(t===T.F||t===T.ROAD||t===T.WA){ grid[y][x]=T.W; break; }
-      }
-    }
-  }
-  return {grid,rooms};
+  return generateRoadVariantLayout(cfg,rng);
 }
 
 // ── Generation ───────────────────────────────────────────────────────
@@ -1303,7 +1368,7 @@ function generateMap(cfg) {
   const avgPartyLevel=typeof avgPartyLevelIn==="number"?avgPartyLevelIn:level;
   const loc=LOCATIONS[locationType];
   let grid=Array.from({length:H},()=>Array(W).fill(T.V));
-  let rooms=[];const entities=[];const decoOverlay=[];
+  let rooms=[];const entities=[];const decoOverlay=[];let forgeDmHints=null;
   const mapName=loc?.genName?loc.genName(rng):null;
   const tavernName=loc?.usesRoads?genTavernName(rng):null;
 
@@ -1324,7 +1389,11 @@ function generateMap(cfg) {
       att++;
       const rw=rI(5,Math.min(14,Math.floor(W/3)),rng);
       const rh=rI(5,Math.min(12,Math.floor(H/3)),rng);
-      const rx=rI(1,W-rw-1,rng), ry=rI(1,H-rh-1,rng);
+      let rx=rI(1,W-rw-1,rng), ry=rI(1,H-rh-1,rng);
+      if(locationType==="dungeon"&&rooms.length===0){
+        rx=2;
+        ry=rI(2,Math.max(2,H-rh-2),rng);
+      }
       let overlap=false;
       for(const r of rooms){if(rx<r.x+r.w+2&&rx+rw+2>r.x&&ry<r.y+r.h+2&&ry+rh+2>r.y){overlap=true;break;}}
       if(overlap)continue;
@@ -1357,6 +1426,23 @@ function generateMap(cfg) {
     }
   }
 
+  if(!useCustomLayout&&locationType==="dungeon"&&rooms.length){
+    const ent=getDungeonWestEntranceRoom(rooms);
+    if(ent){
+      const throne=assignDungeonRoomArchetypes(rooms,grid,ent,rng);
+      placeDungeonInteriorPillars(grid,rooms);
+      placeExtraSecretDoors(grid,rooms,rng,W,H,Math.min(2,Math.max(1,Math.floor(rooms.length/5))));
+      const corridorLabels=buildCorridorDistanceLabels(rooms,ent);
+      addEntranceEnterDeco(decoOverlay,ent,grid,W,H);
+      forgeDmHints={
+        bossRoom:{x:throne.x,y:throne.y,w:throne.w,h:throne.h},
+        throneCx:throne.cx,
+        throneCy:throne.cy,
+        corridorLabels,
+      };
+    }
+  }
+
   if(!useCustomLayout&&!loc.usesRoads){
     for(const room of rooms){
       const edges=[];
@@ -1370,6 +1456,14 @@ function generateMap(cfg) {
   // Place stairs (MF1) using pre-computed anchors.
   placeStairsOnGrid({grid,rooms,stairUp,stairDown,stairUpTo,stairDownTo,rng});
   applyLocationSpecialFeatures(grid,rooms,locationType,rng,W,H);
+  let forgeLocationMeta=null;
+  let forgeRenderOverlay=null;
+  if(["cave","swamp","temple","sewer","volcanic_lair","fey_forest"].includes(locationType)){
+    const up=applyForgeLocationUpgrades({grid,rooms,entities,decoOverlay,W,H,locationType,rng,cfg});
+    forgeLocationMeta=up.meta;
+    forgeRenderOverlay=up.renderOverlay;
+  }
+  if(locationType==="dungeon"&&trapsOn) applyDungeonCorridorTraps(grid,rooms,entities,rng,W,H);
 
   // Place decorations (optional)
   const usedCells=new Set();
@@ -1484,11 +1578,17 @@ function generateMap(cfg) {
   for(const room of rooms){
     if(monstersOn&&rng()<0.55&&room.id>1){
       const cr=pick(avCRs,rng);const mn=pick(MONSTERS[cr],rng);
-      const cnt=cr<1?rI(2,5,rng):cr<3?rI(1,3,rng):1;
+      let cnt=cr<1?rI(2,5,rng):cr<3?rI(1,3,rng):1;
+      if(locationType==="dungeon"&&room.roomType==="barracks") cnt=rI(2,4,rng);
       let mx,my,tries=0;
-      do{mx=rI(room.x+1,room.x+room.w-2,rng);my=rI(room.y+1,room.y+room.h-2,rng);tries++;}
-      while(usedCells.has(`${mx},${my}`)&&tries<15);
-      entities.push({type:"monster",name:mn,count:cnt,cr,x:mx,y:my,roomId:room.id});
+      do{
+        mx=rI(room.x+1,room.x+room.w-2,rng);
+        my=rI(room.y+1,room.y+room.h-2,rng);
+        tries++;
+      }while(tries<15&&(usedCells.has(`${mx},${my}`)||!isFloorTile(grid[my]?.[mx])));
+      if(!(tries>=15&&!isFloorTile(grid[my]?.[mx]))){
+        entities.push({type:"monster",name:mn,count:cnt,cr,x:mx,y:my,roomId:room.id});
+      }
     }
     if(trapsOn&&rng()<0.3){
       const av=TRAPS.filter(t=>t.minLv<=level);
@@ -1500,7 +1600,13 @@ function generateMap(cfg) {
     if(itemsOn&&rng()<0.4){
       let it=null;
       if(itemCatalog&&itemCatalog.length){
-        const ref=pickReferenceLootItem(rng, itemCatalog, avgPartyLevel);
+        const dn=typeof room.depthNorm==="number"?room.depthNorm:0.5;
+        const ref=pickReferenceLootItem(
+          rng,
+          itemCatalog,
+          avgPartyLevel,
+          locationType==="dungeon"?{dungeonDepth:dn}:null,
+        );
         if(ref) it={name:ref.name, slug:ref.slug, r:"ref", minLv:1};
       }
       if(!it){
@@ -1516,10 +1622,32 @@ function generateMap(cfg) {
     }
   }
 
+  if(locationType==="dungeon"&&monstersOn){
+    const tr=rooms.find((r)=>r.roomType==="throne_room");
+    if(tr){
+      const bossCR=Math.min(maxCR,Math.max(1,Math.ceil(avgPartyLevel)));
+      const bcands=Object.keys(MONSTERS).map(Number).filter((c)=>c<=bossCR&&c>=0.5);
+      const crb=bcands.length?pick(bcands,rng):1;
+      const bn=pick(MONSTERS[crb]||MONSTERS[1],rng);
+      let bx,by,tries=0;
+      do{
+        bx=rI(tr.x+1,tr.x+tr.w-2,rng);
+        by=rI(tr.y+1,tr.y+tr.h-2,rng);
+        tries++;
+      }while(tries<22&&(usedCells.has(`${bx},${by}`)||!isFloorTile(grid[by]?.[bx])));
+      if(!(tries>=22&&!isFloorTile(grid[by]?.[bx]))){
+        entities.push({type:"monster",name:bn,count:1,cr:crb,x:bx,y:by,roomId:tr.id,isBoss:true});
+      }
+    }
+  }
+
   const riddles=[];
   let riddleSeq=0;
+  if(locationType!=="graveyard"){
   for(const room of rooms){
-    if(room.id<=1||rng()>0.18) continue;
+    let riddleChance=0.18;
+    if(locationType==="dungeon"&&room.roomType==="shrine") riddleChance=0.52;
+    if(room.id<=1||rng()>riddleChance) continue;
     const rr=pickGoofyRiddle(rng);
     let rx,ry,tries=0;
     do{rx=rI(room.x+1,room.x+room.w-2,rng);ry=rI(room.y+1,room.y+room.h-2,rng);tries++;}
@@ -1528,7 +1656,13 @@ function generateMap(cfg) {
     usedCells.add(`${rx},${ry}`);
     let reward=null;
     if(itemCatalog&&itemCatalog.length){
-      reward=pickReferenceLootItem(rng, itemCatalog, avgPartyLevel);
+      const dn=typeof room.depthNorm==="number"?room.depthNorm:0.5;
+      reward=pickReferenceLootItem(
+        rng,
+        itemCatalog,
+        avgPartyLevel,
+        locationType==="dungeon"?{dungeonDepth:dn}:null,
+      );
     }
     if(!reward){
       const av=ITEMS.filter(i=>i.minLv<=level);
@@ -1562,13 +1696,54 @@ function generateMap(cfg) {
       name:"Riddle",
     });
   }
+  }
 
   if(cfg.showDecos!==false){
     scatterLeversNearDoors(grid,decoOverlay,W,H,rng);
   }
 
-  const roomsMeta=enrichForgeRoomMeta(rooms,rng,locationType);
-  return {grid,rooms:roomsMeta,entities,decoOverlay,riddles,width:W,height:H,mapName,locationType,glyphs:LOCATION_GLYPHS[locationType]||LOCATION_GLYPHS.dungeon};
+  if(locationType==="graveyard"){
+    forgeDmHints={...(forgeDmHints||{}),...enrichGraveyardFeatures({grid,rooms,entities,decoOverlay,riddles,rng,W,H,usedCells})};
+  }else if(locationType==="town"){
+    forgeDmHints={...(forgeDmHints||{}),...enrichTownFeatures({grid,rooms,entities,decoOverlay,rng,W,H,usedCells,cfg:{townMarketDay:!!cfg.townMarketDay,townFortified:!!cfg.townFortified,townChaseMode:!!cfg.townChaseMode}})};
+  }else if(locationType==="castle"){
+    forgeDmHints={...(forgeDmHints||{}),...enrichCastleFeatures({grid,rooms,entities,decoOverlay,rng,W,H,usedCells})};
+  }
+
+  let forgeBiome=null;
+  if(locationType==="road"){
+    forgeBiome={road:postProcessRoadWilderness(grid,rooms,entities,decoOverlay,cfg,rng)};
+  }else if(locationType==="volcanic_lair"){
+    forgeBiome={volcanic:postProcessVolcanicLair(grid,rooms,entities,decoOverlay,rng,cfg.volcanicActivity??"dormant",cfg.eruptionRounds??15)};
+  }else if(locationType==="fey_forest"){
+    forgeBiome={fey:postProcessFeyForest(grid,rooms,entities,decoOverlay,rng)};
+  }
+
+  if(forgeBiome?.road?.encounterZones?.length){
+    forgeDmHints={...(forgeDmHints||{}),roadEncounterZones:forgeBiome.road.encounterZones};
+  }
+
+  const roomsMeta=enrichForgeRoomMeta(rooms,rng,locationType,H);
+  return {
+    grid,
+    rooms:roomsMeta,
+    entities,
+    decoOverlay,
+    riddles,
+    width:W,
+    height:H,
+    mapName,
+    locationType,
+    glyphs:LOCATION_GLYPHS[locationType]||LOCATION_GLYPHS.dungeon,
+    forgeDmHints,
+    forgeLocationMeta,
+    forgeRenderOverlay,
+    forgeBiome,
+    dungeonLighting:cfg.dungeonLighting??"lit",
+    dungeonWanderMin:cfg.dungeonWanderMin??10,
+    graveyardTime:cfg.graveyardTime??"day",
+    graveyardWeather:cfg.graveyardWeather??"clear",
+  };
 }
 
 function forgeRoomsToDungeonMapRooms(dg){
@@ -1591,15 +1766,27 @@ function forgeRoomsToDungeonMapRooms(dg){
   }));
 }
 
-function enrichForgeRoomMeta(rooms,rng,locationType){
-  const r0=rooms.find(r=>r.id===1)??rooms[0];
+function enrichForgeRoomMeta(rooms,rng,locationType,mapHeight){
+  const r0=
+    locationType==="dungeon"
+      ? getDungeonWestEntranceRoom(rooms) ?? rooms[0]
+      : entranceRoomForDepth(rooms,mapHeight);
   if(!r0)return rooms;
   const maxD=Math.max(1,...rooms.map(r=>Math.abs(r.cx-r0.cx)+Math.abs(r.cy-r0.cy)));
   return rooms.map((r)=>{
+    if(locationType==="dungeon"&&r.roomType){
+      const man=Math.abs(r.cx-r0.cx)+Math.abs(r.cy-r0.cy);
+      const depth=Math.min(12,Math.round((man/maxD)*8));
+      const theme=DUNGEON_ROOM_THEME[r.roomType]||"guard";
+      const namedRoom=r.namedRoom??(rng()<0.28?`${pick(["Ash","Tallow","Salt","Raven","Iron","Hollow"],rng)} ${pick(["Hall","Vault","Den","Sanctum","Gallery","Pit"],rng)}`:null);
+      const secretHint=r.roomType==="secret_vault"||r.id>1&&rng()<0.08?pick(SECRET_HINTS,rng):null;
+      const isSecretRoom=r.roomType==="secret_vault"||Boolean(secretHint);
+      return{...r,depth,theme,namedRoom,locationType,secretHint,isSecretRoom};
+    }
     const man=Math.abs(r.cx-r0.cx)+Math.abs(r.cy-r0.cy);
     const depth=Math.min(12,Math.round((man/maxD)*8));
     let theme="guard";
-    if(r.id===1)theme="entrance";
+    if(r.id===r0.id)theme="entrance";
     else if(String(r.type||"").toLowerCase().includes("boss"))theme="boss";
     else if(/throne|vault|cache|shrine|reliquary|sanctum|moon pool|dreamspring|black market|forge depths|breached hull|inner sanctum/i.test(String(r.label||"")))theme=pick(["treasure","lore","puzzle"],rng);
     else if(locationType==="volcanic_lair"&&/magma|ember|lava|volcanic|scoria|cinder|sulfur|glass lake|ash tomb|fire shrine/i.test(String(r.type||"")))theme=pick(["boss","trap","treasure"],rng);
@@ -1618,7 +1805,7 @@ function enrichForgeRoomMeta(rooms,rng,locationType){
 
 function carvePath(grid,a,b,W,H,rng,isRoad){
   let x=a.cx,y=a.cy;const goH=rng()<0.5;const tileType=isRoad?T.ROAD:T.C;
-  const canCarve=(t)=>t===T.V||t===T.W||t===T.F;
+  const canCarve=(t)=>t===T.V||t===T.W;
   const carve=(cx,cy)=>{
     if(cy>=0&&cy<H&&cx>=0&&cx<W){
       if(canCarve(grid[cy][cx])) grid[cy][cx]=tileType;
@@ -1639,7 +1826,7 @@ const RM={common:"#aaa",uncommon:"#0f0",rare:"#44f",vr:"#c4f",legendary:"#fa0"};
 const RMG={common:"#888",uncommon:"#282",rare:"#24c",vr:"#82c",legendary:"#c80"};
 
 /** Deco keys hidden on player print export (containers & obvious searchable props). */
-const PLAYER_PRINT_HIDE_DECO_KEYS=new Set(["chest","crate","crate_stack","bookshelf","weapon_rack","crystal","lever_icon"]);
+const PLAYER_PRINT_HIDE_DECO_KEYS=new Set(["chest","crate","crate_stack","bookshelf","weapon_rack","crystal","lever_icon","glamour_chest_dm","illusory_wall_dm","fey_circle_mushroom","wanted_poster","cooled_lava_loot"]);
 
 function wrapTextLine(s,maxLen){
   if(s.length<=maxLen)return[s];
@@ -1672,7 +1859,12 @@ function buildDmExportSidebarLines(dg){
     lines.push("");
   }
   for(const r of rooms){
-    lines.push("Room "+r.id+": "+(r.label||r.type));
+    const arch=r.buildingArchetype?` · ${r.buildingArchetype}`:"";
+    const cast=r.castleArchetype?` · ${r.castleArchetype}`:"";
+    lines.push(
+      "Room "+r.id+": "+(r.label||r.type)+arch+cast+(r.roomType?` [${r.roomType}]`:""),
+    );
+    if(r.description) lines.push("  "+r.description);
     const dnames=[...new Set(dg.decoOverlay.filter(d=>d.roomId===r.id).map(d=>d.name))];
     if(dnames.length)lines.push("  Scenery: "+dnames.join(", "));
     const re=dg.entities.filter(e=>e.roomId===r.id);
@@ -1710,6 +1902,14 @@ function cellColor(cell,style,ov={}){
     case T.ROAD:return{bg:isG?s.roadBg:bg0,fg:s.roadFg};
     case T.BRIDGE:return{bg:isG?s.floorBg:bg0,fg:s.corrFg??s.floorFg};
     case T.LAVA:return{bg:isG?"#4a1808":bg0,fg:s.waterFg};
+    case T.PIT:return{bg:isG?s.floorBg:bg0,fg:s.floorFg};
+    case T.GATE:
+    case T.DRAWBRIDGE:return{bg:isG?s.doorBg:bg0,fg:s.doorFg};
+    case T.HEADSTONE:return{bg:isG?s.floorBg:bg0,fg:"#8a8a92"};
+    case T.ARROW_SLIT:
+    case T.MURDER_HOLE:
+    case T.CELL_BARS:return{bg:isG?s.wallBg:bg0,fg:s.wallFg};
+    case T.ALLEY:return{bg:isG?s.roadBg:bg0,fg:s.roadFg};
     default:return{bg:s.void,fg:s.void};
   }
 }
@@ -1872,7 +2072,7 @@ function renderRoomCanvas(dg, roomId, _styleName, locationType, forgeCfg, opts =
   }
   const canvas = document.createElement("canvas");
   renderDungeonToCanvas(canvas, sub, {
-    palette: LOCATION_PALETTE[locationType] ?? DEFAULT_PALETTE,
+    palette: forgePaletteForDungeon(dg, locationType),
     entities: ENTITY_PALETTE,
     cellPx,
     dpr,
@@ -1889,7 +2089,7 @@ export default function DungeonForge(){
   /** Locked display behavior — no sidebar toggles (tiny cells, fill viewport, 2× PNG, scenery). */
   const FIXED_FORGE_DISPLAY={showDecos:true,showThemes:false};
   const [cfg,setCfg]=useState(()=>{
-    const base={roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:"terminal",seed:Math.floor(Math.random()*999999),locationType:"dungeon",...FIXED_FORGE_DISPLAY,cellPx:18,exportCellPx:32,autoSync:false};
+    const base={roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:"terminal",seed:Math.floor(Math.random()*999999),locationType:"dungeon",dungeonLighting:"lit",dungeonWanderMin:10,graveyardTime:"day",graveyardWeather:"clear",townMarketDay:false,townFortified:false,townChaseMode:false,roadVariant:"dirt_trail",wildernessWeather:"clear",volcanicActivity:"dormant",eruptionRounds:15,feyShiftingPaths:false,feyPlayerDisorient:false,feyBioluminescent:true,caveVariant:"auto",caveBioluminescentMode:"auto",templeDeity:"auto",templeCondition:"auto",...FIXED_FORGE_DISPLAY,cellPx:18,exportCellPx:32,autoSync:false};
     try{
       const raw=localStorage.getItem(FORGE_CFG_KEY);
       if(raw){
@@ -1901,8 +2101,12 @@ export default function DungeonForge(){
     return base;
   });
   const [dg,setDg]=useState(null);const [selRoom,setSelRoom]=useState(null);const [curFloor,setCurFloor]=useState(1);
+  const [interiorModal,setInteriorModal]=useState(null);
+  const [chaseRound,setChaseRound]=useState(0);
+  const interiorCanvasRef=useRef(null);
   const [floors,setFloors]=useState([]);const [hovered,setHovered]=useState(null);const [legend,setLegend]=useState(false);
   const [view,setView]=useState("dm");const [revealed,setRevealed]=useState(()=>new Set());
+  const [graveyardInteriorRevealed,setGraveyardInteriorRevealed]=useState(()=>new Set());
   const [statCard,setStatCard]=useState(null);
   const [forgeInspect,setForgeInspect]=useState(null);
   const cfgSaveTimer=useRef(null);
@@ -1923,11 +2127,73 @@ export default function DungeonForge(){
   const [sendMsg,setSendMsg]=useState(null);
   const [doorOpen,setDoorOpen]=useState(()=>new Set());
   const [animPhase,setAnimPhase]=useState(0);
+  const wanderTimerRef=useRef(Date.now());
+  const [wanderDue,setWanderDue]=useState(false);
+  const [trapTriggeredKeys,setTrapTriggeredKeys]=useState(()=>new Set());
   const { partyCharacters, sessions, activeSession, loadSessions } = useSessionStore();
   useEffect(()=>{
     const id=window.setInterval(()=>setAnimPhase((p)=>(p+0.04)%1),380);
     return()=>clearInterval(id);
   },[]);
+  useEffect(()=>{
+    wanderTimerRef.current=Date.now();
+    setWanderDue(false);
+  },[dg?.seed,curFloor]);
+  useEffect(()=>{setChaseRound(0);},[dg?.seed,cfg.locationType]);
+  useEffect(()=>{
+    if(!interiorModal?.snap)return;
+    const snap=interiorModal.snap;
+    let cancelled=false;
+    const id=requestAnimationFrame(()=>{
+      if(cancelled)return;
+      const canvas=interiorCanvasRef.current;
+      if(!canvas)return;
+      const W=snap.width,H=snap.height;
+      const mini={
+        grid:snap.grid,
+        width:W,
+        height:H,
+        entities:snap.entities,
+        decoOverlay:snap.decoOverlay,
+        locationType:"dungeon",
+        rooms:[{
+          id:1,
+          x:1,y:1,
+          w:Math.max(1,W-2),
+          h:Math.max(1,H-2),
+          cx:Math.floor(W/2),
+          cy:Math.floor(H/2),
+          label:snap.title,
+        }],
+      };
+      const rg=buildRenderGrid(mini,{showThemes:false});
+      const cellPx=Math.min(32,Math.floor(440/Math.max(W,H,1)));
+      renderDungeonToCanvas(canvas,rg,{
+        palette:forgePaletteForDungeon(mini),
+        entities:ENTITY_PALETTE,
+        cellPx,
+        dpr:typeof window!=="undefined"?Math.min(2,window.devicePixelRatio||1):2,
+        showEnts:true,
+        playerSanitize:false,
+        inkSaver:false,
+        forgeDmHints:null,
+        dungeonLighting:"lit",
+      });
+    });
+    return()=>{
+      cancelled=true;
+      cancelAnimationFrame(id);
+    };
+  },[interiorModal]);
+  useEffect(()=>{
+    const ms=(dg?.dungeonWanderMin??cfg.dungeonWanderMin??10)*60*1000;
+    const tick=()=>{
+      setWanderDue(Date.now()-wanderTimerRef.current>=ms);
+    };
+    tick();
+    const id=window.setInterval(tick,15000);
+    return()=>window.clearInterval(id);
+  },[dg,cfg.dungeonWanderMin]);
   useEffect(()=>{
     const el=mapViewportRef.current;
     if(!el)return;
@@ -2029,7 +2295,7 @@ export default function DungeonForge(){
     });
     const d0=all?.[0];
     const startId=(d0&&inferStartingRoomId(d0))??d0?.rooms?.[0]?.id??1;
-    setFloors(all);setDg(all[0]);setCurFloor(1);setSelRoom(null);setTvRoom(null);setForgeInspect(null);setRevealed(new Set([startId]));setDoorOpen(new Set());
+    setFloors(all);setDg(all[0]);setCurFloor(1);setSelRoom(null);setTvRoom(null);setForgeInspect(null);setRevealed(new Set([startId]));setDoorOpen(new Set());setTrapTriggeredKeys(new Set());setGraveyardInteriorRevealed(new Set());
   },[cfg, partyCharacters]);
 
   useEffect(()=>{void generate();},[generate]);
@@ -2064,14 +2330,17 @@ export default function DungeonForge(){
     return n;
   },[vpSize.w,vpSize.h,Wm,Hm,cfg.cellPx]);
   const rooms=dg?dg.rooms:[];const ents=dg?dg.entities:[];const decos=dg?dg.decoOverlay:[];
-  const fogOpenFloor=useMemo(()=>isOpenFloorLocation(cfg.locationType),[cfg.locationType]);
+  const effectiveLocType=dg?.locationType??cfg.locationType;
+  const fogOpenFloor=useMemo(()=>isOpenFloorLocation(effectiveLocType),[effectiveLocType]);
   const mapFogCells=useMemo(()=>{
     if(!isP||!dg||!revealed)return null;
     return computeVisibleCellsForPlayer(revealed,dg,doorOpen,null,{
       openFloor:fogOpenFloor,
-      maxFogHops:maxFogHopsForLocationType(cfg.locationType),
+      maxFogHops:maxFogHopsForLocationType(effectiveLocType),
+      locationType:effectiveLocType,
+      graveyardInteriorRevealed,
     });
-  },[isP,dg,revealed,doorOpen,fogOpenFloor,cfg.locationType]);
+  },[isP,dg,revealed,doorOpen,fogOpenFloor,effectiveLocType,graveyardInteriorRevealed]);
   useEffect(()=>{fogCellsForHoverRef.current=mapFogCells;},[mapFogCells]);
   useEffect(()=>{lastAppliedHoverSigRef.current="";},[dg]);
   const highlightRoom=useMemo(()=>{
@@ -2079,12 +2348,30 @@ export default function DungeonForge(){
     const rm=dg.rooms.find(r=>r.id===selRoom);
     return rm?{x:rm.x,y:rm.y,w:rm.w,h:rm.h}:null;
   },[selRoom,dg]);
+  const wanderMonsterSuggestion=useMemo(()=>{
+    const cr=getCR(cfg.level);
+    const pool=MONSTERS[cr]||MONSTERS[1];
+    const r=seededRNG((dg?.seed??cfg.seed)+90210);
+    return pick(pool,r);
+  },[dg?.seed,cfg.seed,cfg.level]);
+  const forgeSceneLights=useMemo(()=>{
+    if(!dg?.grid)return null;
+    const rng=seededRNG(cfg.seed+777);
+    const loc=cfg.locationType;
+    if(loc==="cave"&&dg.forgeLocationMeta?.caveBioluminescent)
+      return collectCaveBiolumSceneLights(dg.decoOverlay??[],48);
+    if(loc==="fey_forest"&&cfg.feyBioluminescent!==false)
+      return collectFeyForestWispLights(dg.grid,rng,8);
+    if(loc==="volcanic_lair") return collectVolcanicLavaGlowLights(dg.grid,14);
+    return null;
+  },[dg,cfg.locationType,cfg.feyBioluminescent,cfg.seed]);
   const revealableDoors=useMemo(()=>{
     if(!isP||!dg||!mapFogCells)return[];
     const result=[];
     for(let y=0;y<dg.height;y++){
       for(let x=0;x<dg.width;x++){
-        if(dg.grid[y][x]!==T.D)continue;
+        const tile=dg.grid[y][x];
+        if(tile!==T.D&&tile!==T.SECRET_DOOR&&tile!==T.GATE&&tile!==T.DRAWBRIDGE)continue;
         const k=`${x},${y}`;
         if(!mapFogCells.has(k))continue;
         const adj=dg.rooms.filter((r)=>x>=r.x-1&&x<=r.x+r.w&&y>=r.y-1&&y<=r.y+r.h);
@@ -2209,6 +2496,13 @@ export default function DungeonForge(){
     const hoveredNext=cell.extra&&cell.eType!=="deco"&&!isP?cell.extra:null;
     const ex=cell.extra;
     const nm=cell.eName??(ex&&typeof ex==="object"&&"name" in ex?ex.name:null);
+    let roomTip=null;
+    if(!isP&&(dg.locationType??cfg.locationType)==="dungeon"){
+      const rm=dg.rooms.find((r)=>gx>=r.x&&gx<r.x+r.w&&gy>=r.y&&gy<r.y+r.h);
+      if(rm?.description){
+        roomTip=`${rm.roomType?`[${rm.roomType}] `:""}${rm.description}`;
+      }
+    }
     let tip=null;
     if(nm||cell.eType==="deco"){
       const detail=ex&&typeof ex==="object"&&"cr" in ex&&ex.cr!=null?` (CR ${ex.cr})`:ex&&ex.dmg?` — ${ex.dmg}`:ex&&ex.r?` [${ex.r}]`:"";
@@ -2217,6 +2511,7 @@ export default function DungeonForge(){
         tip=`Lever — ${ex.purpose}`;
       }
     }
+    if(roomTip) tip=tip?`${roomTip} · ${tip}`:roomTip;
     const slug=hoveredNext&&typeof hoveredNext==="object"&&"slug" in hoveredNext?String(hoveredNext.slug??""):"";
     const fullSig=`${gx},${gy}|${tip??""}|${slug}`;
     if(fullSig===lastAppliedHoverSigRef.current)return;
@@ -2244,13 +2539,32 @@ export default function DungeonForge(){
         setForgeInspect({kind:"riddle",ent:cell.extra});
         return;
       }
+      const mk=["headstone","landmark","notice_board","npc","siege","banner","portcullis","stall"];
+      if(cell.eType==="dm_marker"&&cell.extra&&typeof cell.extra==="object"){
+        const tip=String(cell.extra.tooltip||"Travel / ambush marker.");
+        try{
+          if(typeof globalThis.confirm==="function"){
+            globalThis.confirm(`${tip}\n\nConsider running an ambush or travel encounter at this choke point?`);
+          }
+        }catch(_){/* noop */}
+        setForgeInspect({kind:"dm_marker",ent:cell.extra,gx,gy});
+        return;
+      }
+      if(mk.includes(String(cell.eType))&&cell.extra&&typeof cell.extra==="object"){
+        setForgeInspect({kind:"marker",eType:cell.eType,ent:cell.extra,gx,gy});
+        return;
+      }
       if(cell.eType==="deco"&&cell.extra&&cell.extra.decoKey==="lever_icon"){
         setForgeInspect({kind:"lever",deco:cell.extra,gx,gy});
         return;
       }
     }
     if(!isP&&cell.extra?.type==="monster"&&cell.extra.slug){setStatCard({slug:cell.extra.slug,view:"dm"});return;}
-    if(tile===T.D){
+    if(!isP&&cell.eType==="trap"&&cell.extra&&typeof cell.extra==="object"){
+      setForgeInspect({kind:"trap",ent:cell.extra,gx,gy});
+      return;
+    }
+    if(tile===T.D||tile===T.SECRET_DOOR||tile===T.GATE||tile===T.DRAWBRIDGE){
       if(!isP){
         setDoorOpen((prev)=>{const next=new Set(prev);if(next.has(key))next.delete(key);else next.add(key);return next;});
         return;
@@ -2298,6 +2612,8 @@ export default function DungeonForge(){
     const revealedCells=[...computeVisibleCellsForPlayer(mergedRevealed,dg,mergedDoorOpen,null,{
       openFloor:isOpenFloorLocation(locT),
       maxFogHops:maxFogHopsForLocationType(locT),
+      locationType:locT,
+      graveyardInteriorRevealed,
     })];
     const state={
       dungeonData:{
@@ -2311,6 +2627,9 @@ export default function DungeonForge(){
         locationType:dg.locationType??cfg.locationType,
         floor:dg.floor,
         glyphs:dg.glyphs,
+        forgeLocationMeta:dg.forgeLocationMeta??null,
+        forgeRenderOverlay:dg.forgeRenderOverlay??null,
+        forgeBiome:dg.forgeBiome??null,
       },
       revealed:[...mergedRevealed],
       revealedCells,
@@ -2319,7 +2638,7 @@ export default function DungeonForge(){
       fogColor:overrides.fogColor??"#000000",
     };
     broadcastPlayerMapState(state);
-  },[dg,revealed,doorOpen,selRoom,cfg.locationType]);
+  },[dg,revealed,doorOpen,selRoom,cfg.locationType,graveyardInteriorRevealed]);
   useEffect(()=>{
     if(cfg.autoSync&&dg)pushToPlayerScreen();
   },[cfg.autoSync,dg,pushToPlayerScreen]);
@@ -2331,6 +2650,8 @@ export default function DungeonForge(){
     const fogCells=!isDm?computeVisibleCellsForPlayer(revealed,dg,doorOpen,null,{
       openFloor:isOpenFloorLocation(locT2),
       maxFogHops:maxFogHopsForLocationType(locT2),
+      locationType:locT2,
+      graveyardInteriorRevealed,
     }):null;
     const cellPx=Math.max(cfg.exportCellPx??32,cfg.cellPx??18);
     const dpr=ink?1:2;
@@ -2338,7 +2659,7 @@ export default function DungeonForge(){
     const gridEx=buildRenderGrid(dg,fc);
     const mapCanvas=document.createElement("canvas");
     renderDungeonToCanvas(mapCanvas,gridEx,{
-      palette:LOCATION_PALETTE[dg.locationType]??DEFAULT_PALETTE,
+      palette:forgePaletteForDungeon(dg),
       entities:ENTITY_PALETTE,
       cellPx,
       dpr,
@@ -2348,6 +2669,9 @@ export default function DungeonForge(){
       playerSanitize:!isDm,
       hideDecoKeys:PLAYER_PRINT_HIDE_DECO_KEYS,
       inkSaver:ink,
+      forgeDmHints:isDm?dg.forgeDmHints??null:null,
+      dungeonLighting:isDm&&(dg.locationType??cfg.locationType)==="dungeon"?(cfg.dungeonLighting??dg.dungeonLighting??"lit"):undefined,
+      graveyardAmbience:isDm&&(dg.locationType??cfg.locationType)==="graveyard"?{timeOfDay:cfg.graveyardTime??dg.graveyardTime??"day",weather:cfg.graveyardWeather??dg.graveyardWeather??"clear"}:undefined,
     });
     let out=mapCanvas;
     if(isDm){
@@ -2443,6 +2767,101 @@ export default function DungeonForge(){
             {Object.entries(LOCATIONS).map(([k,v])=><option key={k} value={k}>{v.name}</option>)}
           </select>
           {LOCATION_DESCRIPTIONS[cfg.locationType]&&<div style={{fontSize:11,color:S.dimText,fontStyle:"italic",lineHeight:1.35}}>{LOCATION_DESCRIPTIONS[cfg.locationType]}</div>}
+          {cfg.locationType==="road"&&(
+            <>
+              <LB S={S}>WILDERNESS ROAD</LB>
+              <select value={cfg.roadVariant??"dirt_trail"} onChange={e=>u("roadVariant",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+                <option value="dirt_trail">Dirt Trail — 1 wide, winding, brush</option>
+                <option value="kings_highway">King&apos;s Highway — 2 wide, posts/inns</option>
+                <option value="mountain_pass">Mountain Pass — cliffs, switchbacks</option>
+              </select>
+              <select value={cfg.wildernessWeather??"clear"} onChange={e=>u("wildernessWeather",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginTop:4}}>
+                <option value="clear">Weather: Clear</option>
+                <option value="rain">Rain (ranged dis. in storm)</option>
+                <option value="storm">Storm + lightning hazard</option>
+              </select>
+              {dg?.forgeBiome?.road&&(
+                <div style={{fontSize:10,color:S.dimText,lineHeight:1.45,marginTop:4}}>
+                  <div><b>Travel (PHB p.181):</b> {dg.forgeBiome.road.travelFeet} ft along road (~{dg.forgeBiome.road.travelTiles} tiles)</div>
+                  <div>Normal pace ~{dg.forgeBiome.road.paceHours.normal} h · Fast ~{dg.forgeBiome.road.paceHours.fast} h · Slow ~{dg.forgeBiome.road.paceHours.slow} h (+5 passive Perception)</div>
+                  {dg.forgeBiome.road.riverCrossing&&<div>Crossing: <b>{dg.forgeBiome.road.riverCrossing.kind}</b> — {dg.forgeBiome.road.riverCrossing.note}</div>}
+                  <div>Colored encounter zones + ambush markers (👁) on DM layer.</div>
+                </div>
+              )}
+            </>
+          )}
+          {cfg.locationType==="volcanic_lair"&&(
+            <>
+              <LB S={S}>VOLCANIC LAIR</LB>
+              <select value={cfg.volcanicActivity??"dormant"} onChange={e=>u("volcanicActivity",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+                <option value="dormant">Volcanic activity: Dormant</option>
+                <option value="active">Active (tremors: d6/2 rnds)</option>
+                <option value="erupting">Erupting (blocked corridors)</option>
+              </select>
+              <NI l="Eruption timer (rnds)" v={cfg.eruptionRounds??15} mn={5} mx={40} S={S} set={v=>u("eruptionRounds",v)}/>
+              {dg?.forgeBiome?.volcanic&&(
+                <div style={{fontSize:10,color:S.dimText,lineHeight:1.45,marginTop:4}}>
+                  <div>{dg.forgeBiome.volcanic.heatRule}</div>
+                  <div>Lava channel cells carved: {dg.forgeBiome.volcanic.lavaRiverCells} · Geysers: {dg.forgeBiome.volcanic.geysers?.length ?? 0}</div>
+                </div>
+              )}
+            </>
+          )}
+          {cfg.locationType==="fey_forest"&&(
+            <>
+              <LB S={S}>FEY FOREST</LB>
+              <Tg l="Bioluminescent mood" on={cfg.feyBioluminescent!==false} S={S} f={()=>u("feyBioluminescent",!cfg.feyBioluminescent)}/>
+              <Tg l="Shifting paths (long rest)" on={!!cfg.feyShiftingPaths} S={S} f={()=>u("feyShiftingPaths",!cfg.feyShiftingPaths)}/>
+              <Tg l="Disorient player TV (90°)" on={!!cfg.feyPlayerDisorient} S={S} f={()=>u("feyPlayerDisorient",!cfg.feyPlayerDisorient)}/>
+              {dg?.forgeBiome?.fey?.shiftingPathsNote&&<div style={{fontSize:10,color:S.dimText,lineHeight:1.4,marginTop:4}}>{dg.forgeBiome.fey.shiftingPathsNote}</div>}
+            </>
+          )}
+          {(cfg.locationType==="cave"||cfg.locationType==="volcanic_lair")&&(
+            <>
+              <LB S={S}>CAVE VARIANT</LB>
+              <select value={cfg.caveVariant??"auto"} onChange={e=>u("caveVariant",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+                <option value="auto">Auto (weighted random)</option>
+                <option value="natural">Natural cave</option>
+                <option value="goblin">Goblin lair</option>
+                <option value="kobold">Kobold warren</option>
+                <option value="dragon">Dragon lair</option>
+              </select>
+              <div style={{fontSize:10,color:S.dimText,lineHeight:1.35,marginTop:4}}>Furniture and DM notes follow the variant. Fey forest stays natural.</div>
+            </>
+          )}
+          {cfg.locationType==="cave"&&(
+            <>
+              <LB S={S}>CAVE LIGHTING</LB>
+              <select value={cfg.caveBioluminescentMode??"auto"} onChange={e=>u("caveBioluminescentMode",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+                <option value="auto">Bioluminescent — Auto (~35%)</option>
+                <option value="on">Bioluminescent — On (teal palette + moss lights)</option>
+                <option value="off">Bioluminescent — Off</option>
+              </select>
+            </>
+          )}
+          {cfg.locationType==="temple"&&(
+            <>
+              <LB S={S}>TEMPLE</LB>
+              <select value={cfg.templeDeity??"auto"} onChange={e=>u("templeDeity",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
+                <option value="auto">Deity — Auto (random)</option>
+                <option value="Sun">Sun</option>
+                <option value="Moon">Moon</option>
+                <option value="War">War</option>
+                <option value="Death">Death</option>
+                <option value="Nature">Nature</option>
+                <option value="Knowledge">Knowledge</option>
+                <option value="Trickery">Trickery</option>
+                <option value="Life">Life</option>
+              </select>
+              <select value={cfg.templeCondition??"auto"} onChange={e=>u("templeCondition",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+                <option value="auto">Condition — Auto</option>
+                <option value="active">Active (maintained)</option>
+                <option value="abandoned">Abandoned</option>
+                <option value="desecrated">Desecrated</option>
+              </select>
+              <div style={{fontSize:10,color:S.dimText,lineHeight:1.35,marginTop:4}}>Abandoned / desecrated shift the tile palette on the DM map.</div>
+            </>
+          )}
           <LB S={S}>CONFIG</LB>
           <NI l={ROOM_LABEL[cfg.locationType]??"Rooms"} v={cfg.roomCount} mn={3} mx={22} S={S} set={v=>u("roomCount",v)}/>
           <NI l="Floors" v={cfg.depth} mn={1} mx={10} S={S} set={v=>u("depth",v)}/>
@@ -2453,6 +2872,60 @@ export default function DungeonForge(){
           <Tg l="Monsters" on={cfg.monstersOn} S={S} f={()=>u("monstersOn",!cfg.monstersOn)}/>
           <Tg l="Traps" on={cfg.trapsOn} S={S} f={()=>u("trapsOn",!cfg.trapsOn)}/>
           <Tg l="Items" on={cfg.itemsOn} S={S} f={()=>u("itemsOn",!cfg.itemsOn)}/>
+          {cfg.locationType==="dungeon"&&(
+            <>
+              <LB S={S}>DUNGEON LIGHTING</LB>
+              <select value={cfg.dungeonLighting??"lit"} onChange={e=>u("dungeonLighting",e.target.value)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+                <option value="lit">Lit (sconces)</option>
+                <option value="dim">Dim</option>
+                <option value="dark">Dark (no sconces)</option>
+              </select>
+              <div style={{fontSize:10,color:S.dimText,lineHeight:1.35}}>Dim/dark darken the DM map overlay; dark skips auto wall lights.</div>
+              <LB S={S}>WANDER CHECK (MIN)</LB>
+              <select value={String(cfg.dungeonWanderMin??10)} onChange={e=>u("dungeonWanderMin",parseInt(e.target.value,10)||10)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+                <option value="5">Every 5 min (timer)</option>
+                <option value="10">Every 10 min</option>
+                <option value="15">Every 15 min</option>
+              </select>
+            </>
+          )}
+          {cfg.locationType==="graveyard"&&(
+            <>
+              <LB S={S}>GRAVEYARD TIME / WEATHER</LB>
+              <select value={cfg.graveyardTime??"day"} onChange={e=>u("graveyardTime",e.target.value)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
+                <option value="day">Day</option>
+                <option value="dusk">Dusk (−5 ft vision, Perception dis.)</option>
+                <option value="night">Night (darkness overlay)</option>
+              </select>
+              <select value={cfg.graveyardWeather??"clear"} onChange={e=>u("graveyardWeather",e.target.value)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+                <option value="clear">Clear</option>
+                <option value="rain">Rain (CON DC 10 / hr)</option>
+                <option value="heavy_rain">Heavy rain (difficult terrain note)</option>
+              </select>
+              {isP&&dg?.rooms?.length?(
+                <button type="button" onClick={()=>setGraveyardInteriorRevealed(new Set(dg.rooms.map((r)=>r.id)))} style={{marginTop:6,padding:"4px 6px",fontSize:11,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>Reveal all mausoleum interiors (player fog)</button>
+              ):null}
+            </>
+          )}
+          {cfg.locationType==="town"&&(
+            <>
+              <LB S={S}>TOWN OPTIONS</LB>
+              <Tg l="Market Day" on={!!cfg.townMarketDay} S={S} f={()=>u("townMarketDay",!cfg.townMarketDay)}/>
+              <Tg l="Fortified perimeter" on={!!cfg.townFortified} S={S} f={()=>u("townFortified",!cfg.townFortified)}/>
+              <Tg l="Chase road ft" on={!!cfg.townChaseMode} S={S} f={()=>u("townChaseMode",!cfg.townChaseMode)}/>
+              {cfg.townChaseMode&&!isP&&dg&&(
+                <>
+                  <LB S={S}>CHASE (DM)</LB>
+                  <div style={{fontSize:10,color:S.dimText,lineHeight:1.35,marginBottom:6}}>1 tile ≈ 5 ft. Advance when everyone has acted.</div>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:6}}>
+                    <span style={{fontSize:12,color:S.textColor}}>Round <b>{chaseRound}</b></span>
+                    <button type="button" onClick={()=>setChaseRound((r)=>r+1)} style={{padding:"4px 10px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Next round</button>
+                  </div>
+                  <div style={{fontSize:10,color:S.dimText,lineHeight:1.35}}>{CHASE_ROUND_HINTS[chaseRound%CHASE_ROUND_HINTS.length]}</div>
+                </>
+              )}
+            </>
+          )}
           <LB S={S}>MAP ZOOM</LB>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             <button type="button" className="btn-secondary" style={{padding:"4px 10px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",minHeight:0}}
@@ -2474,12 +2947,15 @@ export default function DungeonForge(){
           <LB S={S}>ASCII COPY</LB>
           <div style={{fontSize:11,color:S.dimText,lineHeight:1.35}}>Plain text grid (same topology as the map).</div>
           <button type="button" onClick={()=>{const u=new URL(window.location.href);u.searchParams.set("seed",String(cfg.seed));u.searchParams.set("loc",cfg.locationType);u.searchParams.set("level",String(cfg.level));void navigator.clipboard.writeText(u.toString());}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>COPY SHARE URL</button>
-          <button type="button" disabled={!dg||!asciiExport?.text} onClick={()=>{if(!dg||!asciiExport)return;const cellPx=Math.max(24,cfg.exportCellPx??32);const gridDm=buildRenderGrid(dg,{...cfg,showThemes:!!cfg.showThemes});const dmEl=document.createElement("canvas");renderDungeonToCanvas(dmEl,gridDm,{palette:LOCATION_PALETTE[dg.locationType]??DEFAULT_PALETTE,entities:ENTITY_PALETTE,cellPx,dpr:2,showEnts:true,playerSanitize:false,inkSaver:false});const dm=dmEl.toDataURL("image/png");const lines=dg.rooms.map(r=>`Room ${r.id}: ${r.isSecretRoom?"[SECRET] ":""}${r.namedRoom||r.label||r.type} (depth ${r.depth??"?"}, theme ${r.theme||"?"})`);openForgePrintPacket({title:`${dg.mapName||"Forge"} seed ${cfg.seed}`,asciiText:asciiExport.text,dmMapDataUrl:dm,roomLines:lines});}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PRINT DM PACKET</button>
+          <button type="button" disabled={!dg||!asciiExport?.text} onClick={()=>{if(!dg||!asciiExport)return;const cellPx=Math.max(24,cfg.exportCellPx??32);const gridDm=buildRenderGrid(dg,{...cfg,showThemes:!!cfg.showThemes});const dmEl=document.createElement("canvas");const locP=dg.locationType??cfg.locationType;renderDungeonToCanvas(dmEl,gridDm,{palette:forgePaletteForDungeon(dg),entities:ENTITY_PALETTE,cellPx,dpr:2,showEnts:true,playerSanitize:false,inkSaver:false,forgeDmHints:dg.forgeDmHints??null,dungeonLighting:cfg.dungeonLighting??dg.dungeonLighting??"lit",graveyardAmbience:locP==="graveyard"?{timeOfDay:cfg.graveyardTime??dg.graveyardTime??"day",weather:cfg.graveyardWeather??dg.graveyardWeather??"clear"}:undefined});const dm=dmEl.toDataURL("image/png");const lines=dg.rooms.map(r=>{const rt=r.roomType?` [${r.roomType}]`:"";const desc=r.description?` — ${r.description}`:"";return`Room ${r.id}:${rt} ${r.isSecretRoom?"[SECRET] ":""}${r.namedRoom||r.label||r.type} (depth ${r.depth??"?"}, theme ${r.theme||"?"})${desc}`;});const safe=(t)=>String(t??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");const structureTableHtml=locP==="graveyard"?`<table border="1" cellpadding="4" style="border-collapse:collapse;font-size:10pt;margin-top:8px"><thead><tr><th>#</th><th>Dimensions</th><th>Contains</th><th>Notes</th></tr></thead><tbody>${dg.rooms.map((r)=>`<tr><td>${r.id}</td><td>${r.w}×${r.h}</td><td>${safe(r.containsSummary)}</td><td>${safe(r.dmNotes)}</td></tr>`).join("")}</tbody></table>`:null;openForgePrintPacket({title:`${dg.mapName||"Forge"} seed ${cfg.seed}`,asciiText:asciiExport.text,dmMapDataUrl:dm,roomLines:lines,structureTableHtml});}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PRINT DM PACKET</button>
           <LB S={S}>SEED</LB>
           <div style={{display:"flex",gap:2}}>
-            <input type="number" value={cfg.seed} onChange={e=>u("seed",parseInt(e.target.value)||0)} style={{flex:1,padding:"2px 3px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:30}}/>
+            <input type="number" value={cfg.seed} onChange={e=>u("seed",parseInt(e.target.value,10)||0)} style={{flex:1,padding:"2px 3px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:30}}/>
             <button onClick={()=>u("seed",Math.floor(Math.random()*999999))} style={{padding:"2px 5px",fontSize:14,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>RNG</button>
           </div>
+          {cfg.seed===0 ? (
+            <div style={{fontSize:10,color:"#d9a036",lineHeight:1.35}}>Seed 0 is not valid — using seed 1 instead.</div>
+          ) : null}
           <button onClick={()=>u("seed",Math.floor(Math.random()*999999))} style={{marginTop:3,padding:"6px 0",fontSize:16,fontWeight:"bold",fontFamily:"'Courier New',monospace",letterSpacing:2,background:S.inputBg,color:S.btnFg,border:`1px solid ${S.btnBorder}`,borderRadius:2,cursor:"pointer"}}>NEW MAP [Ctrl+G]</button>
           <button onClick={()=>void generate()} style={{marginTop:3,padding:"6px 0",fontSize:16,fontWeight:"bold",fontFamily:"'Courier New',monospace",letterSpacing:2,background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>RE-RUN</button>
           <LB S={S}>VIEW</LB>
@@ -2560,7 +3036,7 @@ export default function DungeonForge(){
           <button type="button" onClick={()=>pushToPlayerScreen({revealed:[...revealed],doorOpen:[...doorOpen],selectedRoomId:selRoom})} disabled={!dg} style={{padding:"6px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PUSH WITH FOG STATE</button>
           <Tg l="Auto-sync fog on change" on={!!cfg.autoSync} S={S} f={()=>u("autoSync",!cfg.autoSync)}/>
           {floors.length>1&&<><LB S={S}>FLOOR</LB><div style={{display:"flex",gap:2,flexWrap:"wrap"}}>
-            {floors.map((_,i)=>(<button key={i} onClick={()=>{setCurFloor(i+1);setDg(floors[i]);setSelRoom(null);setTvRoom(null);setForgeInspect(null);setDoorOpen(new Set());}} style={{padding:"1px 5px",fontSize:14,fontFamily:"'Courier New',monospace",background:curFloor===i+1?"rgba(255,255,255,0.08)":"transparent",color:curFloor===i+1?S.accent:S.dimText,border:`1px solid ${curFloor===i+1?S.accent:S.panelBorder}`,borderRadius:2,cursor:"pointer"}}>{i+1}</button>))}
+            {floors.map((_,i)=>(<button key={i} onClick={()=>{setCurFloor(i+1);setDg(floors[i]);setSelRoom(null);setTvRoom(null);setForgeInspect(null);setDoorOpen(new Set());setTrapTriggeredKeys(new Set());}} style={{padding:"1px 5px",fontSize:14,fontFamily:"'Courier New',monospace",background:curFloor===i+1?"rgba(255,255,255,0.08)":"transparent",color:curFloor===i+1?S.accent:S.dimText,border:`1px solid ${curFloor===i+1?S.accent:S.panelBorder}`,borderRadius:2,cursor:"pointer"}}>{i+1}</button>))}
           </div></>}
           <div style={{marginTop:1}}><button onClick={()=>setLegend(!legend)} style={{background:"none",border:"none",cursor:"pointer",padding:0,color:S.dimText,fontSize:14,fontFamily:"'Courier New',monospace"}}>{legend?"[-]":"[+]"} LEGEND</button>
             {legend&&<div style={{marginTop:2,fontSize:14,lineHeight:1.7,color:S.textColor}}>
@@ -2618,11 +3094,25 @@ export default function DungeonForge(){
                       willChange:"transform",
                     }}
                   >
-                    <div style={{position:"relative",display:"inline-block",verticalAlign:"top"}}>
+                    <div style={{position:"relative",display:"inline-block",verticalAlign:"top",filter:cfg.locationType==="fey_forest"&&cfg.feyBioluminescent!==false?"saturate(1.1) brightness(1.04)":undefined}}>
+                      {cfg.locationType==="road"&&(cfg.wildernessWeather==="rain"||cfg.wildernessWeather==="storm")&&(
+                        <div
+                          style={{
+                            position:"absolute",
+                            inset:0,
+                            pointerEvents:"none",
+                            zIndex:2,
+                            opacity:cfg.wildernessWeather==="storm"?0.32:0.2,
+                            background:"repeating-linear-gradient(-14deg,transparent,transparent 5px,rgba(200,220,255,0.14) 5px,rgba(200,220,255,0.14) 7px)",
+                          }}
+                          aria-hidden
+                        />
+                      )}
+                      <div style={{display:"inline-block",transform:isP&&cfg.feyPlayerDisorient&&cfg.locationType==="fey_forest"?"rotate(90deg)":undefined,transformOrigin:"center center"}}>
                       <DungeonMapCanvas
                         grid={rg}
                         cellPx={cs}
-                        palette={LOCATION_PALETTE[dg.locationType]??DEFAULT_PALETTE}
+                        palette={forgePaletteForDungeon(dg)}
                         entities={ENTITY_PALETTE}
                         fogCells={mapFogCells}
                         doorOpen={doorOpen}
@@ -2630,6 +3120,10 @@ export default function DungeonForge(){
                         playerSanitize={false}
                         highlightRoom={highlightRoom}
                         animPhase={animPhase}
+                        sceneLights={forgeSceneLights}
+                        forgeDmHints={!isP?dg.forgeDmHints??undefined:undefined}
+                        dungeonLighting={!isP&&(cfg.locationType==="dungeon"||dg.locationType==="dungeon")?(cfg.dungeonLighting??dg.dungeonLighting??"lit"):undefined}
+                        graveyardAmbience={!isP&&(cfg.locationType==="graveyard"||dg.locationType==="graveyard")?{timeOfDay:cfg.graveyardTime??dg.graveyardTime??"day",weather:cfg.graveyardWeather??dg.graveyardWeather??"clear"}:undefined}
                         onCellClick={handleMapCellClick}
                       />
                       {isP&&revealableDoors.map(({x,y})=>(
@@ -2650,6 +3144,7 @@ export default function DungeonForge(){
                           }}
                         />
                       ))}
+                      </div>
                     </div>
                   </div>
                   {mapHoverTip&&(
@@ -2707,6 +3202,47 @@ export default function DungeonForge(){
                       </button>
                     ))}
                   </div>
+                  {!isP&&cfg.locationType==="dungeon"&&wanderDue&&(
+                    <div
+                      style={{
+                        animation:"forge-pulse 1.4s ease-in-out infinite",
+                        background:"rgba(180,80,20,0.22)",
+                        border:`1px solid ${S.accentAlt}`,
+                        borderRadius:4,
+                        padding:"6px 8px",
+                        fontSize:10,
+                        color:S.textColor,
+                        maxWidth:220,
+                        lineHeight:1.35,
+                        textAlign:"left",
+                      }}
+                    >
+                      <div style={{fontWeight:"bold",color:S.accentAlt,marginBottom:4}}>Wandering monster check</div>
+                      Roll d20 — on 17+, a wandering encounter approaches!
+                      <div style={{marginTop:6,color:S.dimText,fontSize:9}}>Suggestion (CR ~{getCR(cfg.level)}): {wanderMonsterSuggestion}</div>
+                      <button
+                        type="button"
+                        onClick={()=>{
+                          wanderTimerRef.current=Date.now();
+                          setWanderDue(false);
+                        }}
+                        style={{
+                          marginTop:8,
+                          padding:"3px 8px",
+                          fontSize:10,
+                          fontFamily:"'Courier New',monospace",
+                          background:S.inputBg,
+                          color:S.accent,
+                          border:`1px solid ${S.inputBorder}`,
+                          borderRadius:2,
+                          cursor:"pointer",
+                          width:"100%",
+                        }}
+                      >
+                        Dismiss / reset timer
+                      </button>
+                    </div>
+                  )}
                   <button
                     type="button"
                     onClick={()=>{setZoom(1);setPan({x:0,y:0});}}
@@ -2746,6 +3282,12 @@ export default function DungeonForge(){
               boxSizing:"border-box",
             }}
           >
+            {!isP&&dg?.forgeLocationMeta?.dmPanels?.length?(
+              <div style={{marginBottom:8,padding:"6px 8px",border:`1px solid ${S.panelBorder}`,borderRadius:2,background:"rgba(0,0,0,0.12)"}}>
+                <div style={{fontSize:10,fontWeight:"bold",color:S.accent,marginBottom:4}}>Location (DM)</div>
+                {dg.forgeLocationMeta.dmPanels.map((ln,i)=>(<div key={i} style={{fontSize:10,color:S.dimText,marginBottom:3,lineHeight:1.35}}>{ln}</div>))}
+              </div>
+            ):null}
             {!coarsePointer&&hovered&&<div style={{position:"sticky",top:0,zIndex:5,marginBottom:6,background:S.panelBg,padding:"5px 10px",border:`1px solid ${S.panelBorder}`,borderRadius:2,whiteSpace: hovered.type==="riddle"?"normal":"nowrap"}}>
               {hovered.type==="monster"&&<><b style={{color:S.monsterFg}}>{hovered.name}</b> x{hovered.count} (CR {hovered.cr})</>}
               {hovered.type==="trap"&&<><b style={{color:S.trapFg}}>{hovered.name}</b> — {hovered.dmg}</>}
@@ -2764,6 +3306,19 @@ export default function DungeonForge(){
                   <button type="button" onClick={()=>setSelRoom(null)} style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>✕ Clear</button>
                   {!isP&&<button type="button" onClick={()=>setRevealed(new Set([rm.id]))} style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Set as Start Room</button>}
                   <button type="button" onClick={()=>setTvRoom(rm.id)} style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>📺 TV</button>
+                  {!isP&&(cfg.locationType==="town"||cfg.locationType==="castle")&&(
+                    <button
+                      type="button"
+                      onClick={()=>{
+                        const arch=String(rm.buildingArchetype||rm.castleArchetype||rm.label||rm.type||"residence");
+                        const seed=(Math.max(1,cfg.seed||1))*10007+rm.id;
+                        setInteriorModal({snap:generateBuildingInteriorSnapshot(arch,seed)});
+                      }}
+                      style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}
+                    >
+                      Interior map
+                    </button>
+                  )}
                 </div>
                 {!isP&&rm.stairDownTo&&<div style={{fontSize:12,color:S.dimText,marginBottom:2}}>▼ Stair down → Floor {rm.stairDownTo}</div>}
                 {!isP&&rm.stairUpTo&&<div style={{fontSize:12,color:S.dimText,marginBottom:2}}>▲ Stair up → Floor {rm.stairUpTo}</div>}
@@ -2970,6 +3525,65 @@ export default function DungeonForge(){
                 {forgeInspect.deco.doorGx!=null&&<div style={{fontSize:10,color:S.dimText,marginTop:10}}>Door cell ({forgeInspect.deco.doorGx},{forgeInspect.deco.doorGy}) · lever ({forgeInspect.gx},{forgeInspect.gy})</div>}
               </>
             )}
+            {forgeInspect.kind==="trap"&&forgeInspect.ent&&(
+              <>
+                <div style={{fontSize:12,color:S.trapFg,marginBottom:8}}>Trap (DM)</div>
+                <div style={{fontSize:15,color:S.textColor,fontWeight:"bold"}}>{forgeInspect.ent.name}</div>
+                <div style={{fontSize:11,color:S.dimText,marginTop:10,lineHeight:1.45}}>
+                  Spot DC {forgeInspect.ent.detectDC ?? "—"}
+                  {forgeInspect.ent.saveType ? ` · ${forgeInspect.ent.saveType} save DC ${forgeInspect.ent.saveDC}` : ""}
+                  {forgeInspect.ent.dmg ? ` · ${forgeInspect.ent.dmg}` : ""}
+                  {forgeInspect.ent.effect ? <><br />{forgeInspect.ent.effect}</> : null}
+                </div>
+                <label style={{display:"flex",alignItems:"center",gap:8,marginTop:14,fontSize:12,color:S.textColor,cursor:"pointer"}}>
+                  <input
+                    type="checkbox"
+                    checked={(()=>{
+                      const k=`${forgeInspect.gx},${forgeInspect.gy}|${forgeInspect.ent.name}`;
+                      return trapTriggeredKeys.has(k)||!!forgeInspect.ent.triggered;
+                    })()}
+                    onChange={()=>{
+                      const k=`${forgeInspect.gx},${forgeInspect.gy}|${forgeInspect.ent.name}`;
+                      setTrapTriggeredKeys((prev)=>{
+                        const n=new Set(prev);
+                        if(n.has(k))n.delete(k);else n.add(k);
+                        return n;
+                      });
+                    }}
+                  />
+                  Triggered?
+                </label>
+              </>
+            )}
+            {forgeInspect.kind==="dm_marker"&&forgeInspect.ent&&(
+              <>
+                <div style={{fontSize:12,color:S.accent,marginBottom:8}}>Road / ambush marker (DM)</div>
+                <div style={{fontSize:15,color:S.textColor,fontWeight:"bold"}}>{forgeInspect.ent.name||"Marker"}</div>
+                {forgeInspect.ent.tooltip&&(
+                  <p style={{fontSize:12,color:S.textColor,marginTop:10,lineHeight:1.45}}>{forgeInspect.ent.tooltip}</p>
+                )}
+                <div style={{fontSize:10,color:S.dimText,marginTop:10}}>Cell ({forgeInspect.gx},{forgeInspect.gy})</div>
+              </>
+            )}
+            {forgeInspect.kind==="marker"&&forgeInspect.ent&&(
+              <>
+                <div style={{fontSize:12,color:S.accent,marginBottom:8}}>{String(forgeInspect.eType||"marker").replace(/_/g," ")} (DM)</div>
+                <div style={{fontSize:15,color:S.textColor,fontWeight:"bold"}}>{forgeInspect.ent.name}</div>
+                {forgeInspect.ent.inscription&&<p style={{fontSize:12,color:S.textColor,marginTop:10,lineHeight:1.45}}>{forgeInspect.ent.inscription}</p>}
+                {forgeInspect.ent.coverNote&&<p style={{fontSize:11,color:S.dimText,marginTop:8}}>{forgeInspect.ent.coverNote}</p>}
+                {forgeInspect.ent.flavor&&<p style={{fontSize:12,color:S.textColor,marginTop:10,lineHeight:1.45}}>{forgeInspect.ent.flavor}</p>}
+                {forgeInspect.ent.hook&&<p style={{fontSize:12,color:S.accentAlt,marginTop:8,fontStyle:"italic"}}>{forgeInspect.ent.hook}</p>}
+                {forgeInspect.ent.heraldry&&<p style={{fontSize:11,color:S.dimText,marginTop:8}}>Heraldry: {forgeInspect.ent.heraldry}</p>}
+                {forgeInspect.ent.stats&&<p style={{fontSize:11,color:S.dimText,marginTop:8}}>{forgeInspect.ent.stats}</p>}
+                {forgeInspect.ent.note&&<p style={{fontSize:11,color:S.dimText,marginTop:8}}>{forgeInspect.ent.note}</p>}
+                {forgeInspect.ent.quests&&Array.isArray(forgeInspect.ent.quests)&&(
+                  <ul style={{margin:"10px 0 0",paddingLeft:18,fontSize:12,color:S.textColor,lineHeight:1.45}}>
+                    {forgeInspect.ent.quests.map((q,i)=>(<li key={i}>{q}</li>))}
+                  </ul>
+                )}
+                {forgeInspect.ent.doorInscription&&<p style={{fontSize:11,color:S.accentAlt,marginTop:8}}>{forgeInspect.ent.doorInscription}</p>}
+              </>
+            )}
             <button
               type="button"
               onClick={()=>setForgeInspect(null)}
@@ -2977,6 +3591,29 @@ export default function DungeonForge(){
             >
               Close
             </button>
+          </div>
+        </div>
+      )}
+      {interiorModal?.snap&&(
+        <div
+          role="presentation"
+          style={{position:"fixed",inset:0,zIndex:195,background:"rgba(0,0,0,0.6)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
+          onClick={()=>setInteriorModal(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{maxWidth:520,width:"100%",background:S.panelBg,border:`1px solid ${S.panelBorder}`,padding:14,borderRadius:4,boxSizing:"border-box"}}
+            onClick={(ev)=>ev.stopPropagation()}
+          >
+            <div style={{fontSize:11,color:S.accent,marginBottom:6}}>Building interior (TN-010)</div>
+            <div style={{fontSize:14,fontWeight:"bold",color:S.textColor,marginBottom:8}}>{interiorModal.snap.title}</div>
+            <canvas ref={interiorCanvasRef} style={{display:"block",width:"100%",maxHeight:"min(52vh,420px)",imageRendering:"pixelated",border:`1px solid ${S.panelBorder}`,borderRadius:2}}/>
+            <ul style={{margin:"10px 0 0",paddingLeft:18,fontSize:11,color:S.dimText,lineHeight:1.45}}>
+              {interiorModal.snap.featureLines.map((ln,i)=>(<li key={i}>{ln}</li>))}
+            </ul>
+            <div style={{fontSize:10,color:S.dimText,marginTop:8,lineHeight:1.35}}>Not to scale with the street map — procedural ground-floor sketch for theater-of-the-mind or TV.</div>
+            <button type="button" onClick={()=>setInteriorModal(null)} style={{marginTop:12,padding:"6px 14px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.textColor,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Close</button>
           </div>
         </div>
       )}

@@ -20,6 +20,8 @@ export type GrantPickSpec =
   | {
       kind: "spells";
       pickCount: number;
+      /** Inclusive lower bound (0 = cantrips). Defaults to 0 when omitted. */
+      minSpellLevel?: number;
       maxSpellLevel: number;
       spellList: "any" | "wizard";
       allowCantrips: boolean;

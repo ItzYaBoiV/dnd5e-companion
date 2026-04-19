@@ -142,6 +142,8 @@ export interface SpellSlot {
   level:       number;
   total:       number;
   used:        number;
+  /** Long-rest multiclass / class table vs Warlock pact magic (short rest). */
+  source?:     "spellcasting" | "pact";
 }
 
 export interface CharacterSpell {

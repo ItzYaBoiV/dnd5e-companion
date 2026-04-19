@@ -5,65 +5,77 @@ type ClassRow = {
   toolProficiencies: string[];
 };
 
-type ProficiencySet = {
+export type ProficiencySet = {
   weapons: string[];
   armor: string[];
   tools: string[];
+  /** PHB p.164 multiclass-entry skill grants (descriptive; actual picks live in skillProficiencies). */
+  skills: string[];
 };
 
 const ENTRY_BY_CLASS: Record<string, ProficiencySet> = {
   barbarian: {
-    armor: ["light armor", "medium armor", "shields"],
+    armor: ["shields"],
     weapons: ["simple weapons", "martial weapons"],
     tools: [],
+    skills: [],
   },
   bard: {
     armor: ["light armor"],
     weapons: [],
     tools: ["musical instruments"],
+    skills: ["one skill of your choice"],
   },
   cleric: {
     armor: ["light armor", "medium armor", "shields"],
     weapons: [],
     tools: [],
+    skills: [],
   },
   druid: {
     armor: ["light armor", "medium armor", "shields"],
     weapons: [],
     tools: [],
+    skills: [],
   },
   fighter: {
-    armor: ["light armor", "medium armor", "shields"],
+    armor: ["light armor", "medium armor", "heavy armor", "shields"],
     weapons: ["simple weapons", "martial weapons"],
     tools: [],
+    skills: [],
   },
   monk: {
     armor: [],
     weapons: ["simple weapons", "shortsword"],
     tools: [],
+    skills: [],
   },
   paladin: {
     armor: ["light armor", "medium armor", "shields"],
     weapons: ["simple weapons", "martial weapons"],
     tools: [],
+    skills: [],
   },
   ranger: {
     armor: ["light armor", "medium armor", "shields"],
     weapons: ["simple weapons", "martial weapons"],
     tools: [],
+    skills: [],
   },
   rogue: {
     armor: ["light armor"],
     weapons: [],
     tools: ["thieves' tools"],
+    skills: ["one skill from the Rogue skill list"],
   },
-  sorcerer: { armor: [], weapons: [], tools: [] },
+  sorcerer: { armor: [], weapons: [], tools: [], skills: [] },
   warlock: {
     armor: ["light armor"],
     weapons: ["simple weapons"],
     tools: [],
+    skills: [],
   },
-  wizard: { armor: [], weapons: [], tools: [] },
+  wizard: { armor: [], weapons: [], tools: [], skills: [] },
 };
 
 function uniq(values: string[]): string[] {
@@ -83,7 +95,7 @@ function uniq(values: string[]): string[] {
 /**
  * PHB p.164 multiclass proficiencies:
  * - First class row keeps full class proficiencies (seeded Open5e strings).
- * - Additional class rows add only multiclass-entry armor/weapon/tool proficiencies.
+ * - Additional class rows add only multiclass-entry armor/weapon/tool/skill proficiencies.
  */
 export function computeCreateProficienciesFromClasses(
   slices: ClassSlice[],
@@ -94,6 +106,7 @@ export function computeCreateProficienciesFromClasses(
   const weapons: string[] = [];
   const armor: string[] = [];
   const tools: string[] = [];
+  const skills: string[] = [];
 
   for (const row of ordered) {
     const slug = row.classSlug?.trim();
@@ -111,6 +124,7 @@ export function computeCreateProficienciesFromClasses(
         weapons.push(...entry.weapons);
         armor.push(...entry.armor);
         tools.push(...entry.tools);
+        skills.push(...entry.skills);
       }
     }
     seen.add(slug);
@@ -120,5 +134,6 @@ export function computeCreateProficienciesFromClasses(
     weapons: uniq(weapons),
     armor: uniq(armor),
     tools: uniq(tools),
+    skills: uniq(skills),
   };
 }

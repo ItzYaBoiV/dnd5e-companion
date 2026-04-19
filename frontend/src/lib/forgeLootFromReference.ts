@@ -1,23 +1,35 @@
 import type { Item } from "@/types/dnd";
 
+export type LootDepthOpts = {
+  /** 0–1, higher = deeper in dungeon (better treasure bias). */
+  dungeonDepth?: number;
+};
+
 /** Pick a loot row for procedural maps using SRD reference items + party tier. */
 export function pickReferenceLootItem(
   rng: () => number,
   items: Item[] | null | undefined,
   partyLevel: number,
+  depthOpts?: LootDepthOpts | null,
 ): { slug: string; name: string } | null {
   if (!items?.length) return null;
   const lv = Math.max(1, Math.min(20, partyLevel));
-  const allowMagical = lv >= 3;
-  const allowAttunement = lv >= 8;
+  const d = Math.max(0, Math.min(1, depthOpts?.dungeonDepth ?? 0.5));
+  const allowMagical = lv >= 3 && d >= 0.2;
+  const allowAttunement = lv >= 8 && d >= 0.55;
+  const preferRare = d >= 0.5;
+  const preferVr = d >= 0.75;
 
   let pool = items.filter((it) => {
     const cat = String(it.category || "").toLowerCase();
-    if (cat === "vehicle" || cat === "mount") return lv >= 10;
+    if (cat === "vehicle" || cat === "mount") return lv >= 10 && d >= 0.6;
     if (!allowMagical && it.magical) {
       return /\b(potion|scroll|elixir|oil|ammunition|arrow|bolt)\b/i.test(it.name);
     }
     if (!allowAttunement && it.requiresAttunement) return false;
+    const r = String((it as Item & { rarity?: string }).rarity || "common").toLowerCase();
+    if (!preferVr && (r === "very rare" || r === "legendary")) return false;
+    if (!preferRare && (r === "rare" || r === "very rare")) return rng() < 0.35;
     return true;
   });
 

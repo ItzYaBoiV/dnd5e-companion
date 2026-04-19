@@ -66,12 +66,7 @@ function cantripsThirdCaster(level: number): number {
 
 function maxSlotSpellLevel(classSlug: string, subclassSlug: string | null | undefined, classLevel: number): number {
   const L = Math.max(1, Math.min(20, classLevel));
-  const sub = (subclassSlug ?? "").toLowerCase();
-  let slug = classSlug;
-  if (classSlug === "fighter" && sub.includes("eldritch")) slug = "eldritch-knight";
-  else if (classSlug === "rogue" && sub.includes("arcane")) slug = "arcane-trickster";
-
-  const slots = spellSlotsForClass(slug, L);
+  const slots = spellSlotsForClass(classSlug, L, subclassSlug);
   if (!slots.length) return 0;
   return Math.max(...slots.map((s) => s.level));
 }

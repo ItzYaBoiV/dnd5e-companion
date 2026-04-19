@@ -82,6 +82,29 @@ export const LOCATION_PALETTE: Record<string, TilePalette> = {
     roadBg: "#282010",
     roadLine: "#1a140a",
   },
+  /** Bioluminescent cave — deep teal ambient (moss / fungi). */
+  cave_biolum: {
+    void: "#020808",
+    wallBg: "#2a3836",
+    wallFg: "#3a5048",
+    wallShadow: "#081010",
+    floorBg: "#081818",
+    floorDetail: "#102828",
+    doorBg: "#081818",
+    doorFg: "#6a9088",
+    doorAccent: "#3a6058",
+    corridorBg: "#061414",
+    corridorFg: "#0c2020",
+    waterBg: "#063028",
+    waterWave: "#0a4838",
+    stairsBg: "#081818",
+    stairsFg: "#4a8870",
+    pillarBg: "#1a3834",
+    pillarFg: "#2a4844",
+    pillarShadow: "#061010",
+    roadBg: "#102420",
+    roadLine: "#081610",
+  },
   sewer: {
     void: "#040808",
     wallBg: "#1a2a1a",
@@ -125,6 +148,52 @@ export const LOCATION_PALETTE: Record<string, TilePalette> = {
     pillarShadow: "#0e0c1a",
     roadBg: "#201a30",
     roadLine: "#14101e",
+  },
+  /** Dusty stone, faded gold — abandoned sanctuaries. */
+  temple_abandoned: {
+    void: "#08060a",
+    wallBg: "#242030",
+    wallFg: "#383450",
+    wallShadow: "#100c18",
+    floorBg: "#16121c",
+    floorDetail: "#1e1a28",
+    doorBg: "#16121c",
+    doorFg: "#907820",
+    doorAccent: "#605010",
+    corridorBg: "#120e18",
+    corridorFg: "#181422",
+    waterBg: "#080618",
+    waterWave: "#141028",
+    stairsBg: "#16121c",
+    stairsFg: "#806018",
+    pillarBg: "#221c32",
+    pillarFg: "#342c48",
+    pillarShadow: "#0c0a12",
+    roadBg: "#1a1624",
+    roadLine: "#120e18",
+  },
+  /** Corrupted ritual tones — desecrated temples. */
+  temple_desecrated: {
+    void: "#0a0408",
+    wallBg: "#381828",
+    wallFg: "#502838",
+    wallShadow: "#140810",
+    floorBg: "#1c1018",
+    floorDetail: "#281420",
+    doorBg: "#1c1018",
+    doorFg: "#a02828",
+    doorAccent: "#601818",
+    corridorBg: "#160c14",
+    corridorFg: "#201018",
+    waterBg: "#180810",
+    waterWave: "#281018",
+    stairsBg: "#1c1018",
+    stairsFg: "#802020",
+    pillarBg: "#301820",
+    pillarFg: "#402830",
+    pillarShadow: "#0c0808",
+    roadBg: "#201018",
+    roadLine: "#140c10",
   },
   graveyard: {
     void: "#0a0c08",
@@ -289,3 +358,31 @@ export const LOCATION_PALETTE: Record<string, TilePalette> = {
     roadLine: "#1a1815",
   },
 };
+
+/** Bioluminescent cave maps use `cave_biolum` when `forgeLocationMeta.caveBioluminescent` is true. */
+export function forgePaletteForDungeon(
+  dg:
+    | {
+        locationType?: string;
+        forgeLocationMeta?: {
+          caveBioluminescent?: boolean;
+          templeCondition?: "active" | "abandoned" | "desecrated";
+        } | null;
+      }
+    | null
+    | undefined,
+  fallbackLoc?: string,
+): TilePalette {
+  const loc = dg?.locationType ?? fallbackLoc ?? "dungeon";
+  const fm = dg?.forgeLocationMeta;
+  if (fm?.caveBioluminescent && loc === "cave") {
+    return LOCATION_PALETTE.cave_biolum ?? LOCATION_PALETTE.cave;
+  }
+  if (loc === "temple" && fm?.templeCondition === "desecrated") {
+    return LOCATION_PALETTE.temple_desecrated ?? LOCATION_PALETTE.temple;
+  }
+  if (loc === "temple" && fm?.templeCondition === "abandoned") {
+    return LOCATION_PALETTE.temple_abandoned ?? LOCATION_PALETTE.temple;
+  }
+  return LOCATION_PALETTE[loc] ?? DEFAULT_PALETTE;
+}

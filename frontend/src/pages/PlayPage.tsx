@@ -26,7 +26,7 @@ import { buildRenderGrid } from "@/lib/dungeonForgeRenderGrid";
 import { decrementForgeMonsterBySlug, removeEntityAtXY } from "@/lib/dungeonEntityUpdates";
 import { makeSeededRng, pickWallAdjacentFloorCells } from "@/lib/forgeWallLights";
 import type { RenderCell } from "@/lib/dungeonTileRenderer";
-import { DEFAULT_PALETTE, ENTITY_PALETTE, LOCATION_PALETTE } from "@/lib/dungeonTilePalettes";
+import { ENTITY_PALETTE, forgePaletteForDungeon } from "@/lib/dungeonTilePalettes";
 import {
   computeVisibleCellsForPlayer,
   expandFogWithPlayerTokenVision,
@@ -553,7 +553,10 @@ async function buildForgeMonsterCombatants(
         type: "monster",
         monsterSlug: mon.slug,
         label: `${mon.name} ${seq++}`,
-        initiative: Math.floor(Math.random() * 20) + 1,
+        initiative:
+          Math.floor(Math.random() * 20) +
+          1 +
+          Math.floor(((mon.dexterity ?? 10) - 10) / 2),
         maxHp: mon.hitPoints,
         armorClass: mon.armorClass,
       });
@@ -848,12 +851,17 @@ export function EncounterWorkspace({
 
     let changed = false;
     for (const c of activeCombat.combatants) {
-      if (c.type !== "monster" || !c.monsterSlug) continue;
+      if (c.type !== "monster") continue;
+      const slug = String(c.monsterSlug ?? "").trim();
+      const nameBase = String(c.label ?? "")
+        .replace(/\s+\d+$/, "")
+        .trim();
+      if (!slug && !nameBase) continue;
       const prevHp = prevMonsterHpRef.current[c.id];
       prevMonsterHpRef.current[c.id] = c.currentHp;
       if (prevHp === undefined) continue;
       if (prevHp > 0 && c.currentHp <= 0) {
-        const next = decrementForgeMonsterBySlug(working, c.monsterSlug, selectedRoomId);
+        const next = decrementForgeMonsterBySlug(working, slug, selectedRoomId, nameBase || null);
         if (next) {
           working = next;
           changed = true;
@@ -891,8 +899,7 @@ export function EncounterWorkspace({
     }
   }, [dungeon]);
 
-  const palette =
-    (dungeon?.locationType && LOCATION_PALETTE[dungeon.locationType]) ?? DEFAULT_PALETTE;
+  const palette = forgePaletteForDungeon(dungeon);
 
   /** Padding around the focused room (player TV crop, wall lights). */
   const mapPad = 5;
@@ -1144,6 +1151,7 @@ export function EncounterWorkspace({
       const revealed = Array.from(new Set([...(prev?.revealed ?? []), ...(room ? [room.id] : [])]));
       const doorForFog =
         prev?.doorOpen !== undefined && prev.doorOpen !== null ? new Set(prev.doorOpen) : null;
+      const locForFog = dungeon.locationType ?? "dungeon";
       const gd: PlayerDungeonData = {
         grid: dungeon.grid,
         rooms: dungeon.rooms,
@@ -1155,6 +1163,8 @@ export function EncounterWorkspace({
         locationType: dungeon.locationType,
         floor: dungeon.floor,
         glyphs: dungeon.glyphs,
+        forgeLocationMeta: dungeon.forgeLocationMeta as PlayerDungeonData["forgeLocationMeta"],
+        forgeRenderOverlay: dungeon.forgeRenderOverlay as PlayerDungeonData["forgeRenderOverlay"],
       };
       const gh = dungeon.grid.length;
       const gw = dungeon.grid[0]?.length ?? 0;
@@ -1185,8 +1195,9 @@ export function EncounterWorkspace({
         doorForFog,
         null,
         {
-          openFloor: isOpenFloorLocation(dungeon.locationType ?? "dungeon"),
-          maxFogHops: maxFogHopsForLocationType(dungeon.locationType ?? "dungeon"),
+          openFloor: isOpenFloorLocation(locForFog),
+          maxFogHops: maxFogHopsForLocationType(locForFog),
+          locationType: locForFog,
         },
       );
       expandFogWithPlayerTokenVision(
@@ -1194,6 +1205,7 @@ export function EncounterWorkspace({
         dungeon.grid as number[][],
         tokensForMap,
         DEFAULT_PLAYER_VISION_FOG_CELLS,
+        locForFog,
       );
       const lightsWorld: SceneLight[] = [];
       if (sceneLighting && room) {
@@ -1262,8 +1274,9 @@ export function EncounterWorkspace({
     (targetGx: number, targetGy: number) => {
       const grid = dungeon?.grid as number[][] | undefined;
       if (!grid?.length || !activeCombat) return;
+      const locType = dungeon?.locationType ?? "dungeon";
       const tile = grid[targetGy]?.[targetGx];
-      if (!isDungeonGridWalkable(tile)) return;
+      if (!isDungeonGridWalkable(tile, locType)) return;
 
       const marchTokens = (() => {
         const players = tokensForMap.filter((t) => t.kind === "player" && t.id);
@@ -1310,6 +1323,7 @@ export function EncounterWorkspace({
               grid,
               occ,
               oldLKey,
+              locType,
             );
             if (lStep && (lStep.gx !== oldLx || lStep.gy !== oldLy)) {
               occ.delete(oldLKey);
@@ -1331,6 +1345,7 @@ export function EncounterWorkspace({
                 grid,
                 occ,
                 fk,
+                locType,
               );
               if (step && (step.gx !== fx || step.gy !== fy)) {
                 occ.delete(fk);
@@ -1372,6 +1387,7 @@ export function EncounterWorkspace({
               grid,
               occ,
               selfKey,
+              locType,
             );
             if (!step) return t;
             changed = true;
@@ -1394,7 +1410,7 @@ export function EncounterWorkspace({
         });
       }, 85);
     },
-    [dungeon, activeCombat, tokensForMap, partyLeaderId, partyFollowIds, stopPartyMarch],
+    [dungeon?.grid, dungeon?.locationType, activeCombat, tokensForMap, partyLeaderId, partyFollowIds, stopPartyMarch],
   );
 
   const handleTokenDragTo = useCallback(
@@ -1463,7 +1479,12 @@ export function EncounterWorkspace({
 
         const lStart = { gx: Math.floor(p.startWorldGx), gy: Math.floor(p.startWorldGy) };
         const lEnd = { gx: lx, gy: ly };
-        const path = shortestWalkablePathBfs(grid, lStart, lEnd);
+        const path = shortestWalkablePathBfs(
+          grid,
+          lStart,
+          lEnd,
+          dungeon?.locationType ?? "dungeon",
+        );
 
         const nextFollowerPos = new Map<string, { gx: number; gy: number }>();
         const followerIds = Object.keys(snap);
@@ -1494,7 +1515,14 @@ export function EncounterWorkspace({
             const o = snap[fid]!;
             const start = { gx: Math.floor(o.gx), gy: Math.floor(o.gy) };
             const target = slotFor.get(fid)!;
-            const end = walkGreedyStepsOnGrid(grid, start, target, occ, maxSteps);
+            const end = walkGreedyStepsOnGrid(
+              grid,
+              start,
+              target,
+              occ,
+              maxSteps,
+              dungeon?.locationType ?? "dungeon",
+            );
             nextFollowerPos.set(fid, end);
             occ.add(`${end.gx},${end.gy}`);
           }
@@ -1503,7 +1531,14 @@ export function EncounterWorkspace({
             const o = snap[fid]!;
             const start = { gx: Math.floor(o.gx), gy: Math.floor(o.gy) };
             const target = { gx: Math.floor(o.gx + dx), gy: Math.floor(o.gy + dy) };
-            const end = walkGreedyStepsOnGrid(grid, start, target, occ, maxSteps);
+            const end = walkGreedyStepsOnGrid(
+              grid,
+              start,
+              target,
+              occ,
+              maxSteps,
+              dungeon?.locationType ?? "dungeon",
+            );
             nextFollowerPos.set(fid, end);
             occ.add(`${end.gx},${end.gy}`);
           }
@@ -1519,7 +1554,7 @@ export function EncounterWorkspace({
         });
       });
     },
-    [partyLeaderId, dungeon?.grid],
+    [partyLeaderId, dungeon?.grid, dungeon?.locationType],
   );
 
   useEffect(() => {
@@ -2070,7 +2105,10 @@ export function EncounterWorkspace({
                   !placementCombatantId
                 ) {
                   const tile = (dungeon.grid as number[][])[gy]?.[gx];
-                  if (isDungeonGridWalkable(tile) && !cellBlocksPartyMarch(cell)) {
+                  if (
+                    isDungeonGridWalkable(tile, dungeon?.locationType ?? "dungeon") &&
+                    !cellBlocksPartyMarch(cell)
+                  ) {
                     startPartyMarch(gx, gy);
                     return;
                   }
@@ -2273,6 +2311,8 @@ export function EncounterWorkspace({
             </div>
 
             {launchMsg && <div className="shrink-0 text-xs text-amber-200/90">{launchMsg}</div>}
+
+            {activeCombat ? <ConcentrationDmBanner /> : null}
 
             <div className="shrink-0 border-b border-gray-800 pb-2 lg:border-0 lg:pb-0">
               <button
@@ -2566,6 +2606,11 @@ export function EncounterWorkspace({
                         </>
                       ) : null}
                     </p>
+                    {ex.saveDC != null && (
+                      <p className="text-[10px] text-amber-200/70">
+                        {saveT} save DC {saveDc} — half damage on success. Roll damage once, halve it for saves.
+                      </p>
+                    )}
                     {ex.effect ? <p className="text-gray-500">{String(ex.effect)}</p> : null}
                   </div>
                   {dice ? (
@@ -2932,6 +2977,11 @@ export function EncounterWorkspace({
                     </>
                   ) : null}
                 </p>
+                {ex.saveDC != null && (
+                  <p className="text-[10px] text-amber-200/70">
+                    {saveT} save DC {saveDc} — half damage on success. Roll damage once, halve it for saves.
+                  </p>
+                )}
                 {ex.effect ? <p className="text-gray-500">{String(ex.effect)}</p> : null}
               </div>
               {dice ? (
@@ -2997,6 +3047,7 @@ function StartCombatPanel() {
   };
 
   const addMonster = (m: any, count = 1) => {
+    const dexMod = Math.floor(((m.dexterity ?? 10) - 10) / 2);
     for (let i = 1; i <= count; i++) {
       setMonsters((prev) => [
         ...prev,
@@ -3005,7 +3056,7 @@ function StartCombatPanel() {
           label: `${m.name}${count > 1 ? ` ${i}` : ""}`,
           hp: m.hitPoints,
           ac: m.armorClass,
-          initiative: Math.floor(Math.random() * 20) + 1,
+          initiative: Math.floor(Math.random() * 20) + 1 + dexMod,
         },
       ]);
     }
@@ -3021,12 +3072,17 @@ function StartCombatPanel() {
   };
 
   const handleStart = async () => {
+    const missing = partyCharacters.filter((c) => !(c.id in initiatives));
+    if (missing.length > 0) {
+      alert(`Please enter initiative for: ${missing.map((c) => c.name).join(", ")}`);
+      return;
+    }
     const combatants = [
       ...partyCharacters.map((char) => ({
         type: "player" as const,
         characterId: char.id,
         label: char.name,
-        initiative: initiatives[char.id] ?? 10,
+        initiative: initiatives[char.id] ?? 0,
         maxHp: char.maxHp,
         armorClass: char.computed.armorClass,
       })),
@@ -3175,10 +3231,40 @@ function StartCombatPanel() {
   );
 }
 
+function ConcentrationDmBanner() {
+  const { concentrationBanner, clearConcentrationBanner, rollSummary } = useSessionStore();
+  if (!concentrationBanner) return null;
+  const concSaveBonus =
+    concentrationBanner.characterId != null
+      ? rollSummary?.playerRolls.find((p) => p.characterId === concentrationBanner.characterId)?.keyRolls.saves
+          .constitution.bonus
+      : undefined;
+  return (
+    <div className="dnd-card mb-3 flex flex-wrap items-start justify-between gap-2 border-amber-700/50 bg-amber-950/40 px-3 py-2">
+      <p className="text-sm text-amber-100">
+        <span className="font-display font-semibold text-amber-200">{concentrationBanner.name}</span> is concentrating.{" "}
+        <span className="text-amber-50">
+          CON save DC {concentrationBanner.dc} (d20
+          {concSaveBonus != null ? formatModifier(concSaveBonus) : " + CON mod"}). Failure = concentration ends.
+        </span>
+      </p>
+      <button type="button" className="btn-secondary shrink-0 text-xs" onClick={() => clearConcentrationBanner()}>
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
 // ── Inline combat (was Combat tab) ──────────────────────────────
 function InlineCombatPanel() {
-  const { activeCombat, nextRound, endCombat, damageCombatant, healCombatant, updateCombatant } =
-    useSessionStore();
+  const {
+    activeCombat,
+    nextTurn,
+    endCombat,
+    damageCombatant,
+    healCombatant,
+    updateCombatant,
+  } = useSessionStore();
   const [dmgInputs, setDmgInputs] = useState<Record<string, string>>({});
   const [selectedCombatantId, setSelectedCombatantId] = useState<string | null>(null);
   const [collapsedMonsterGroups, setCollapsedMonsterGroups] = useState<Record<string, boolean>>({});
@@ -3189,7 +3275,8 @@ function InlineCombatPanel() {
   const alive = sorted.filter((c) => c.isAlive);
   const alivePlayers = alive.filter((c) => c.type === "player").length;
   const aliveMonsters = alive.filter((c) => c.type === "monster").length;
-  const current = sorted[0] ?? null;
+  const currentIdx = activeCombat?.currentTurnIndex ?? 0;
+  const current = alive[currentIdx] ?? alive[0] ?? null;
   const selectedCombatant = sorted.find((c) => c.id === selectedCombatantId) ?? null;
 
   const groupKeyFor = (c: Combatant) => {
@@ -3216,7 +3303,7 @@ function InlineCombatPanel() {
 
       if (e.key.toLowerCase() === "n") {
         e.preventDefault();
-        void nextRound();
+        void nextTurn();
         return;
       }
       if (e.key === "-" || e.key === "_") {
@@ -3231,7 +3318,7 @@ function InlineCombatPanel() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedCombatant, nextRound, damageCombatant, healCombatant]);
+  }, [selectedCombatant, nextTurn, damageCombatant, healCombatant]);
 
   if (!activeCombat) return null;
 
@@ -3259,8 +3346,8 @@ function InlineCombatPanel() {
             <span className="ml-3 font-display text-3xl font-bold text-dnd-gold">{activeCombat.round}</span>
           </div>
           <div className="flex gap-2">
-            <button type="button" onClick={() => void nextRound()} className="btn-primary flex items-center gap-2">
-              <SkipForward size={15} /> Next Round
+            <button type="button" onClick={() => void nextTurn()} className="btn-primary flex items-center gap-2">
+              <SkipForward size={15} /> Next Turn ▶
             </button>
             <button type="button" onClick={() => void endCombat()} className="btn-secondary flex items-center gap-2 text-sm">
               End Combat
@@ -3295,7 +3382,7 @@ function InlineCombatPanel() {
               {collapsed && firstInGroup ? null : (
                 <CombatantRow
                   combatant={c}
-                  isFirst={idx === 0}
+                  isCurrentTurn={c.id === current?.id}
                   isSelected={selectedCombatantId === c.id}
                   onSelect={() => setSelectedCombatantId(c.id)}
                   dmgInput={dmgInputs[c.id] ?? ""}
@@ -3313,11 +3400,31 @@ function InlineCombatPanel() {
                     setDmgInputs((p) => ({ ...p, [c.id]: "" }));
                   }}
                   onToggleCondition={(cond) => {
+                    if (cond === "exhaustion") {
+                      const has = c.conditions.some((x) => /^exhaustion/.test(x));
+                      void updateCombatant(c.id, {
+                        conditions: has
+                          ? c.conditions.filter((x) => !/^exhaustion/.test(x))
+                          : [...c.conditions.filter((x) => !/^exhaustion/.test(x)), "exhaustion:1"],
+                      });
+                      return;
+                    }
                     const has = c.conditions.includes(cond);
                     void updateCombatant(c.id, {
                       conditions: has ? c.conditions.filter((x) => x !== cond) : [...c.conditions, cond],
                     });
                   }}
+                  onSetExhaustionLevel={(level) => {
+                    void updateCombatant(c.id, {
+                      conditions: [
+                        ...c.conditions.filter((x) => !/^exhaustion/.test(x)),
+                        `exhaustion:${level}`,
+                      ],
+                    });
+                  }}
+                  onConfirmRemovedFromInitiative={() =>
+                    void updateCombatant(c.id, { isAlive: false })
+                  }
                 />
               )}
             </div>
@@ -3328,9 +3435,46 @@ function InlineCombatPanel() {
   );
 }
 
+const PLAY_COMBAT_CONDITIONS = [
+  "blinded",
+  "charmed",
+  "deafened",
+  "exhaustion",
+  "frightened",
+  "grappled",
+  "incapacitated",
+  "invisible",
+  "paralyzed",
+  "petrified",
+  "poisoned",
+  "prone",
+  "restrained",
+  "stunned",
+  "unconscious",
+] as const;
+
+function playConditionLabel(cond: string): string {
+  const m = /^exhaustion:(\d)$/.exec(cond);
+  if (m) return `exhaustion ${m[1]}`;
+  return cond;
+}
+
+function playConditionActive(conditions: string[], slug: string): boolean {
+  if (slug === "exhaustion") return conditions.some((x) => /^exhaustion/.test(x));
+  return conditions.includes(slug);
+}
+
+function exhaustionLevelFromConditions(conditions: string[]): number {
+  for (const x of conditions) {
+    const m = /^exhaustion:(\d)$/.exec(x);
+    if (m) return Math.min(6, Math.max(1, parseInt(m[1]!, 10)));
+  }
+  return 1;
+}
+
 function CombatantRow({
   combatant: c,
-  isFirst,
+  isCurrentTurn,
   isSelected,
   onSelect,
   dmgInput,
@@ -3338,9 +3482,11 @@ function CombatantRow({
   onDamage,
   onHeal,
   onToggleCondition,
+  onSetExhaustionLevel,
+  onConfirmRemovedFromInitiative,
 }: {
   combatant: Combatant;
-  isFirst: boolean;
+  isCurrentTurn: boolean;
   isSelected: boolean;
   onSelect: () => void;
   dmgInput: string;
@@ -3348,30 +3494,21 @@ function CombatantRow({
   onDamage: (amount?: number) => void;
   onHeal: (amount?: number) => void;
   onToggleCondition: (c: string) => void;
+  onSetExhaustionLevel: (level: number) => void;
+  onConfirmRemovedFromInitiative: () => void;
 }) {
-  const [expanded, setExpanded] = useState(isFirst);
+  const [expanded, setExpanded] = useState(isCurrentTurn);
   const hpPct = Math.round((c.currentHp / c.maxHp) * 100);
-  const CONDITIONS = [
-    "blinded",
-    "charmed",
-    "frightened",
-    "grappled",
-    "incapacitated",
-    "paralyzed",
-    "poisoned",
-    "prone",
-    "restrained",
-    "stunned",
-  ];
   const amount = parseInt(dmgInput || "0", 10) || 0;
   const applyQuickDamage = (n: number) => onDamage(n);
   const applyQuickHeal = (n: number) => onHeal(n);
+  const exhaustionOn = playConditionActive(c.conditions, "exhaustion");
 
   return (
     <div
       className={clsx(
         "overflow-hidden rounded-lg border transition-all",
-        isFirst ? "border-dnd-gold shadow-[0_0_8px_rgba(212,172,13,0.2)]" : "border-gray-700",
+        isCurrentTurn ? "border-dnd-gold shadow-[0_0_8px_rgba(212,172,13,0.2)]" : "border-gray-700",
         isSelected && "ring-1 ring-blue-500/40",
         !c.isAlive && "opacity-50",
       )}
@@ -3379,8 +3516,8 @@ function CombatantRow({
     >
       <div
         className={clsx(
-          "flex items-center gap-3 px-3 py-2",
-          isFirst ? "bg-dnd-dark/90 ring-1 ring-dnd-gold/20" : "bg-dnd-dark",
+          "flex flex-wrap items-center gap-3 px-3 py-2",
+          isCurrentTurn ? "bg-dnd-dark/90 ring-1 ring-dnd-gold/20" : "bg-dnd-dark",
         )}
       >
         <span
@@ -3393,12 +3530,17 @@ function CombatantRow({
         </span>
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="truncate font-display font-bold text-white">{c.label}</span>
             {c.type === "monster" && <Skull size={12} className="flex-shrink-0 text-red-400" />}
-            {isFirst && (
+            {isCurrentTurn && (
               <span className="rounded border border-dnd-gold/40 bg-dnd-gold/20 px-1.5 py-0.5 font-display text-[10px] text-dnd-gold">
                 TURN
+              </span>
+            )}
+            {c.currentHp === 0 && c.type === "player" && c.isAlive && (
+              <span className="rounded border border-red-700 bg-red-950 px-1.5 py-0.5 font-display text-[10px] text-red-300 animate-pulse">
+                DYING — roll death saves on their turn
               </span>
             )}
             {c.isConcentrating && (
@@ -3409,11 +3551,23 @@ function CombatantRow({
             {c.conditions.map((cond) => (
               <span
                 key={cond}
-                className="rounded border border-red-800 bg-red-950 px-1.5 py-0.5 font-display text-xs text-red-300"
+                className="rounded border border-red-800 bg-red-950 px-1.5 py-0.5 font-display text-xs capitalize text-red-300"
               >
-                {cond}
+                {playConditionLabel(cond)}
               </span>
             ))}
+            {c.currentHp === 0 && c.isAlive && (
+              <button
+                type="button"
+                className="rounded border border-gray-600 bg-gray-900 px-1.5 py-0.5 font-display text-[10px] text-gray-300 hover:bg-gray-800"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onConfirmRemovedFromInitiative();
+                }}
+              >
+                {c.type === "player" ? "Confirm death (3 failures)" : "Mark defeated"}
+              </button>
+            )}
           </div>
           <HPBar current={c.currentHp} max={c.maxHp} temp={c.temporaryHp} />
         </div>
@@ -3509,21 +3663,40 @@ function CombatantRow({
             </button>
           </div>
           <p className="dnd-label mb-1">Conditions</p>
-          <div className="flex flex-wrap gap-1">
-            {CONDITIONS.map((cond) => (
-              <button
-                key={cond}
-                type="button"
-                onClick={() => onToggleCondition(cond)}
-                className={clsx(
-                  "rounded border px-2 py-0.5 font-display text-xs capitalize transition-colors",
-                  c.conditions.includes(cond)
-                    ? "border-red-700 bg-red-950 text-red-300"
-                    : "border-gray-700 text-gray-500 hover:border-gray-500",
+          <div className="flex flex-wrap items-center gap-1">
+            {PLAY_COMBAT_CONDITIONS.map((cond) => (
+              <span key={cond} className="inline-flex items-center gap-0.5">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleCondition(cond);
+                  }}
+                  className={clsx(
+                    "rounded border px-2 py-0.5 font-display text-xs capitalize transition-colors",
+                    playConditionActive(c.conditions, cond)
+                      ? "border-red-700 bg-red-950 text-red-300"
+                      : "border-gray-700 text-gray-500 hover:border-gray-500",
+                  )}
+                >
+                  {cond}
+                </button>
+                {cond === "exhaustion" && exhaustionOn && (
+                  <input
+                    type="number"
+                    min={1}
+                    max={6}
+                    title="Exhaustion level (PHB)"
+                    className="input-field w-11 py-0.5 text-center text-[10px]"
+                    value={exhaustionLevelFromConditions(c.conditions)}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => {
+                      const n = Math.min(6, Math.max(1, parseInt(e.target.value, 10) || 1));
+                      onSetExhaustionLevel(n);
+                    }}
+                  />
                 )}
-              >
-                {cond}
-              </button>
+              </span>
             ))}
           </div>
         </div>
@@ -3629,10 +3802,13 @@ function PlayerRollCard({ info }: { info: PlayerRollInfo }) {
 function DmRollCard({ info }: { info: DmRollInfo }) {
   const { activeCombat } = useSessionStore();
   const hpPct = Math.round((info.currentHp / info.maxHp) * 100);
+  const combatants = activeCombat?.combatants ?? [];
   const playerTargets =
-    activeCombat?.combatants
+    combatants
       .filter((c) => c.type === "player" && c.isAlive)
-      .map((c) => ({ id: c.id, label: c.label })) ?? [];
+      .map((c) => ({ id: c.id, label: c.label, armorClass: c.armorClass })) ?? [];
+  const legendary = info.legendaryActions ?? [];
+  const legPts = info.legendaryActionPoints ?? 3;
 
   return (
     <div className="dnd-card border-red-900">
@@ -3651,14 +3827,31 @@ function DmRollCard({ info }: { info: DmRollInfo }) {
         </div>
       </div>
       <div className="space-y-2">
-        {info.actions.slice(0, 5).map((action, i) => (
+        <p className="dnd-label text-[10px] text-gray-500">Actions</p>
+        {info.actions.slice(0, 8).map((action, i) => (
           <DmMonsterActionRow
-            key={`${info.combatantId}-${i}-${action.name}`}
+            key={`${info.combatantId}-a-${i}-${action.name}`}
             action={action}
             playerTargets={playerTargets}
+            combatants={combatants}
           />
         ))}
       </div>
+      {legendary.length > 0 && (
+        <div className="mt-3 space-y-2 border-t border-red-950 pt-3">
+          <p className="dnd-label text-[10px] text-amber-200/90">
+            Legendary Actions ({legPts} pts/round — taken at end of others&apos; turns)
+          </p>
+          {legendary.slice(0, 8).map((action, i) => (
+            <DmMonsterActionRow
+              key={`${info.combatantId}-l-${i}-${action.name}`}
+              action={action}
+              playerTargets={playerTargets}
+              combatants={combatants}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -3666,9 +3859,11 @@ function DmRollCard({ info }: { info: DmRollInfo }) {
 function DmMonsterActionRow({
   action,
   playerTargets,
+  combatants,
 }: {
   action: DmRollInfo["actions"][number];
-  playerTargets: { id: string; label: string }[];
+  playerTargets: { id: string; label: string; armorClass: number }[];
+  combatants: Combatant[];
 }) {
   const { damageCombatant } = useSessionStore();
   const [attack, setAttack] = useState<AttackRollResult | null>(null);
@@ -3698,6 +3893,19 @@ function DmMonsterActionRow({
     if (descDice) return descDice;
     return null;
   };
+
+  const targetAc =
+    targetId && combatants.length > 0
+      ? combatants.find((x) => x.id === targetId)?.armorClass ?? null
+      : null;
+
+  let hitLabel: "HIT" | "MISS" | "ROLLED" | "CRITICAL HIT" | "AUTO-MISS" | null = null;
+  if (attack) {
+    if (attack.crit) hitLabel = "CRITICAL HIT";
+    else if (attack.critFail) hitLabel = "AUTO-MISS";
+    else if (targetAc !== null) hitLabel = attack.total >= targetAc ? "HIT" : "MISS";
+    else hitLabel = "ROLLED";
+  }
 
   const runAttack = () => {
     if (!canAttack || action.attackBonus === null) return;
@@ -3734,6 +3942,13 @@ function DmMonsterActionRow({
     dmgAmt > 0 &&
     !applying;
 
+  const hitColor =
+    hitLabel === "HIT" || hitLabel === "CRITICAL HIT"
+      ? "text-green-300"
+      : hitLabel === "MISS" || hitLabel === "AUTO-MISS"
+        ? "text-gray-500"
+        : "text-dnd-gold";
+
   return (
     <div className="rounded bg-gray-900 px-2 py-1.5">
       <div className="flex flex-wrap items-start justify-between gap-1">
@@ -3758,7 +3973,34 @@ function DmMonsterActionRow({
         <p className="mt-0.5 line-clamp-2 text-[11px] text-gray-500">{action.description}</p>
       )}
 
+      {action.saveDc != null && (
+        <p className="mt-1 text-[10px] text-amber-200/70">
+          {action.saveType ?? "Save"} save DC {action.saveDc} — half damage on success. Roll damage once, halve it for
+          saves.
+        </p>
+      )}
+
       <div className="mt-1.5 space-y-1.5 border-t border-gray-800 pt-1.5">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <label className="dnd-label text-[9px]">Target (attack vs AC / apply damage)</label>
+          <select
+            className="input-field max-w-full py-0.5 text-[11px]"
+            value={targetId}
+            onChange={(e) => setTargetId(e.target.value)}
+            disabled={playerTargets.length === 0}
+          >
+            {playerTargets.length === 0 ? (
+              <option value="">No players in combat</option>
+            ) : (
+              playerTargets.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label} (AC {p.armorClass})
+                </option>
+              ))
+            )}
+          </select>
+        </div>
+
         {canAttack && (
           <button
             type="button"
@@ -3796,15 +4038,23 @@ function DmMonsterActionRow({
       </div>
 
       {attack && (
-        <p className="mt-1 font-mono text-[11px] text-dnd-gold">
-          Hit {attack.total}
+        <p className={clsx("mt-1 font-mono text-[11px]", hitColor)}>
+          <span className="font-display font-semibold">
+            {hitLabel === "CRITICAL HIT"
+              ? "CRITICAL HIT"
+              : hitLabel === "AUTO-MISS"
+                ? "AUTO-MISS"
+                : hitLabel}{" "}
+          </span>
+          <span className="text-dnd-gold">{attack.total}</span>
           <span className="text-gray-500">
             {" "}
             (d20 {attack.d20}
             {formatModifier(attack.bonus)})
           </span>
-          {attack.crit && <span className="ml-1 font-display text-amber-300">CRIT</span>}
-          {attack.critFail && <span className="ml-1 text-gray-500">miss?</span>}
+          {targetAc !== null && !attack.crit && !attack.critFail && (
+            <span className="text-gray-600"> vs AC {targetAc}</span>
+          )}
         </p>
       )}
 
@@ -3815,25 +4065,6 @@ function DmMonsterActionRow({
       )}
 
       <div className="mt-1.5 flex flex-wrap items-end gap-1.5">
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <label className="dnd-label text-[9px]">Apply HP loss to</label>
-          <select
-            className="input-field max-w-[10rem] py-0.5 text-[11px]"
-            value={targetId}
-            onChange={(e) => setTargetId(e.target.value)}
-            disabled={playerTargets.length === 0}
-          >
-            {playerTargets.length === 0 ? (
-              <option value="">No players in combat</option>
-            ) : (
-              playerTargets.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                </option>
-              ))
-            )}
-          </select>
-        </div>
         <div className="flex flex-col gap-0.5">
           <label className="dnd-label text-[9px]">Amount</label>
           <input

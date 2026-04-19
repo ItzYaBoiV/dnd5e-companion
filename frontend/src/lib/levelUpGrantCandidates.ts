@@ -68,12 +68,39 @@ export function buildGrantCandidatesForClassLevel(
     uniq.push(g);
   }
 
+  const expanded: LevelUpGrantRow[] = [];
+  for (const g of uniq) {
+    const n = g.name.trim().toLowerCase();
+    if (
+      classRef.slug === "wizard" &&
+      newClassLevel >= 18 &&
+      n.includes("spell mastery") &&
+      !n.includes("1st-level") &&
+      !n.includes("2nd-level")
+    ) {
+      expanded.push({
+        ...g,
+        key: `${g.key}::spell-mastery-1`,
+        name: "Spell Mastery (1st-level wizard spell)",
+        description: g.description,
+      });
+      expanded.push({
+        ...g,
+        key: `${g.key}::spell-mastery-2`,
+        name: "Spell Mastery (2nd-level wizard spell)",
+        description: g.description,
+      });
+    } else {
+      expanded.push(g);
+    }
+  }
+
   if (
     classRef.slug &&
     classLevelHasPhbStyleAsi(classRef.slug, newClassLevel) &&
-    !uniq.some((g) => isAsiFeatureName(g.name))
+    !expanded.some((g) => isAsiFeatureName(g.name))
   ) {
-    uniq.push({
+    expanded.push({
       key: "synthetic:asi-phb",
       name: "Ability Score Improvement",
       description:
@@ -83,5 +110,5 @@ export function buildGrantCandidatesForClassLevel(
     });
   }
 
-  return uniq;
+  return expanded;
 }

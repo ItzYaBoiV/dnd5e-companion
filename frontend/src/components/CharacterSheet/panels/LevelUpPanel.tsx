@@ -109,7 +109,20 @@ export function LevelUpPanel({ character }: Props) {
 
   const leveledPickCap = spellBudget.knownSpells + spellBudget.wizardSpellbook;
 
-  const maxSpellLevelGuess = Math.min(9, Math.max(1, Math.ceil(nextCharLevel / 2)));
+  const maxSpellLevelGuess = useMemo(() => {
+    const subL = effectiveSubclassLower;
+    const classLevel = newClassLevel;
+    const isThirdCaster =
+      (levelClassSlug === "fighter" && subL.includes("eldritch")) ||
+      (levelClassSlug === "rogue" && subL.includes("arcane")) ||
+      levelClassSlug === "eldritch-knight" ||
+      levelClassSlug === "arcane-trickster";
+    const isHalfCaster =
+      (levelClassSlug === "ranger" && classLevel >= 2) || (levelClassSlug === "paladin" && classLevel >= 2);
+    if (isThirdCaster) return Math.min(4, Math.max(1, Math.floor(classLevel / 3)));
+    if (isHalfCaster) return Math.min(5, Math.max(1, Math.floor(classLevel / 2)));
+    return Math.min(9, Math.max(1, Math.ceil(classLevel / 2)));
+  }, [effectiveSubclassLower, newClassLevel, levelClassSlug]);
 
   useEffect(() => {
     if (open && mc && mcRows[0] && !mcRows.some((r) => r.classSlug === levelClassSlug)) {
@@ -409,6 +422,18 @@ export function LevelUpPanel({ character }: Props) {
       alert("For +1/+1, pick two different abilities.");
       return;
     }
+    if (hasAsiOption && !skipAsi && asiPayload?.length) {
+      for (const b of asiPayload) {
+        const cur = character[b.ability];
+        const nextScore = cur + b.increase;
+        if (nextScore > 20) {
+          alert(
+            `Ability scores cannot exceed 20 without a special class feature. ${ABILITY_LABELS[b.ability].abbr}: current ${cur}, attempted ${nextScore}.`,
+          );
+          return;
+        }
+      }
+    }
 
     for (const g of grantCandidates) {
       if (!grantOn[g.key]) continue;
@@ -448,7 +473,11 @@ export function LevelUpPanel({ character }: Props) {
               desc = appendSpellChoicesToDescription(desc, resolved, "Magical Secrets — known spells");
             else if (spec.alwaysPrepared)
               desc = appendSpellChoicesToDescription(desc, resolved, "Signature Spells");
-            else desc = appendSpellChoicesToDescription(desc, resolved, "Spell Mastery (at-will, 3rd or lower)");
+            else if (spec.minSpellLevel === 1 && spec.maxSpellLevel === 1)
+              desc = appendSpellChoicesToDescription(desc, resolved, "Spell Mastery (1st-level, at will)");
+            else if (spec.minSpellLevel === 2 && spec.maxSpellLevel === 2)
+              desc = appendSpellChoicesToDescription(desc, resolved, "Spell Mastery (2nd-level, at will)");
+            else desc = appendSpellChoicesToDescription(desc, resolved, "Spell Mastery (at will)");
           }
         } else if (spec?.kind === "beast-companion") {
           const slug = pickedFeatureOptions[g.key]?.[0];
@@ -496,13 +525,23 @@ export function LevelUpPanel({ character }: Props) {
       for (const g of grantCandidates) {
         if (!grantOn[g.key]) continue;
         const spec = grantPickSpecs[g.key];
-        if (spec?.kind !== "spells" || !spec.addToSpellbook) continue;
-        for (const spellSlug of pickedGrantSpells[g.key] ?? []) {
-          learnSpells.push({
-            spellSlug,
-            prepared: true,
-            alwaysPrepared: !!spec.alwaysPrepared,
-          });
+        if (spec?.kind !== "spells") continue;
+        if (spec.addToSpellbook) {
+          for (const spellSlug of pickedGrantSpells[g.key] ?? []) {
+            learnSpells.push({
+              spellSlug,
+              prepared: true,
+              alwaysPrepared: !!spec.alwaysPrepared,
+            });
+          }
+        } else if (spec.alwaysPrepared) {
+          for (const spellSlug of pickedGrantSpells[g.key] ?? []) {
+            learnSpells.push({
+              spellSlug,
+              prepared: true,
+              alwaysPrepared: true,
+            });
+          }
         }
       }
 
@@ -741,8 +780,8 @@ export function LevelUpPanel({ character }: Props) {
               {!skipAsi && (
                 <>
               <p className="text-xs text-gray-500">
-                +2 on one ability, or +1 on two different abilities (your scores cannot go above 20 without special
-                rules — the app allows up to 30).
+                +2 on one ability, or +1 on two different abilities. Ability scores cannot go above 20 unless another
+                rule explicitly allows it (this level-up flow enforces 20).
               </p>
               <div className="flex flex-wrap gap-3 text-xs">
                 <label className="flex items-center gap-1 cursor-pointer">

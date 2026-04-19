@@ -326,6 +326,13 @@ export function buildLevelUpChecklist(
   const blocks: LevelUpChecklistBlock[] = [];
 
   const gainSlug = (classCtx?.classSlugGaining ?? character.classSlug).trim();
+  if (character.computed?.isMulticlass && !classCtx) {
+    console.warn(
+      "[buildLevelUpChecklist] Multiclass character — no classCtx provided. " +
+        "featureTier will default to total character level, which is wrong for ASI gating. " +
+        "Pass classCtx.classTierAfter = the class level being gained.",
+    );
+  }
   const featureTier = classCtx?.classTierAfter ?? newLevel;
   const subForFeatures = (classCtx?.subclassSlugForClass ?? character.subclassSlug ?? "").trim();
 
@@ -427,6 +434,21 @@ export function buildLevelUpChecklist(
     blocks.push({
       title: "Spells",
       items: spellLines,
+    });
+  }
+
+  if (gainSlug === "warlock" && featureTier >= 3) {
+    blocks.push({
+      title: "Eldritch Invocations — optional replacement",
+      items: [
+        "You may replace one known Eldritch Invocation with another you qualify for at your current Warlock level. This is optional.",
+      ],
+    });
+  }
+  if (gainSlug === "sorcerer" && featureTier >= 4) {
+    blocks.push({
+      title: "Metamagic — optional replacement",
+      items: ["You may replace one known Metamagic option with another. This is optional."],
     });
   }
 

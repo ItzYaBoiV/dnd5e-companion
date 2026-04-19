@@ -171,8 +171,10 @@ model SpellSlot {
   level    Int // 1-9
   total    Int // max slots for this level at current character level
   used     Int @default(0)
+  /// "spellcasting" = long-rest pool; "pact" = Warlock pact magic (short rest)
+  source   String @default("spellcasting")
 
-  @@unique([characterId, level])
+  @@unique([characterId, level, source])
   @@index([characterId])
 }
 
@@ -567,13 +569,15 @@ model SessionCharacter {
 }
 
 model Combat {
-  id         String      @id @default(cuid())
-  sessionId  String
-  session    Session     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  name       String      @default("Combat")
-  status     String      @default("active")
-  round      Int         @default(1)
-  combatants Combatant[]
+  id                 String      @id @default(cuid())
+  sessionId          String
+  session            Session     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  name               String      @default("Combat")
+  status             String      @default("active")
+  round              Int         @default(1)
+  /// Index into initiative order (alive combatants only, high init first).
+  currentTurnIndex   Int         @default(0)
+  combatants         Combatant[]
   createdAt  DateTime    @default(now())
 
   @@index([sessionId])

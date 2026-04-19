@@ -1,5 +1,32 @@
 import { SKILL_NAMES, type CharacterDraft, type DndClass, type SkillName } from "@/types/dnd";
 
+/** PHB p.164 multiclass entry: one skill from that class's list (not the full 18-skill pool). */
+const MULTICLASS_ENTRY_SKILL_POOLS: Partial<Record<string, string[]>> = {
+  ranger: [
+    "animal-handling",
+    "athletics",
+    "insight",
+    "investigation",
+    "nature",
+    "perception",
+    "stealth",
+    "survival",
+  ],
+  rogue: [
+    "acrobatics",
+    "athletics",
+    "deception",
+    "insight",
+    "intimidation",
+    "investigation",
+    "perception",
+    "performance",
+    "persuasion",
+    "sleight-of-hand",
+    "stealth",
+  ],
+};
+
 /** Default number of class skills to pick (PHB-style) when API data is wrong. */
 const DEFAULT_SKILL_COUNT: Record<string, number> = {
   bard: 3,
@@ -82,7 +109,12 @@ export function draftSkillConfig(draft: CharacterDraft, classes: DndClass[]) {
       healed.pool.forEach((s) => pool.add(s));
     } else if (cls.slug === "bard" || cls.slug === "ranger" || cls.slug === "rogue") {
       count += 1;
-      healed.pool.forEach((s) => pool.add(s));
+      const restrictedPool = MULTICLASS_ENTRY_SKILL_POOLS[cls.slug];
+      if (restrictedPool) {
+        restrictedPool.forEach((s) => pool.add(s));
+      } else {
+        healed.pool.forEach((s) => pool.add(s));
+      }
     }
   }
 

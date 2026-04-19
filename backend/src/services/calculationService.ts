@@ -531,11 +531,37 @@ export const PACT_MAGIC_SLOTS: { slots: number; level: number }[] = [
   { slots: 4, level: 5 }, // level 20
 ];
 
+/** Abstract spell slot row (no DB id); pact vs spellcasting pools are separate for multiclass. */
+export type ComputedSpellSlotRow = {
+  level: number;
+  total: number;
+  source?: "spellcasting" | "pact";
+};
+
 export function spellSlotsForClass(
   classSlug: string,
-  level: number
+  level: number,
+  subclassSlug?: string | null,
 ): { level: number; total: number }[] {
   const idx = level - 1;
+  const sub = (subclassSlug ?? "").toLowerCase();
+
+  if (classSlug === "fighter") {
+    if (!sub.includes("eldritch")) return [];
+    const casterLevel = Math.floor(level / 3);
+    if (casterLevel < 1) return [];
+    return FULL_CASTER_SLOTS[casterLevel - 1]!
+      .map((total, i) => ({ level: i + 1, total }))
+      .filter((s) => s.total > 0);
+  }
+  if (classSlug === "rogue") {
+    if (!sub.includes("arcane")) return [];
+    const casterLevel = Math.floor(level / 3);
+    if (casterLevel < 1) return [];
+    return FULL_CASTER_SLOTS[casterLevel - 1]!
+      .map((total, i) => ({ level: i + 1, total }))
+      .filter((s) => s.total > 0);
+  }
 
   if (classSlug === "warlock") {
     const row = PACT_MAGIC_SLOTS[idx];
@@ -543,25 +569,16 @@ export function spellSlotsForClass(
   }
 
   const halfCasters = ["paladin", "ranger"];
-  const thirdCasters = ["arcane-trickster", "eldritch-knight"];
 
   let table: number[][];
   if (halfCasters.includes(classSlug)) {
     table = HALF_CASTER_SLOTS;
-  } else if (thirdCasters.includes(classSlug)) {
-    // Third casters use floor(level/3) as their caster level
-    const casterLevel = Math.max(0, Math.floor(level / 3));
-    if (casterLevel === 0) return [];
-    table = FULL_CASTER_SLOTS; // use full table at reduced level
-    return table[casterLevel - 1]
-      .map((total, i) => ({ level: i + 1, total }))
-      .filter((s) => s.total > 0);
   } else {
     // Full casters: Bard, Cleric, Druid, Sorcerer, Wizard
     table = FULL_CASTER_SLOTS;
   }
 
-  return table[idx]
+  return table[idx]!
     .map((total, i) => ({ level: i + 1, total }))
     .filter((s) => s.total > 0);
 }
@@ -610,30 +627,35 @@ export function totalWarlockLevels(slices: MulticlassSlice[]): number {
 }
 
 /**
- * Merged spell slots: multiclass Spellcasting table + Warlock pact slots (same slot level stacks).
+ * Multiclass spell slots: PHB Spellcasting table (long rest) + Warlock pact magic (short rest) as separate rows.
+ * Pact slots are never merged into the standard pool.
  */
-export function spellSlotsForMulticlass(slices: MulticlassSlice[]): { level: number; total: number }[] {
+export function spellSlotsForMulticlass(slices: MulticlassSlice[]): ComputedSpellSlotRow[] {
   const casterLv = multiclassSpellcasterLevel(slices);
   const wl = totalWarlockLevels(slices);
   const byLevel = new Map<number, number>();
 
   if (casterLv >= 1) {
-    const row = FULL_CASTER_SLOTS[casterLv - 1];
+    const row = FULL_CASTER_SLOTS[casterLv - 1]!;
     for (let i = 0; i < row.length; i++) {
-      const t = row[i];
+      const t = row[i]!;
       if (t > 0) byLevel.set(i + 1, t);
     }
   }
 
+  const spellRows: ComputedSpellSlotRow[] = Array.from(byLevel.entries()).map(([level, total]) => ({
+    level,
+    total,
+    source: "spellcasting" as const,
+  }));
+
+  const pactRows: ComputedSpellSlotRow[] = [];
   if (wl >= 1) {
-    const pact = PACT_MAGIC_SLOTS[wl - 1];
-    const L = pact.level;
-    byLevel.set(L, (byLevel.get(L) ?? 0) + pact.slots);
+    const pact = PACT_MAGIC_SLOTS[wl - 1]!;
+    pactRows.push({ level: pact.level, total: pact.slots, source: "pact" });
   }
 
-  return Array.from(byLevel.entries())
-    .map(([level, total]) => ({ level, total }))
-    .sort((a, b) => a.level - b.level);
+  return [...spellRows, ...pactRows].sort((a, b) => a.level - b.level || (a.source === b.source ? 0 : a.source === "spellcasting" ? -1 : 1));
 }
 
 /**

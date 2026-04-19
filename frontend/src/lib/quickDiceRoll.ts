@@ -1,3 +1,8 @@
+/** Doubles only NdM segments; flat bonuses stay once (PHB p.196 critical hits). */
+export function doubleDiceOnly(notation: string): string {
+  return notation.replace(/(\d+)(d\d+)/gi, (_, n: string, d: string) => `${Number(n) * 2}${d}`);
+}
+
 /** Single roll of an s-sided die (1..s). */
 export function rollDie(sides: number): number {
   const s = Math.max(1, Math.floor(sides));
