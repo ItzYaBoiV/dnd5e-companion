@@ -30,9 +30,26 @@ export interface ActiveSession {
 }
 
 export interface Combat {
-  id: string; name: string; status: string; round: number;
+  id: string;
+  name: string;
+  status: string;
+  round: number;
+  /** ISO from API — used to pick the current fight when multiple exist */
+  createdAt?: string;
   combatants: Combatant[];
   turnOrder?: Combatant[];
+}
+
+/** Prefer newest active combat (fixes wrong combat after end → start). */
+function pickActiveCombat(combats: Combat[] | undefined): Combat | null {
+  const actives = combats?.filter((c) => c.status === "active") ?? [];
+  if (actives.length === 0) return null;
+  if (actives.length === 1) return actives[0];
+  return actives.reduce((best, c) => {
+    const ta = c.createdAt ? Date.parse(c.createdAt) : 0;
+    const tb = best.createdAt ? Date.parse(best.createdAt) : 0;
+    return ta > tb ? c : best;
+  });
 }
 
 export interface Combatant {
@@ -89,6 +106,7 @@ interface SessionStore {
   loadPartyChars:   () => Promise<void>;
 
   startCombat:      (name: string, combatants: Partial<Combatant>[]) => Promise<void>;
+  appendCombatantsToCombat: (combatants: Partial<Combatant>[]) => Promise<void>;
   endCombat:        () => Promise<void>;
   nextRound:        () => Promise<void>;
   damageCombatant:  (combatantId: string, amount: number) => Promise<void>;
@@ -113,7 +131,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set({ isLoading: true });
     try {
       const session = await req<ActiveSession>("GET", `/sessions/${id}`);
-      const activeCombat = session.combats?.find((c) => c.status === "active") ?? null;
+      const activeCombat = pickActiveCombat(session.combats);
       set({ activeSession: session, activeCombat, isLoading: false });
       await get().loadPartyChars();
       if (activeCombat) await get().refreshRolls();
@@ -156,11 +174,17 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   startCombat: async (name, combatants) => {
     const sid = get().activeSession?.id;
     if (!sid) return;
-    const combat = await req<Combat>("POST", `/sessions/${sid}/combats`, { name, combatants });
-    set((s) => ({
-      activeCombat: combat,
-      activeSession: s.activeSession ? { ...s.activeSession, combats: [...s.activeSession.combats, combat] } : null,
-    }));
+    await req<Combat>("POST", `/sessions/${sid}/combats`, { name, combatants });
+    await get().loadSession(sid);
+  },
+
+  appendCombatantsToCombat: async (combatants) => {
+    const sid = get().activeSession?.id;
+    const cid = get().activeCombat?.id;
+    if (!sid || !cid || !combatants.length) return;
+    const combat = await req<Combat>("POST", `/sessions/${sid}/combats/${cid}/append-combatants`, { combatants });
+    set({ activeCombat: combat });
+    await get().loadSession(sid);
     await get().refreshRolls();
   },
 
@@ -169,7 +193,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const cid = get().activeCombat?.id;
     if (!sid || !cid) return;
     await req("POST", `/sessions/${sid}/combats/${cid}/end`);
-    set({ activeCombat: null, rollSummary: null });
+    set({ rollSummary: null });
+    await get().loadSession(sid);
   },
 
   nextRound: async () => {

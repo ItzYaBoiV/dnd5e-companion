@@ -51,9 +51,9 @@ const THEME_GLYPH: Record<string, string> = {
 
 type ForgeGridDungeon = {
   grid: number[][];
-  rooms: Array<{ id: number; x: number; y: number; w: number; h: number; cx: number; cy: number; theme?: string }>;
-  entities: Array<{ x: number; y: number; type: string; name?: string; roomId?: number; [k: string]: unknown }>;
-  decoOverlay: Array<{ x: number; y: number; ch: string; fg?: string; name?: string; roomId?: number; [k: string]: unknown }>;
+  rooms?: Array<{ id: number; x: number; y: number; w: number; h: number; cx: number; cy: number; theme?: string }>;
+  entities?: Array<{ x: number; y: number; type: string; name?: string; roomId?: number; [k: string]: unknown }>;
+  decoOverlay?: Array<{ x: number; y: number; ch: string; fg?: string; name?: string; roomId?: number; [k: string]: unknown }>;
   width: number;
   height: number;
   glyphs?: Record<string, string>;
@@ -61,7 +61,16 @@ type ForgeGridDungeon = {
 
 export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: boolean }): RenderCell[][] {
   const showThemes = !!forgeCfg?.showThemes;
-  const { grid, rooms, entities, decoOverlay, width: W, height: H, glyphs: rawG = {} } = dg;
+  const grid = dg.grid;
+  const rooms = dg.rooms ?? [];
+  const entities = dg.entities ?? [];
+  const decoOverlay = dg.decoOverlay ?? [];
+  const W = dg.width;
+  const H = dg.height;
+  const rawG = dg.glyphs ?? {};
+  if (!grid || !Array.isArray(grid) || grid.length === 0 || typeof W !== "number" || typeof H !== "number") {
+    throw new Error("buildRenderGrid: missing grid, width, or height");
+  }
   const G = {
     floor: ".",
     wall: "#",

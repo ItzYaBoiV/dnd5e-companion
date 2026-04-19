@@ -45,14 +45,14 @@ services:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: 3001
       SEED_ON_START: ${SEED_ON_START:-false}
-      AI_BASE_URL: ${AI_BASE_URL:-http://host.docker.internal:4000}
+      # Optional LLM stack (ai-workers / LiteLLM). Omitted from default compose — set in .env if you re-enable AI routes.
+      AI_BASE_URL: ${AI_BASE_URL:-}
       AI_MODEL: ${AI_MODEL:-dnd-generator}
-      # Long runs for local LLMs (dungeon JSON); nginx /api + LiteLLM YAML must match or exceed
       AI_CHAT_TIMEOUT_MS: ${AI_CHAT_TIMEOUT_MS:-1800000}
       AI_CHAT_STREAM_TIMEOUT_MS: ${AI_CHAT_STREAM_TIMEOUT_MS:-1800000}
-      LITELLM_CONFIG_PATH: /app/litellm-config.yaml
-      # Poll worker IPs; refresh LiteLLM when Ollama model tags change (ms). 0 = off.
-      WORKER_RECONCILE_MS: ${WORKER_RECONCILE_MS:-300000}
+      LITELLM_CONFIG_PATH: ${LITELLM_CONFIG_PATH:-/app/litellm-config.yaml}
+      # 0 = no worker polling / LiteLLM file sync (recommended when not using ai-workers).
+      WORKER_RECONCILE_MS: ${WORKER_RECONCILE_MS:-0}
       WORKER_RECONCILE_INITIAL_MS: ${WORKER_RECONCILE_INITIAL_MS:-20000}
       # Host-visible logs for debugging (see ./logs/HOST_LOGS)
       FILE_LOG_DIR: /app/logs
@@ -60,9 +60,10 @@ services:
       - "56791:3001"
     volumes:
       - ./logs/backend:/app/logs
-      - ./ai-workers/load-balancer/litellm-config.yaml:/app/litellm-config.yaml
-      - ./ai-workers/load-balancer/worker-registry.json:/app/worker-registry.json
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Optional: mount LiteLLM config + worker registry + docker.sock when using ai-workers/ (see ai-workers/README.md).
+      # - ./ai-workers/load-balancer/litellm-config.yaml:/app/litellm-config.yaml
+      # - ./ai-workers/load-balancer/worker-registry.json:/app/worker-registry.json
+      # - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -89,4 +90,4 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.0.0/24
+        - subnet: 172.22.0.0/24

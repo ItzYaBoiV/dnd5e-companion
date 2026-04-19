@@ -3,6 +3,9 @@
  * Tile type constants MUST match `DUNGEON_T` in dungeonForgeConstants.ts.
  */
 
+import type { BattleToken, SceneLight } from "@/lib/playerMapBroadcast";
+import { collectTorchFixtureLights, computeOccludedLightDarkness } from "@/lib/dungeonLightOcclusion";
+
 export type TilePalette = {
   void: string;
   wallBg: string;
@@ -64,6 +67,12 @@ export type RenderTileOpts = {
   animPhase?: number;
   /** Simple radial dimming from a grid cell (player lantern / torch). */
   lighting?: { gx: number; gy: number; radiusCells: number; intensity?: number } | null;
+  /** Multiple torches / sconces; combines with max brightness (see render loop). */
+  sceneLights?: SceneLight[] | null;
+  /** DM / player battle pips (drawn above terrain; respect fog when `fogCells` set). Token coords match the `grid` passed in (local if cropped). */
+  battleTokens?: BattleToken[] | null;
+  /** Loaded images for `BattleToken.portraitUrl` / `spriteUrl` (keyed by URL). */
+  tokenImages?: Map<string, HTMLImageElement> | null;
 };
 
 export type RenderCell = {
@@ -174,7 +183,23 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
   const hi = opts.highlightRoom;
   const animPhase = opts.animPhase ?? 0;
   const doorStates = opts.doorStates ?? null;
-  const lighting = opts.lighting ?? null;
+  const sceneLights: SceneLight[] = (() => {
+    if (opts.sceneLights?.length) return opts.sceneLights;
+    const L = opts.lighting;
+    if (L) return [{ gx: L.gx, gy: L.gy, radiusCells: L.radiusCells, intensity: L.intensity }];
+    return [];
+  })();
+
+  const fixtureTorchLights = collectTorchFixtureLights(grid, cols, rows);
+  const mergedLights: SceneLight[] = [...sceneLights, ...fixtureTorchLights];
+  const lightDarkBuf =
+    mergedLights.length > 0
+      ? computeOccludedLightDarkness(grid, cols, rows, mergedLights, {
+          doorOpen: opts.doorOpen ?? null,
+          doorStates: opts.doorStates ?? null,
+          animPhase,
+        })
+      : null;
 
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
@@ -224,19 +249,105 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
         showEnts,
         sanitize,
         hideDeco,
+        animPhase,
       );
 
-      if (lighting) {
-        const { gx: lx, gy: ly, radiusCells, intensity = 0.48 } = lighting;
-        const d = Math.hypot(x - lx, y - ly);
-        const falloff = Math.max(0, 1 - d / Math.max(0.5, radiusCells));
-        const dark = (1 - falloff) * intensity;
+      if (lightDarkBuf) {
+        const dark = lightDarkBuf[y * cols + x] ?? 0;
         if (dark > 0.001) {
           ctx.fillStyle = `rgba(0,0,0,${dark})`;
           ctx.fillRect(px, py, cellPx, cellPx);
         }
       }
     }
+  }
+
+  const tokens = opts.battleTokens;
+  if (tokens?.length) {
+    drawBattleTokens(ctx, tokens, cellPx, fog, cols, rows, opts.tokenImages ?? null);
+  }
+}
+
+function drawTokenImageInCircle(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+  img: HTMLImageElement,
+): boolean {
+  const iw = img.naturalWidth || img.width;
+  const ih = img.naturalHeight || img.height;
+  if (!iw || !ih) return false;
+  const d = radius * 2;
+  const scale = Math.max(d / iw, d / ih);
+  const w = iw * scale;
+  const h = ih * scale;
+  const dx = cx - w / 2;
+  const dy = cy - h / 2;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.drawImage(img, dx, dy, w, h);
+  ctx.restore();
+  return true;
+}
+
+function tokenImageUrl(t: BattleToken): string | undefined {
+  return t.portraitUrl || t.spriteUrl;
+}
+
+function drawBattleTokens(
+  ctx: CanvasRenderingContext2D,
+  tokens: BattleToken[],
+  cellPx: number,
+  fog: Set<string> | null | undefined,
+  cols: number,
+  rows: number,
+  tokenImages: Map<string, HTMLImageElement> | null,
+): void {
+  for (const t of tokens) {
+    const gx = Math.floor(t.gx);
+    const gy = Math.floor(t.gy);
+    if (gx < 0 || gy < 0 || gx >= cols || gy >= rows) continue;
+    if (fog && !fog.has(`${gx},${gy}`)) continue;
+    const px = gx * cellPx;
+    const py = gy * cellPx;
+    const s = cellPx;
+    const cx = px + s / 2;
+    const cy = py + s / 2;
+    const radius = Math.max(3, s * 0.34);
+    const url = tokenImageUrl(t);
+    const img = url && tokenImages ? tokenImages.get(url) : undefined;
+    let drew = false;
+    if (img && img.complete && img.naturalWidth > 0) {
+      drew = drawTokenImageInCircle(ctx, cx, cy, radius, img);
+    }
+    if (!drew) {
+      const fill = t.kind === "player" ? "#4ade80" : "#f87171";
+      ctx.fillStyle = fill;
+      ctx.strokeStyle = "rgba(0,0,0,0.88)";
+      ctx.lineWidth = Math.max(1, s * 0.08);
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      const short =
+        (t.label ?? "").trim().slice(0, 2).toUpperCase() || (t.kind === "player" ? "P" : "M");
+      if (s >= 9) {
+        ctx.fillStyle = "#0c0c0c";
+        ctx.font = `bold ${Math.floor(s * 0.36)}px monospace`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(short, cx, cy + 0.5);
+      }
+      continue;
+    }
+    ctx.strokeStyle = "rgba(0,0,0,0.88)";
+    ctx.lineWidth = Math.max(1, s * 0.08);
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.stroke();
   }
 }
 
@@ -537,6 +648,58 @@ function drawTileByKind(
   ctx.fillRect(px, py, s, s);
 }
 
+function drawWallTorchDeco(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  s: number,
+  animPhase: number,
+  accent: string,
+): void {
+  const flick = 0.82 + Math.sin(animPhase * Math.PI * 2 * 4.6) * 0.11 + Math.sin(animPhase * Math.PI * 2 * 10.3) * 0.05;
+  const bob = Math.sin(animPhase * Math.PI * 2 * 2.8) * s * 0.025;
+  const bx = px + Math.floor(s * 0.34);
+  const by = py + Math.floor(s * 0.12) + bob;
+  const w = Math.max(2, Math.floor(s * 0.22 * flick));
+  const h = Math.max(3, Math.floor(s * 0.42 * flick));
+
+  ctx.fillStyle = "#2c2824";
+  ctx.fillRect(bx - 1, Math.floor(py + s * 0.52), Math.max(2, Math.floor(s * 0.22)), Math.floor(s * 0.38));
+
+  ctx.fillStyle = "#1a0804";
+  ctx.globalAlpha = 0.45;
+  ctx.fillRect(bx - 1, by + h - 1, w + 3, Math.max(1, Math.floor(s * 0.04)));
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = "#cc4400";
+  ctx.fillRect(bx, by, w, h);
+  ctx.fillStyle = "#ff7a1a";
+  ctx.fillRect(
+    bx + Math.floor(w * 0.15),
+    by + Math.floor(h * 0.12),
+    Math.max(1, Math.floor(w * 0.55)),
+    Math.max(1, Math.floor(h * 0.5)),
+  );
+  ctx.fillStyle = "#ffe8a0";
+  ctx.globalAlpha = 0.95;
+  ctx.fillRect(
+    bx + Math.floor(w * 0.35),
+    by + Math.floor(h * 0.08),
+    Math.max(1, Math.floor(w * 0.28)),
+    Math.max(1, Math.floor(h * 0.28)),
+  );
+  ctx.globalAlpha = 1;
+
+  const cx = bx + w / 2;
+  const cy = by + h * 0.35;
+  ctx.globalAlpha = 0.14 + flick * 0.1;
+  ctx.fillStyle = accent;
+  ctx.beginPath();
+  ctx.arc(cx, cy, s * 0.34 * flick, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
 function drawOverlays(
   ctx: CanvasRenderingContext2D,
   cell: RenderCell,
@@ -548,6 +711,7 @@ function drawOverlays(
   showEnts: boolean,
   sanitize: boolean,
   hideDeco: Set<string>,
+  animPhase: number,
 ): void {
   const hideEntity = !showEnts && (cell.eType === "monster" || cell.eType === "trap" || cell.eType === "item");
   if (hideEntity) return;
@@ -617,6 +781,14 @@ function drawOverlays(
 
   if (cell.eType === "deco") {
     const fg = cell.fg ?? ep.deco;
+    const decoKey =
+      cell.extra && typeof cell.extra === "object" && "decoKey" in cell.extra
+        ? String((cell.extra as { decoKey?: string }).decoKey ?? "")
+        : "";
+    if (decoKey === "torch_w" && s >= 6) {
+      drawWallTorchDeco(ctx, px, py, s, animPhase, fg);
+      return;
+    }
     ctx.fillStyle = fg;
     ctx.font = `${Math.floor(s * 0.65)}px monospace`;
     ctx.textAlign = "center";

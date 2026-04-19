@@ -248,6 +248,9 @@ export interface Character {
   skin:              string;
   hair:              string;
 
+  /** Optional photo or image for map tokens and character list. */
+  tokenPortraitUrl?: string | null;
+
   copper:   number;
   silver:   number;
   electrum: number;
@@ -289,6 +292,7 @@ export interface CharacterSummary {
   currentHp: number;
   maxHp:     number;
   updatedAt: string;
+  tokenPortraitUrl?: string | null;
 }
 
 // ── SRD Reference Types ───────────────────────────────────────────

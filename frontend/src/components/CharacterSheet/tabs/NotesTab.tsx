@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import type { Character } from "@/types/dnd";
 import { useCharacterStore } from "@/store/characterStore";
+import { useSessionStore } from "@/store/sessionStore";
 import { SectionHeader } from "@/components/common";
 import { SpellAssist, spellDict, type SpellIssue } from "@/components/CharacterSheet/SpellAssist";
+import { compressImageFileToDataUrl } from "@/lib/imageCompress";
 
 interface Props {
   character: Character;
@@ -10,6 +12,32 @@ interface Props {
 
 export default function NotesTab({ character }: Props) {
   const { updateCharacterField } = useCharacterStore();
+  const loadPartyChars = useSessionStore((s) => s.loadPartyChars);
+  const activeSession = useSessionStore((s) => s.activeSession);
+
+  const syncPortraitToPlaySession = () => {
+    if (activeSession?.characters.some((c) => c.characterId === character.id)) {
+      void loadPartyChars();
+    }
+  };
+
+  const onTokenPortraitFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f?.type.startsWith("image/")) return;
+    try {
+      const dataUrl = await compressImageFileToDataUrl(f);
+      await updateCharacterField({ tokenPortraitUrl: dataUrl });
+      syncPortraitToPlaySession();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const clearTokenPortrait = async () => {
+    await updateCharacterField({ tokenPortraitUrl: null });
+    syncPortraitToPlaySession();
+  };
 
   return (
     <div className="p-4 max-w-5xl mx-auto space-y-4">
@@ -46,6 +74,43 @@ export default function NotesTab({ character }: Props) {
         {/* Appearance */}
         <div className="dnd-card space-y-3">
           <SectionHeader title="Appearance & Background" />
+          <div className="flex flex-wrap items-center gap-3 rounded border border-gray-700/80 bg-black/20 p-3">
+            <div className="h-14 w-14 shrink-0 overflow-hidden rounded-full border border-gray-600 bg-gray-900">
+              {character.tokenPortraitUrl ? (
+                <img
+                  src={character.tokenPortraitUrl}
+                  alt=""
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center px-1 text-center text-[10px] text-gray-500">
+                  Pixel token
+                </div>
+              )}
+            </div>
+            <div className="min-w-0 flex-1 space-y-1 text-xs">
+              <p className="font-medium text-gray-300">Token photo</p>
+              <p className="text-gray-500">
+                Used on the tactical map and player TV. If empty, a class pixel token appears in play.
+              </p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <label className="btn-ghost cursor-pointer px-2 py-1">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(ev) => void onTokenPortraitFile(ev)}
+                  />
+                  {character.tokenPortraitUrl ? "Replace photo" : "Upload photo"}
+                </label>
+                {character.tokenPortraitUrl ? (
+                  <button type="button" className="text-red-400/90 hover:underline" onClick={() => void clearTokenPortrait()}>
+                    Remove
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>
           <div className="grid grid-cols-2 gap-2">
             {([
               ["age",    "Age"],

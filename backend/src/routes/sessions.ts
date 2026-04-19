@@ -21,6 +21,7 @@ sessionRouter.get("/:id/dungeon", ctrl.getSessionDungeon);
 
 // Combat
 sessionRouter.post("/:id/combats",                                        ctrl.startCombat);
+sessionRouter.post("/:id/combats/:combatId/append-combatants",            ctrl.appendCombatantsToCombat);
 sessionRouter.get("/:id/combats/:combatId",                               ctrl.getCombat);
 sessionRouter.post("/:id/combats/:combatId/next-round",                   ctrl.nextRound);
 sessionRouter.post("/:id/combats/:combatId/end",                          ctrl.endCombat);

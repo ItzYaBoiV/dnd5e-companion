@@ -80,6 +80,9 @@ model Character {
   skin              String @default("")
   hair              String @default("")
 
+  /// Optional token image: compressed data URL or https URL; shown on battle map / TV.
+  tokenPortraitUrl  String? @db.Text
+
   // --- Currency (in individual coins) ---
   copper   Int @default(0)
   silver   Int @default(0)

@@ -12,6 +12,7 @@ import { useSessionStore } from "@/store/sessionStore";
 import { DUNGEON_T as T } from "@/lib/dungeonForgeConstants";
 import { buildRenderGrid } from "@/lib/dungeonForgeRenderGrid";
 import { computeVisibleCellsForPlayer, inferStartingRoomId, isOpenFloorLocation } from "@/lib/dungeonForgeFog";
+import { broadcastPlayerMapState } from "@/lib/playerMapBroadcast";
 
 /* ═══════════════════════════════════════════════════════════════════════
    D&D 5e DUNGEON FORGE v3 — Location-Aware Procedural Map Generator
@@ -1776,7 +1777,12 @@ export default function DungeonForge(){
   const [selectedSessionId,setSelectedSessionId]=useState("");
   const [sendMsg,setSendMsg]=useState(null);
   const [doorOpen,setDoorOpen]=useState(()=>new Set());
+  const [animPhase,setAnimPhase]=useState(0);
   const { partyCharacters, sessions, activeSession, loadSessions } = useSessionStore();
+  useEffect(()=>{
+    const id=window.setInterval(()=>setAnimPhase((p)=>(p+0.04)%1),120);
+    return()=>clearInterval(id);
+  },[]);
   useEffect(()=>{
     const el=mapViewportRef.current;
     if(!el)return;
@@ -2139,12 +2145,7 @@ export default function DungeonForge(){
       selectedRoomId:overrides.selectedRoomId!==undefined?overrides.selectedRoomId:selRoom,
       fogColor:overrides.fogColor??"#000000",
     };
-    try{localStorage.setItem("dnd5e-player-map-state",JSON.stringify(state));}catch(_){/* ignore */}
-    try{
-      const bc=new BroadcastChannel("dnd5e-player-map");
-      bc.postMessage(state);
-      bc.close();
-    }catch(_){/* ignore */}
+    broadcastPlayerMapState(state);
   },[dg,revealed,doorOpen,selRoom,cfg.locationType]);
   useEffect(()=>{
     if(cfg.autoSync&&dg)pushToPlayerScreen();
@@ -2353,8 +2354,21 @@ export default function DungeonForge(){
             disabled={!dg||!selectedSessionId}
             onClick={async()=>{
               if(!dg||!selectedSessionId)return;
-              const payload={dungeonSeed:cfg.seed,locationType:cfg.locationType,mapName:dg.mapName,rooms:dg.rooms,entities:dg.entities,width:dg.width,height:dg.height,floor:curFloor,grid:dg.grid};
+              const payload={
+                dungeonSeed:cfg.seed,
+                locationType:cfg.locationType,
+                mapName:dg.mapName,
+                rooms:dg.rooms,
+                entities:dg.entities,
+                decoOverlay:dg.decoOverlay??[],
+                glyphs:dg.glyphs,
+                width:dg.width,
+                height:dg.height,
+                floor:curFloor,
+                grid:dg.grid,
+              };
               await fetch(`/api/sessions/${selectedSessionId}/dungeon`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+              try{window.postMessage({type:"forge:session-dungeon-saved",sessionId:selectedSessionId},"*");}catch(_){/* noop */}
               setSendMsg("Sent to session!");
               setTimeout(()=>setSendMsg(null),3000);
             }}
@@ -2438,6 +2452,7 @@ export default function DungeonForge(){
                         showEnts={!isP}
                         playerSanitize={false}
                         highlightRoom={highlightRoom}
+                        animPhase={animPhase}
                         onCellClick={handleMapCellClick}
                       />
                       {isP&&revealableDoors.map(({x,y})=>(
@@ -2627,56 +2642,10 @@ export default function DungeonForge(){
                       )}
                     </div>))}
                     {!isP&&re.some(e=>e.type==="monster")&&(
-                      <div style={{display:"flex",gap:4,marginTop:8}}>
-                        <button
-                          onClick={()=>{
-                            const payload={
-                              v:1,
-                              savedAt:new Date().toISOString(),
-                              source:"dungeon-forge",
-                              config:{
-                                seed:cfg.seed,
-                                locationType:cfg.locationType,
-                                level:cfg.level,
-                                roomCount:cfg.roomCount,
-                                depth:cfg.depth,
-                              },
-                              floors:floors.map(f=>({
-                                floor:f.floor,
-                                seed:cfg.seed,
-                                mapName:f.mapName||dg?.mapName,
-                                locationType:cfg.locationType,
-                                width:f.width||dg?.width,
-                                height:f.height||dg?.height,
-                                rooms:f.rooms,
-                                entities:f.entities,
-                              })),
-                            };
-                            sessionStorage.setItem("dnd5e_gm_encounter", JSON.stringify(payload));
-                            window.location.href="/play";
-                          }}
-                          style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}
-                        >
-                          SEND TO GM BATTLE
-                        </button>
-                        <button
-                          onClick={()=>{
-                            const monsters=re.filter(e=>e.type==="monster").map(e=>({name:e.name,count:e.count,cr:e.cr}));
-                            const payload={
-                              version:1,
-                              roomName:rm.label||rm.type,
-                              floor:curFloor,
-                              monsters,
-                            };
-                            sessionStorage.setItem("dnd5e-gm-hub-encounter-import-v1", JSON.stringify(payload));
-                            window.location.href="/play";
-                          }}
-                          style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}
-                        >
-                          SEND TO PLAY (DM)
-                        </button>
+                      <div style={{marginTop:8}}>
                         <button
                           type="button"
+                          disabled={!selectedSessionId}
                           onClick={async()=>{
                             const monsters=re.filter(e=>e.type==="monster");
                             if(monsters.length===0)return;
@@ -2687,6 +2656,7 @@ export default function DungeonForge(){
                               seed:cfg.seed,
                               locationType:cfg.locationType,
                               level:cfg.level,
+                              sessionId:selectedSessionId||undefined,
                               rooms:dg.rooms.map(r=>({id:r.id,name:r.namedRoom||r.label,theme:r.theme,depth:r.depth,shape:r.shape,boundingBox:{x:r.x,y:r.y,w:r.w,h:r.h}})),
                               encounters:[{
                                 roomId:rm.id,
@@ -2702,13 +2672,13 @@ export default function DungeonForge(){
                               const res=await fetch("/api/encounters/import-from-forge",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
                               const data=await res.json().catch(()=>({}));
                               if(!res.ok) throw new Error(typeof data.error==="string"?data.error:`HTTP ${res.status}`);
-                              setSaveLibraryMsg(data.createdEncounterIds?.length?`Created ${data.createdEncounterIds.length} combat(s) in session.`:"Import OK (add sessionId to body to persist).");
+                              setSaveLibraryMsg(data.createdEncounterIds?.length?`Created ${data.createdEncounterIds.length} combat(s) in session.`:"Import completed.");
                               setTimeout(()=>setSaveLibraryMsg(null),6000);
                             }catch(err){ setSaveLibraryMsg(String(err)); }
                           }}
-                          style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}
+                          style={{padding:"6px 8px",fontSize:11,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:selectedSessionId?"pointer":"not-allowed",width:"100%",opacity:selectedSessionId?1:0.45}}
                         >
-                          API v2
+                          START COMBAT IN SESSION
                         </button>
                       </div>
                     )}

@@ -5,6 +5,8 @@ import {
   type RenderCell,
   type TilePalette,
 } from "@/lib/dungeonTileRenderer";
+import type { BattleToken, SceneLight } from "@/lib/playerMapBroadcast";
+import { useBattleTokenImages } from "@/lib/useBattleTokenImages";
 
 export type DungeonMapCanvasProps = {
   grid: RenderCell[][];
@@ -21,6 +23,10 @@ export type DungeonMapCanvasProps = {
   doorStates?: Record<string, string> | null;
   animPhase?: number;
   lighting?: { gx: number; gy: number; radiusCells: number; intensity?: number } | null;
+  sceneLights?: SceneLight[] | null;
+  battleTokens?: BattleToken[] | null;
+  /** When the `grid` prop is a cropped window, pass the top-left of that window in full-map coords. */
+  worldOffset?: { x: number; y: number };
   className?: string;
   style?: React.CSSProperties;
   onCellClick?: (x: number, y: number, cell: RenderCell) => void;
@@ -41,13 +47,19 @@ function DungeonMapCanvasInner({
   doorStates,
   animPhase,
   lighting,
+  sceneLights,
+  battleTokens,
+  worldOffset,
   className,
   style,
   onCellClick,
   onCellHover,
 }: DungeonMapCanvasProps) {
+  const ox = worldOffset?.x ?? 0;
+  const oy = worldOffset?.y ?? 0;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+  const { images: tokenImages, version: tokenImagesVersion } = useBattleTokenImages(battleTokens);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -66,6 +78,9 @@ function DungeonMapCanvasInner({
       doorStates: doorStates ?? null,
       animPhase,
       lighting: lighting ?? null,
+      sceneLights: sceneLights ?? null,
+      battleTokens: battleTokens ?? null,
+      tokenImages,
       inkSaver: false,
     });
   }, [
@@ -83,6 +98,9 @@ function DungeonMapCanvasInner({
     doorStates,
     animPhase,
     lighting,
+    sceneLights,
+    battleTokens,
+    tokenImagesVersion,
   ]);
 
   function cellFromEvent(e: React.MouseEvent): { x: number; y: number; cell: RenderCell } | null {
@@ -97,7 +115,7 @@ function DungeonMapCanvasInner({
     const gy = Math.min(rows - 1, Math.max(0, Math.floor((iy / rect.height) * rows)));
     const cell = grid[gy]?.[gx];
     if (!cell) return null;
-    return { x: gx, y: gy, cell };
+    return { x: gx + ox, y: gy + oy, cell };
   }
 
   return (
@@ -111,7 +129,9 @@ function DungeonMapCanvasInner({
       }}
       onMouseMove={(e) => {
         const r = cellFromEvent(e);
-        onCellHover?.(r?.x ?? -1, r?.y ?? -1, r?.cell ?? null);
+        const hx = r ? r.x : -1;
+        const hy = r ? r.y : -1;
+        onCellHover?.(hx, hy, r?.cell ?? null);
       }}
       onMouseLeave={() => onCellHover?.(-1, -1, null)}
     />

@@ -3,29 +3,10 @@ import { buildRenderGrid } from "@/lib/dungeonForgeRenderGrid";
 import { computeVisibleCellsForPlayer, isOpenFloorLocation } from "@/lib/dungeonForgeFog";
 import { renderDungeonToCanvas } from "@/lib/dungeonTileRenderer";
 import { DEFAULT_PALETTE, ENTITY_PALETTE, LOCATION_PALETTE } from "@/lib/dungeonTilePalettes";
+import type { PlayerMapBroadcast } from "@/lib/playerMapBroadcast";
+import { useBattleTokenImages } from "@/lib/useBattleTokenImages";
 
-type PlayerDungeonData = {
-  grid: number[][];
-  rooms: Array<{ id: number; x: number; y: number; w: number; h: number; cx: number; cy: number; [k: string]: unknown }>;
-  width?: number;
-  height?: number;
-  mapName?: string;
-  entities?: Array<{ x: number; y: number; type: string; [k: string]: unknown }>;
-  decoOverlay?: Array<{ x: number; y: number; ch: string; [k: string]: unknown }>;
-  locationType?: string;
-  floor?: number;
-  glyphs?: Record<string, string>;
-};
-
-type PlayerState = {
-  dungeonData?: PlayerDungeonData;
-  revealedCells?: string[];
-  revealed?: number[];
-  doorOpen?: string[];
-  fogColor?: string;
-};
-
-function gridDims(dg: NonNullable<PlayerState["dungeonData"]>): { gw: number; gh: number } {
+function gridDims(dg: NonNullable<PlayerMapBroadcast["dungeonData"]>): { gw: number; gh: number } {
   const gh = Array.isArray(dg.grid) ? dg.grid.length : 0;
   const gw = gh > 0 && Array.isArray(dg.grid[0]) ? dg.grid[0]!.length : 0;
   return {
@@ -64,13 +45,14 @@ function cellKeysBBox(
 
 export default function DungeonsPlayerPage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [mapState, setMapState] = useState<PlayerState | null>(null);
+  const [mapState, setMapState] = useState<PlayerMapBroadcast | null>(null);
   const [animPhase, setAnimPhase] = useState(0);
-  const mapStateRef = useRef<PlayerState | null>(null);
+  const mapStateRef = useRef<PlayerMapBroadcast | null>(null);
   mapStateRef.current = mapState;
+  const { images: tokenImages, version: tokenImagesVersion } = useBattleTokenImages(mapState?.battleTokens);
 
   useEffect(() => {
-    const id = window.setInterval(() => setAnimPhase((p) => (p + 0.06) % 1), 160);
+    const id = window.setInterval(() => setAnimPhase((p) => (p + 0.04) % 1), 120);
     return () => window.clearInterval(id);
   }, []);
 
@@ -79,7 +61,7 @@ export default function DungeonsPlayerPage() {
       try {
         const raw = localStorage.getItem("dnd5e-player-map-state");
         if (!raw) return;
-        setMapState(JSON.parse(raw) as PlayerState);
+        setMapState(JSON.parse(raw) as PlayerMapBroadcast);
       } catch {
         /* ignore */
       }
@@ -89,7 +71,7 @@ export default function DungeonsPlayerPage() {
     let bc: BroadcastChannel | null = null;
     try {
       bc = new BroadcastChannel("dnd5e-player-map");
-      bc.onmessage = (ev) => setMapState(ev.data as PlayerState);
+      bc.onmessage = (ev) => setMapState(ev.data as PlayerMapBroadcast);
     } catch {
       /* ignore */
     }
@@ -132,7 +114,8 @@ export default function DungeonsPlayerPage() {
     if (gw < 1 || gh < 1) return;
 
     const revealed = new Set(mapState?.revealed ?? []);
-    const doorOpen = new Set(mapState?.doorOpen ?? []);
+    const doorOpen =
+      mapState?.doorOpen === undefined || mapState.doorOpen === null ? null : new Set(mapState.doorOpen);
     const locType = dg.locationType ?? "dungeon";
     const fogCells = computeVisibleCellsForPlayer(revealed, dg, doorOpen, null, {
       openFloor: isOpenFloorLocation(locType),
@@ -142,19 +125,37 @@ export default function DungeonsPlayerPage() {
     const palette = LOCATION_PALETTE[loc] ?? DEFAULT_PALETTE;
     const rg = buildRenderGrid(dg, { showThemes: false });
 
-    const bbox = cellKeysBBox(fogCells, gw, gh);
-    const useFull = bbox === null || fogCells.size === 0;
+    const vc = mapState?.viewCrop;
     let minX = 0;
     let minY = 0;
     let maxX = gw - 1;
     let maxY = gh - 1;
     const pad = 2;
-    if (bbox && !useFull) {
-      minX = Math.max(0, bbox.minX - pad);
-      minY = Math.max(0, bbox.minY - pad);
-      maxX = Math.min(gw - 1, bbox.maxX + pad);
-      maxY = Math.min(gh - 1, bbox.maxY + pad);
+
+    if (
+      vc &&
+      Number.isFinite(vc.minX) &&
+      Number.isFinite(vc.minY) &&
+      Number.isFinite(vc.maxX) &&
+      Number.isFinite(vc.maxY) &&
+      vc.maxX >= vc.minX &&
+      vc.maxY >= vc.minY
+    ) {
+      minX = Math.max(0, Math.floor(vc.minX));
+      minY = Math.max(0, Math.floor(vc.minY));
+      maxX = Math.min(gw - 1, Math.floor(vc.maxX));
+      maxY = Math.min(gh - 1, Math.floor(vc.maxY));
+    } else {
+      const bbox = cellKeysBBox(fogCells, gw, gh);
+      const useFull = bbox === null || fogCells.size === 0;
+      if (bbox && !useFull) {
+        minX = Math.max(0, bbox.minX - pad);
+        minY = Math.max(0, bbox.minY - pad);
+        maxX = Math.min(gw - 1, bbox.maxX + pad);
+        maxY = Math.min(gh - 1, bbox.maxY + pad);
+      }
     }
+
     const bw = maxX - minX + 1;
     const bh = maxY - minY + 1;
 
@@ -191,6 +192,20 @@ export default function DungeonsPlayerPage() {
       fogAdj.add(`${gx - minX},${gy - minY}`);
     }
 
+    const battleTok = (mapState?.battleTokens ?? [])
+      .map((t) => ({
+        ...t,
+        gx: t.gx - minX,
+        gy: t.gy - minY,
+      }))
+      .filter((t) => t.gx >= 0 && t.gy >= 0 && t.gx < bw && t.gy < bh);
+
+    const sceneLights = (mapState?.sceneLights ?? []).map((L) => ({
+      ...L,
+      gx: L.gx - minX,
+      gy: L.gy - minY,
+    }));
+
     renderDungeonToCanvas(c, sub, {
       palette,
       entities: ENTITY_PALETTE,
@@ -202,8 +217,11 @@ export default function DungeonsPlayerPage() {
       showEnts: false,
       playerSanitize: true,
       inkSaver: false,
+      battleTokens: battleTok.length ? battleTok : null,
+      tokenImages,
+      sceneLights: sceneLights.length ? sceneLights : null,
     });
-  }, [mapState, animPhase]);
+  }, [mapState, animPhase, tokenImagesVersion]);
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black">

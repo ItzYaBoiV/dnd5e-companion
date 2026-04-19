@@ -72,6 +72,7 @@ export async function listCharacters() {
     select: {
       id: true, name: true, raceSlug: true, classSlug: true,
       level: true, currentHp: true, maxHp: true, updatedAt: true,
+      tokenPortraitUrl: true,
     },
     orderBy: { updatedAt: "desc" },
   });

@@ -1,15 +1,15 @@
 import { useEffect } from "react";
 import { Outlet, NavLink, useLocation, useNavigate } from "react-router-dom";
-import { BookOpen, Users, Menu, X, Shield, Swords, Wand2, Skull } from "lucide-react";
+import { BookOpen, Users, Menu, X, Shield, Swords, Map, Skull } from "lucide-react";
 import { useUIStore } from "@/store/uiStore";
 import { clsx } from "clsx";
 
 const NAV = [
-  { to: "/characters", icon: Users, label: "Characters", shortLabel: "Chars" },
-  { to: "/play", icon: Swords, label: "Play (DM)", shortLabel: "Play" },
-  { to: "/dungeons", icon: Wand2, label: "Maps", shortLabel: "Maps" },
-  { to: "/monsters", icon: Skull, label: "Monsters", shortLabel: "Monsters" },
-  { to: "/reference/spells", icon: BookOpen, label: "Reference", shortLabel: "Ref" },
+  { to: "/characters", icon: Users, label: "Characters", shortLabel: "Chars", description: "Create and edit player characters." },
+  { to: "/play", icon: Swords, label: "Play (DM)", shortLabel: "Play", description: "Generate a map, pick your party, run the fight." },
+  { to: "/dungeons", icon: Map, label: "Map Library", shortLabel: "Library", description: "Author and save maps for re-use." },
+  { to: "/monsters", icon: Skull, label: "Monsters", shortLabel: "Monsters", description: "Browse the monster compendium." },
+  { to: "/reference/spells", icon: BookOpen, label: "Reference", shortLabel: "Ref", description: "Spells, rules, and quick reference." },
 ] as const;
 
 function routeIsActive(pathname: string, to: string): boolean {
@@ -61,10 +61,11 @@ export default function AppShell() {
         </div>
 
         <nav className="flex flex-col gap-1 p-2 flex-1">
-          {NAV.map(({ to, icon: Icon, label }) => (
+          {NAV.map(({ to, icon: Icon, label, description }) => (
             <NavLink
               key={to}
               to={to}
+              title={description}
               className={() =>
                 clsx(
                   "flex items-center gap-3 px-3 py-2.5 rounded-md transition-colors",
@@ -99,12 +100,13 @@ export default function AppShell() {
         style={{ paddingBottom: "max(0.35rem, env(safe-area-inset-bottom, 0px))" }}
         aria-label="Main navigation"
       >
-        {NAV.map(({ to, icon: Icon, shortLabel }) => {
+        {NAV.map(({ to, icon: Icon, shortLabel, description }) => {
           const active = routeIsActive(pathname, to);
           return (
             <NavLink
               key={to}
               to={to}
+              title={description}
               className={clsx(
                 "flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg py-1.5 transition-colors touch-manipulation",
                 active ? "bg-dnd-red text-parchment" : "text-stone-400 active:bg-dnd-panel"

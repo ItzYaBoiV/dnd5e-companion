@@ -33,6 +33,14 @@ export const startCombat = async (req: Request<{ id: string }>, res: Response) =
   res.status(201).json(await svc.startCombat(req.params.id, name, combatants));
 };
 
+export const appendCombatantsToCombat = async (
+  req: Request<{ id: string; combatId: string }>,
+  res: Response
+) => {
+  const { combatants } = req.body as { combatants: any[] };
+  res.json(await svc.appendCombatantsToCombat(req.params.id, req.params.combatId, combatants ?? []));
+};
+
 export const getCombat = async (req: Request<{ id: string; combatId: string }>, res: Response) =>
   res.json(await svc.getCombat(req.params.combatId));
 

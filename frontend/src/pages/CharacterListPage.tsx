@@ -115,6 +115,13 @@ function CharacterCard({
         className="dnd-card w-full text-left hover:border-gray-500 transition-all hover:shadow-lg hover:shadow-black/30 pr-12 sm:pr-14"
       >
         <div className="flex items-start gap-3 mb-3">
+          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full border border-gray-600 bg-gray-900">
+            {character.tokenPortraitUrl ? (
+              <img src={character.tokenPortraitUrl} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <div className="flex h-full items-center justify-center text-[10px] text-gray-600">—</div>
+            )}
+          </div>
           <div className="min-w-0 flex-1">
             <h2 className="font-display font-bold text-lg sm:text-xl text-white group-hover:text-dnd-gold transition-colors break-words text-left">
               {character.name}

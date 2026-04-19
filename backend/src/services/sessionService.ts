@@ -1,5 +1,5 @@
 import { prisma } from "../config/database";
-import { NotFoundError } from "../middleware/errorHandler";
+import { AppError, NotFoundError } from "../middleware/errorHandler";
 import { allModifiers, allSkills, allSavingThrows, proficiencyBonus } from "./calculationService";
 import type { AbilityName } from "./calculationService";
 
@@ -60,8 +60,51 @@ export interface CombatantInput {
   armorClass:   number;
 }
 
+/** Add monsters (or other combatants) to an in-progress fight without ending it. */
+export async function appendCombatantsToCombat(
+  sessionId: string,
+  combatId: string,
+  combatants: CombatantInput[]
+) {
+  const combat = await prisma.combat.findFirst({
+    where: { id: combatId, sessionId },
+    select: { id: true, status: true },
+  });
+  if (!combat) throw new NotFoundError("Combat");
+  if (combat.status !== "active") {
+    throw new AppError(400, "Only active combats accept new combatants", "COMBAT_NOT_ACTIVE");
+  }
+  if (combatants.length === 0) return getCombat(combatId);
+
+  await prisma.combatant.createMany({
+    data: combatants.map((c) => ({
+      combatId,
+      type: c.type,
+      characterId: c.characterId ?? null,
+      monsterSlug: c.monsterSlug ?? null,
+      label: c.label,
+      initiative: c.initiative,
+      currentHp: c.maxHp,
+      maxHp: c.maxHp,
+      temporaryHp: 0,
+      armorClass: c.armorClass,
+      conditions: [],
+      isConcentrating: false,
+      isAlive: true,
+      notes: "",
+    })),
+  });
+
+  return getCombat(combatId);
+}
+
 export async function startCombat(sessionId: string, name: string, combatants: CombatantInput[]) {
   await assertSessionExists(sessionId);
+  // Only one active combat per session — close strays so the client never binds to an old fight.
+  await prisma.combat.updateMany({
+    where: { sessionId, status: "active" },
+    data: { status: "completed" },
+  });
   return prisma.combat.create({
     data: {
       sessionId,
@@ -165,8 +208,9 @@ export async function getSessionRollSummary(sessionId: string) {
       characters: true,
       combats: {
         where:   { status: "active" },
+        orderBy: { createdAt: "desc" },
+        take:    1,
         include: { combatants: { where: { isAlive: true } } },
-        take: 1,
       },
     },
   });
@@ -248,32 +292,92 @@ export async function getSessionRollSummary(sessionId: string) {
   const dmRolls = activeCombat.combatants
     .filter((c) => c.type === "monster" && c.monsterSlug)
     .map((c) => {
-      const monster = monsterMap[c.monsterSlug!];
-      if (!monster) return null;
+      const slug = c.monsterSlug!;
+      const monster = monsterMap[slug];
 
-      const actions = (monster.actions as any[]).map((a: any) => ({
-        name:        a.name,
-        description: (a.desc ?? "").slice(0, 120),
-        attackBonus: a.attack_bonus ?? null,
-        damageDice:  a.damage?.[0]?.damage_dice ?? null,
-        damageBonus: a.damage?.[0]?.damage_bonus ?? null,
-        damageType:  a.damage?.[0]?.damage_type?.name ?? null,
-        saveDc:      a.dc?.dc_value ?? null,
-        saveType:    a.dc?.dc_type?.name ?? null,
-      }));
+      const mapActionRow = (a: any) => {
+        const dmg0 = Array.isArray(a?.damage) && a.damage[0] ? a.damage[0] : null;
+        const damageDice =
+          dmg0?.damage_dice ?? a?.damage_dice ?? null;
+        const damageBonus =
+          dmg0?.damage_bonus ?? a?.damage_bonus ?? null;
+        const damageType =
+          dmg0?.damage_type?.name ?? a?.damage_type?.name ?? (typeof a?.damage_type === "string" ? a.damage_type : null) ?? null;
+        return {
+          name:        a?.name ?? "Action",
+          description: String(a?.desc ?? "").slice(0, 500),
+          attackBonus: a?.attack_bonus ?? null,
+          damageDice,
+          damageBonus,
+          damageType,
+          saveDc:   a?.dc?.dc_value ?? null,
+          saveType: a?.dc?.dc_type?.name ?? null,
+        };
+      };
+
+      const actionsFromJson = (raw: unknown) => {
+        if (!Array.isArray(raw)) return [];
+        return raw.map(mapActionRow);
+      };
+
+      if (!monster) {
+        return {
+          combatantId: c.id,
+          label:       c.label,
+          monsterSlug: slug,
+          monsterName: c.label.replace(/\s+\d+$/, "").trim() || slug,
+          currentHp:   c.currentHp,
+          maxHp:       c.maxHp,
+          armorClass:  c.armorClass,
+          actions: [
+            {
+              name:        "Stat block not in database",
+              description: `Slug “${slug}” — open Monsters or use the tracker HP/AC.`,
+              attackBonus: null,
+              damageDice:  null,
+              damageBonus: null,
+              damageType:  null,
+              saveDc:      null,
+              saveType:    null,
+            },
+          ],
+        };
+      }
+
+      const actionsRaw = monster.actions;
+      let actions = actionsFromJson(actionsRaw);
+      if (actions.length === 0 && monster.legendaryActions != null) {
+        actions = actionsFromJson(monster.legendaryActions);
+      }
+      if (actions.length === 0 && monster.specialAbilities != null) {
+        actions = actionsFromJson(monster.specialAbilities);
+      }
+      if (actions.length === 0) {
+        actions = [
+          {
+            name:        "See stat block",
+            description: "Actions in DB are not in array form — use Monsters page or the book.",
+            attackBonus: null,
+            damageDice:  null,
+            damageBonus: null,
+            damageType:  null,
+            saveDc:      null,
+            saveType:    null,
+          },
+        ];
+      }
 
       return {
         combatantId:  c.id,
         label:        c.label,
-        monsterSlug:  c.monsterSlug,
+        monsterSlug:  slug,
         monsterName:  monster.name,
         currentHp:    c.currentHp,
         maxHp:        c.maxHp,
         armorClass:   c.armorClass,
         actions,
       };
-    })
-    .filter(Boolean);
+    });
 
   return {
     inCombat: true,

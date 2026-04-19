@@ -68,6 +68,9 @@ export const CreateCharacterObjectSchema = z.object({
   skin:       z.string().max(200).default(""),
   hair:       z.string().max(200).default(""),
 
+  /** Map / initiative token image (JPEG/PNG data URL or https URL). */
+  tokenPortraitUrl: z.string().max(600_000).optional().nullable(),
+
   /** Optional rows added to inventory right after the character is created (SRD gear you pick with your DM). */
   startingInventory: z
     .array(
