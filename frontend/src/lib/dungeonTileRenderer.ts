@@ -75,6 +75,11 @@ export type RenderTileOpts = {
   battleTokens?: BattleToken[] | null;
   /** Loaded images for `BattleToken.portraitUrl` / `spriteUrl` (keyed by URL). */
   tokenImages?: Map<string, HTMLImageElement> | null;
+  /**
+   * Draw a sight ring (grid radius) around **player** tokens instead of relying on volumetric lights.
+   * Used on DM + player TV for performance.
+   */
+  playerSightRingCells?: number | null;
 };
 
 export type RenderCell = {
@@ -268,6 +273,42 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
   if (tokens?.length) {
     drawBattleTokens(ctx, tokens, cellPx, fog, cols, rows, opts.tokenImages ?? null);
   }
+
+  const ringR = opts.playerSightRingCells;
+  if (ringR != null && ringR > 0 && tokens?.length) {
+    drawPlayerSightRings(ctx, tokens, ringR, cellPx, fog, cols, rows);
+  }
+}
+
+function drawPlayerSightRings(
+  ctx: CanvasRenderingContext2D,
+  tokens: BattleToken[],
+  ringCellsFallback: number,
+  cellPx: number,
+  fog: Set<string> | null | undefined,
+  cols: number,
+  rows: number,
+): void {
+  ctx.save();
+  ctx.lineJoin = "round";
+  for (const t of tokens) {
+    if (t.kind !== "player") continue;
+    const gx = Math.floor(t.gx);
+    const gy = Math.floor(t.gy);
+    if (gx < 0 || gy < 0 || gx >= cols || gy >= rows) continue;
+    if (fog && !fog.has(`${gx},${gy}`)) continue;
+    const cells = Math.max(2, Math.floor(t.sightRadiusCells ?? ringCellsFallback));
+    const rPx = cells * cellPx;
+    const cx = (gx + 0.5) * cellPx;
+    const cy = (gy + 0.5) * cellPx;
+    ctx.strokeStyle = "rgba(255, 220, 140, 0.42)";
+    ctx.lineWidth = Math.max(1, cellPx * 0.1);
+    ctx.setLineDash([Math.max(2, cellPx * 0.2), Math.max(2, cellPx * 0.15)]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, rPx, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawTokenImageInCircle(

@@ -15,9 +15,14 @@ import type { RenderCell } from "@/lib/dungeonTileRenderer";
 import { DEFAULT_PALETTE, ENTITY_PALETTE, LOCATION_PALETTE } from "@/lib/dungeonTilePalettes";
 import {
   computeVisibleCellsForPlayer,
+  expandFogWithPlayerTokenVision,
+  isDungeonGridWalkable,
   isOpenFloorLocation,
   maxFogHopsForLocationType,
 } from "@/lib/dungeonForgeFog";
+import { greedyStepToward } from "@/lib/dungeonGridMovement";
+import { DEFAULT_PLAYER_VISION_FOG_CELLS, PLAYER_SIGHT_RING_CELLS } from "@/lib/playerMapVision";
+import { visionRadiusCellsFromCharacter } from "@/lib/playerVisionFromCharacter";
 import {
   broadcastPlayerMapState,
   readLastPlayerMapState,
@@ -38,6 +43,23 @@ import { battleTokenExtras } from "@/lib/battleTokenMedia";
 
 type FlowStep = "map" | "party" | "workspace";
 type WorkspacePane = "combat" | "rolls";
+
+/** Player TV crop window centered on the party leader (grid cells). */
+function computeLeaderViewCrop(
+  gw: number,
+  gh: number,
+  gx: number,
+  gy: number,
+): { minX: number; minY: number; maxX: number; maxY: number } {
+  const halfW = 18;
+  const halfH = 14;
+  return {
+    minX: Math.max(0, Math.floor(gx - halfW)),
+    minY: Math.max(0, Math.floor(gy - halfH)),
+    maxX: Math.min(gw - 1, Math.ceil(gx + halfW)),
+    maxY: Math.min(gh - 1, Math.ceil(gy + halfH)),
+  };
+}
 
 export default function PlayPage() {
   const {
@@ -554,6 +576,18 @@ function EncounterWorkspace({
   const [giveQty, setGiveQty] = useState(1);
   const [giveCharId, setGiveCharId] = useState("");
   const [mapActionBusy, setMapActionBusy] = useState(false);
+  /** DM map zoom (multiplier on computed cell size). Pan uses the scrollable viewport. */
+  const [dmMapZoom, setDmMapZoom] = useState(1);
+  const [partyLeaderId, setPartyLeaderId] = useState<string | null>(null);
+  const [partyFollowIds, setPartyFollowIds] = useState<string[]>([]);
+  const [partyMarchMode, setPartyMarchMode] = useState(false);
+  const [tokenHoverTip, setTokenHoverTip] = useState<{
+    tokens: BattleToken[];
+    clientX: number;
+    clientY: number;
+  } | null>(null);
+  const marchIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const followerSnapRef = useRef<Record<string, { gx: number; gy: number }> | null>(null);
 
   const dungeonRef = useRef(dungeon);
   dungeonRef.current = dungeon;
@@ -569,6 +603,27 @@ function EncounterWorkspace({
   useEffect(() => {
     if (!activeCombat) setBattleTokens([]);
   }, [activeCombat]);
+
+  useEffect(() => {
+    if (!partyLeaderId) return;
+    setPartyFollowIds((prev) => prev.filter((id) => id !== partyLeaderId));
+  }, [partyLeaderId]);
+
+  useEffect(() => {
+    return () => {
+      if (marchIntervalRef.current != null) {
+        clearInterval(marchIntervalRef.current);
+        marchIntervalRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!partyMarchMode && marchIntervalRef.current != null) {
+      clearInterval(marchIntervalRef.current);
+      marchIntervalRef.current = null;
+    }
+  }, [partyMarchMode]);
 
   const reloadDungeon = useCallback(() => {
     const sid = activeSession?.id;
@@ -614,6 +669,7 @@ function EncounterWorkspace({
 
   useEffect(() => {
     if (!laserPointerMode) broadcastLaserPointer(null);
+    else setTokenHoverTip(null);
   }, [laserPointerMode]);
 
   useEffect(() => {
@@ -761,6 +817,11 @@ function EncounterWorkspace({
 
   const dmCellPx = !showFullMap && room && fitCellPx != null ? fitCellPx : cellPx;
 
+  const zoomedDmCellPx = useMemo(
+    () => Math.max(8, Math.min(128, Math.round(dmCellPx * dmMapZoom))),
+    [dmCellPx, dmMapZoom],
+  );
+
   /** Merge stored positions with current portraits / sprites from party + combat. */
   const tokensForMap = useMemo((): BattleToken[] => {
     if (!activeCombat?.combatants?.length) return battleTokens;
@@ -769,9 +830,19 @@ function EncounterWorkspace({
       const c = activeCombat.combatants.find((x) => x.id === t.id);
       if (!c) return t;
       const extra = battleTokenExtras(c, partyCharacters);
-      return { ...t, ...extra };
+      let sightRadiusCells: number | undefined;
+      if (c.type === "player" && c.characterId) {
+        const ch = partyCharacters.find((p) => p.id === c.characterId);
+        sightRadiusCells = visionRadiusCellsFromCharacter(ch);
+      }
+      return { ...t, ...extra, sightRadiusCells };
     });
   }, [battleTokens, activeCombat, partyCharacters]);
+
+  const playerCombatants = useMemo(
+    () => activeCombat?.combatants?.filter((c) => c.type === "player" && c.isAlive) ?? [],
+    [activeCombat],
+  );
 
   const sceneLightsLocal = useMemo((): SceneLight[] | undefined => {
     if (!sceneLighting || !room || !dungeon?.grid) return undefined;
@@ -793,21 +864,12 @@ function EncounterWorkspace({
       intensity: 0.24,
       kind: "room",
     }));
-    for (const t of tokensForMap) {
-      lights.push({
-        gx: t.gx,
-        gy: t.gy,
-        radiusCells: t.kind === "player" ? 5.5 : 4,
-        intensity: 0.38,
-        kind: "token",
-      });
-    }
     return lights.map((L) => ({
       ...L,
       gx: L.gx - worldOffset.x,
       gy: L.gy - worldOffset.y,
     }));
-  }, [sceneLighting, room, tokensForMap, worldOffset, dungeon, selectedRoomId]);
+  }, [sceneLighting, room, worldOffset, dungeon, selectedRoomId]);
 
   const tokensLocal = useMemo(
     () =>
@@ -820,20 +882,20 @@ function EncounterWorkspace({
   );
 
   useLayoutEffect(() => {
-    if (!room || !mapViewportRef.current || dmCellPx <= 0) return;
+    if (!room || !mapViewportRef.current || zoomedDmCellPx <= 0) return;
     const el = mapViewportRef.current;
     const pad = 2;
     const rx = room.x - worldOffset.x;
     const ry = room.y - worldOffset.y;
-    const minPxX = Math.max(0, (rx - pad) * dmCellPx);
-    const minPxY = Math.max(0, (ry - pad) * dmCellPx);
-    const maxPxX = (rx + room.w + pad) * dmCellPx;
-    const maxPxY = (ry + room.h + pad) * dmCellPx;
+    const minPxX = Math.max(0, (rx - pad) * zoomedDmCellPx);
+    const minPxY = Math.max(0, (ry - pad) * zoomedDmCellPx);
+    const maxPxX = (rx + room.w + pad) * zoomedDmCellPx;
+    const maxPxY = (ry + room.h + pad) * zoomedDmCellPx;
     const cx = (minPxX + maxPxX) / 2;
     const cy = (minPxY + maxPxY) / 2;
     el.scrollLeft = Math.max(0, cx - el.clientWidth / 2);
     el.scrollTop = Math.max(0, cy - el.clientHeight / 2);
-  }, [room?.id, selectedRoomId, dmCellPx, worldOffset.x, worldOffset.y]);
+  }, [room?.id, selectedRoomId, zoomedDmCellPx, worldOffset.x, worldOffset.y]);
 
   const broadcastToPlayer = useCallback(
     (opts: { cropToRoom: boolean }) => {
@@ -857,13 +919,20 @@ function EncounterWorkspace({
       const gh = dungeon.grid.length;
       const gw = dungeon.grid[0]?.length ?? 0;
       let viewCrop: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
-      if (opts.cropToRoom && room) {
-        viewCrop = {
-          minX: Math.max(0, room.x - mapPad),
-          minY: Math.max(0, room.y - mapPad),
-          maxX: Math.min(gw - 1, room.x + room.w + mapPad - 1),
-          maxY: Math.min(gh - 1, room.y + room.h + mapPad - 1),
-        };
+      if (opts.cropToRoom) {
+        const leaderTok = partyLeaderId
+          ? tokensForMap.find((x) => x.id === partyLeaderId && x.kind === "player")
+          : null;
+        if (leaderTok) {
+          viewCrop = computeLeaderViewCrop(gw, gh, leaderTok.gx, leaderTok.gy);
+        } else if (room) {
+          viewCrop = {
+            minX: Math.max(0, room.x - mapPad),
+            minY: Math.max(0, room.y - mapPad),
+            maxX: Math.min(gw - 1, room.x + room.w + mapPad - 1),
+            maxY: Math.min(gh - 1, room.y + room.h + mapPad - 1),
+          };
+        }
       }
       const fogCells = computeVisibleCellsForPlayer(
         new Set(revealed),
@@ -880,6 +949,12 @@ function EncounterWorkspace({
           maxFogHops: maxFogHopsForLocationType(dungeon.locationType ?? "dungeon"),
         },
       );
+      expandFogWithPlayerTokenVision(
+        fogCells,
+        dungeon.grid as number[][],
+        tokensForMap,
+        DEFAULT_PLAYER_VISION_FOG_CELLS,
+      );
       const lightsWorld: SceneLight[] = [];
       if (sceneLighting && room) {
         const cx = Math.floor(Number(room.cx) || room.x + room.w / 2);
@@ -891,15 +966,6 @@ function EncounterWorkspace({
           intensity: 0.2,
           kind: "room",
         });
-        for (const t of tokensForMap) {
-          lightsWorld.push({
-            gx: t.gx,
-            gy: t.gy,
-            radiusCells: t.kind === "player" ? 5.5 : 4,
-            intensity: 0.38,
-            kind: "token",
-          });
-        }
       }
       const payload: PlayerMapBroadcast = {
         dungeonData: gd,
@@ -918,7 +984,7 @@ function EncounterWorkspace({
       }
       broadcastPlayerMapState(payload);
     },
-    [dungeon, room, mapPad, tokensForMap, sceneLighting],
+    [dungeon, room, mapPad, tokensForMap, sceneLighting, partyLeaderId],
   );
 
   const syncPlayerTv = useCallback(() => broadcastToPlayer({ cropToRoom: true }), [broadcastToPlayer]);
@@ -930,6 +996,143 @@ function EncounterWorkspace({
 
   const broadcastRef = useRef(broadcastToPlayer);
   broadcastRef.current = broadcastToPlayer;
+
+  const leaderPosKey = useMemo(() => {
+    if (!partyLeaderId) return "";
+    const t = tokensForMap.find((x) => x.id === partyLeaderId && x.kind === "player");
+    return t ? `${Math.floor(t.gx)},${Math.floor(t.gy)}` : "";
+  }, [partyLeaderId, tokensForMap]);
+
+  useEffect(() => {
+    if (!partyLeaderId || !leaderPosKey) return;
+    const id = window.setTimeout(() => {
+      broadcastRef.current?.({ cropToRoom: true });
+    }, 110);
+    return () => clearTimeout(id);
+  }, [leaderPosKey, partyLeaderId]);
+
+  const stopPartyMarch = useCallback(() => {
+    if (marchIntervalRef.current != null) {
+      clearInterval(marchIntervalRef.current);
+      marchIntervalRef.current = null;
+    }
+  }, []);
+
+  const startPartyMarch = useCallback(
+    (targetGx: number, targetGy: number) => {
+      const grid = dungeon?.grid as number[][] | undefined;
+      if (!grid?.length || !activeCombat) return;
+      const tile = grid[targetGy]?.[targetGx];
+      if (!isDungeonGridWalkable(tile)) return;
+
+      const marchTokens = (() => {
+        const players = tokensForMap.filter((t) => t.kind === "player" && t.id);
+        if (partyLeaderId) {
+          const ids = new Set([partyLeaderId, ...partyFollowIds]);
+          return players.filter((t) => t.id && ids.has(t.id));
+        }
+        return players;
+      })();
+      const marchIds = new Set(marchTokens.map((t) => t.id).filter(Boolean) as string[]);
+      if (marchIds.size === 0) return;
+
+      stopPartyMarch();
+      const marchStepRef = { n: 0 };
+      marchIntervalRef.current = window.setInterval(() => {
+        marchStepRef.n += 1;
+        setBattleTokens((prev) => {
+          const occ = new Set(prev.map((t) => `${Math.floor(t.gx)},${Math.floor(t.gy)}`));
+          let allDone = true;
+          let changed = false;
+          const next = prev.map((t) => {
+            if (!t.id || !marchIds.has(t.id)) return t;
+            if (Math.floor(t.gx) === targetGx && Math.floor(t.gy) === targetGy) return t;
+            allDone = false;
+            const selfKey = `${Math.floor(t.gx)},${Math.floor(t.gy)}`;
+            const step = greedyStepToward(
+              { gx: t.gx, gy: t.gy },
+              { gx: targetGx, gy: targetGy },
+              grid,
+              occ,
+              selfKey,
+            );
+            if (!step) return t;
+            changed = true;
+            occ.delete(selfKey);
+            occ.add(`${step.gx},${step.gy}`);
+            return { ...t, gx: step.gx, gy: step.gy };
+          });
+          if (allDone || !changed || marchStepRef.n > 900) {
+            if (marchIntervalRef.current != null) {
+              clearInterval(marchIntervalRef.current);
+              marchIntervalRef.current = null;
+            }
+            queueMicrotask(() => broadcastRef.current?.({ cropToRoom: true }));
+            return prev;
+          }
+          if (marchStepRef.n % 2 === 0) {
+            queueMicrotask(() => broadcastRef.current?.({ cropToRoom: true }));
+          }
+          return next;
+        });
+      }, 85);
+    },
+    [dungeon, activeCombat, tokensForMap, partyLeaderId, partyFollowIds, stopPartyMarch],
+  );
+
+  const handleTokenDragTo = useCallback(
+    (tokenId: string | undefined, wx: number, wy: number) => {
+      if (tokenId !== partyLeaderId) followerSnapRef.current = null;
+      setBattleTokens((prev) => {
+        if (
+          partyLeaderId &&
+          tokenId === partyLeaderId &&
+          partyFollowIds.length > 0 &&
+          !followerSnapRef.current
+        ) {
+          followerSnapRef.current = Object.fromEntries(
+            prev
+              .filter((t) => t.id && partyFollowIds.includes(t.id))
+              .map((t) => [t.id!, { gx: t.gx, gy: t.gy }]),
+          );
+        }
+        return prev.map((t) => (t.id === tokenId ? { ...t, gx: wx, gy: wy } : t));
+      });
+    },
+    [partyLeaderId, partyFollowIds],
+  );
+
+  const handleTokenDragEnd = useCallback(
+    (p: {
+      tokenId: string | undefined;
+      worldGx: number;
+      worldGy: number;
+      startWorldGx: number;
+      startWorldGy: number;
+      didDrag: boolean;
+    }) => {
+      if (!p.didDrag) return;
+      const dx = p.worldGx - p.startWorldGx;
+      const dy = p.worldGy - p.startWorldGy;
+      setBattleTokens((prev) => {
+        if (!partyLeaderId || p.tokenId !== partyLeaderId || !followerSnapRef.current) {
+          followerSnapRef.current = null;
+          return prev.map((t) => (t.id === p.tokenId ? { ...t, gx: p.worldGx, gy: p.worldGy } : t));
+        }
+        const snap = followerSnapRef.current;
+        followerSnapRef.current = null;
+        return prev.map((t) => {
+          if (t.id === p.tokenId) return { ...t, gx: p.worldGx, gy: p.worldGy };
+          if (t.id && snap[t.id]) {
+            const o = snap[t.id]!;
+            return { ...t, gx: o.gx + dx, gy: o.gy + dy };
+          }
+          return t;
+        });
+      });
+    },
+    [partyLeaderId],
+  );
 
   useEffect(() => {
     if (!selectedRoomId || !dungeon?.grid) return;
@@ -1157,6 +1360,32 @@ function EncounterWorkspace({
               >
                 Sync full map (fog)
               </button>
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-500">Zoom</span>
+              <button
+                type="button"
+                className="rounded border border-gray-600 px-1.5 py-0.5 text-gray-300 hover:bg-gray-800"
+                aria-label="Zoom out"
+                onClick={() => setDmMapZoom((z) => Math.max(0.35, Math.round((z - 0.1) * 10) / 10))}
+              >
+                −
+              </button>
+              <span className="tabular-nums text-gray-400">{Math.round(dmMapZoom * 100)}%</span>
+              <button
+                type="button"
+                className="rounded border border-gray-600 px-1.5 py-0.5 text-gray-300 hover:bg-gray-800"
+                aria-label="Zoom in"
+                onClick={() => setDmMapZoom((z) => Math.min(2.5, Math.round((z + 0.1) * 10) / 10))}
+              >
+                +
+              </button>
+              <button
+                type="button"
+                className="rounded border border-gray-700 px-1.5 py-0.5 text-gray-400 hover:bg-gray-800"
+                onClick={() => setDmMapZoom(1)}
+              >
+                Reset
+              </button>
             </>
           )}
         </div>
@@ -1187,11 +1416,75 @@ function EncounterWorkspace({
             )}
           </div>
         )}
-        <div ref={mapViewportRef} className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-1">
+        {activeCombat && room && (
+          <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-gray-800 pt-2 text-[11px] text-gray-400">
+            <label className="flex cursor-pointer items-center gap-1">
+              <input
+                type="checkbox"
+                checked={partyMarchMode}
+                onChange={(e) => {
+                  setPartyMarchMode(e.target.checked);
+                  if (e.target.checked) setPlacementCombatantId(null);
+                }}
+                className="rounded border-gray-600"
+              />
+              Party march
+            </label>
+            <span title="Click a walkable floor tile; party moves step-by-step. Pan with scrollbars.">
+              (click floor)
+            </span>
+            <span className="text-gray-600">|</span>
+            <span>Leader</span>
+            <select
+              className="input-field max-w-[9rem] py-0.5 text-xs"
+              value={partyLeaderId ?? ""}
+              onChange={(e) => setPartyLeaderId(e.target.value || null)}
+            >
+              <option value="">— none —</option>
+              {playerCombatants.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+            <span>Follow:</span>
+            {playerCombatants
+              .filter((c) => c.id !== partyLeaderId)
+              .map((c) => (
+                <label key={c.id} className="flex cursor-pointer items-center gap-0.5">
+                  <input
+                    type="checkbox"
+                    className="rounded border-gray-600"
+                    checked={partyFollowIds.includes(c.id)}
+                    onChange={(e) =>
+                      setPartyFollowIds((prev) =>
+                        e.target.checked ? [...prev, c.id] : prev.filter((id) => id !== c.id),
+                      )
+                    }
+                  />
+                  {c.label}
+                </label>
+              ))}
+            <span
+              className="text-gray-500"
+              title="Set a leader: player TV crops around them and follows when they move. Fog uses each PC’s race/features for sight."
+            >
+              TV follows leader · drag empty map to pan when zoomed
+            </span>
+          </div>
+        )}
+        <div
+          ref={mapViewportRef}
+          data-dm-map-viewport
+          className={clsx(
+            "relative flex min-h-0 flex-1 items-center justify-center overflow-auto p-1",
+            partyMarchMode && "ring-1 ring-dnd-gold/30",
+          )}
+        >
           {dungeon && renderGrid && displayGrid ? (
             <DungeonMapCanvas
               grid={displayGrid}
-              cellPx={dmCellPx}
+              cellPx={zoomedDmCellPx}
               palette={palette}
               entities={ENTITY_PALETTE}
               highlightRoom={null}
@@ -1199,7 +1492,26 @@ function EncounterWorkspace({
               animPhase={animPhase}
               sceneLights={sceneLightsLocal}
               battleTokens={tokensLocal.length ? tokensLocal : undefined}
-              style={laserPointerMode ? { cursor: "crosshair" } : undefined}
+              playerSightRingCells={PLAYER_SIGHT_RING_CELLS}
+              tokenDragEnabled={!!activeCombat && !laserPointerMode && !partyMarchMode}
+              suppressTokenInteraction={laserPointerMode}
+              onTokenDragTo={handleTokenDragTo}
+              onTokenDragEnd={handleTokenDragEnd}
+              onTokensAtCell={
+                laserPointerMode
+                  ? undefined
+                  : (p) => {
+                      if (!p || p.tokensHere.length === 0) setTokenHoverTip(null);
+                      else
+                        setTokenHoverTip({
+                          tokens: p.tokensHere,
+                          clientX: p.clientX,
+                          clientY: p.clientY,
+                        });
+                    }
+              }
+              mapPanEnabled={!laserPointerMode}
+              style={laserPointerMode ? { cursor: "crosshair" } : partyMarchMode ? { cursor: "cell" } : undefined}
               onCellHover={
                 laserPointerMode
                   ? (hx, hy) => {
@@ -1209,6 +1521,11 @@ function EncounterWorkspace({
                   : undefined
               }
               onCellClick={(gx, gy, cell: RenderCell) => {
+                if (partyMarchMode && activeCombat && dungeon?.grid) {
+                  const tile = (dungeon.grid as number[][])[gy]?.[gx];
+                  if (isDungeonGridWalkable(tile)) startPartyMarch(gx, gy);
+                  return;
+                }
                 if (placementCombatantId && activeCombat) {
                   const c = activeCombat.combatants.find((x) => x.id === placementCombatantId);
                   if (c?.isAlive) {
@@ -1275,6 +1592,25 @@ function EncounterWorkspace({
             </p>
           )}
         </div>
+        {tokenHoverTip && tokenHoverTip.tokens.length > 0 && !laserPointerMode && (
+          <div
+            className="pointer-events-none fixed z-[200] max-w-[16rem] rounded border border-dnd-gold/35 bg-gray-950/95 px-2 py-1.5 text-[11px] leading-snug text-gray-100 shadow-xl"
+            style={{
+              left: Math.min(
+                tokenHoverTip.clientX + 14,
+                (typeof window !== "undefined" ? window.innerWidth : 1200) - 16,
+              ),
+              top: tokenHoverTip.clientY + 14,
+            }}
+          >
+            {tokenHoverTip.tokens.map((t) => {
+              const c = t.id ? activeCombat?.combatants.find((x) => x.id === t.id) : null;
+              const role = t.kind === "player" ? "PC" : "Foe";
+              const line = c ? `${c.label} · ${role}` : `${t.label || "?"} · ${role}`;
+              return <div key={t.id ?? `${t.gx}-${t.gy}-${t.label}`}>{line}</div>;
+            })}
+          </div>
+        )}
         <div className="mt-2 flex flex-wrap gap-1 text-xs">
           {(dungeon?.rooms ?? []).map(
             (r: { id: number; label?: string; type?: string; isSecretRoom?: boolean }) => (

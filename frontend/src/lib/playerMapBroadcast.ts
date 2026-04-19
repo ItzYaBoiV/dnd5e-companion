@@ -37,6 +37,8 @@ export type BattleToken = {
   portraitUrl?: string;
   /** Built-in pixel token art when no portrait (class / monster sprite). */
   spriteUrl?: string;
+  /** Fog + sight ring radius in grid cells (player PCs; from race/features). */
+  sightRadiusCells?: number;
 };
 
 export type SceneLight = {

@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { buildRenderGrid } from "@/lib/dungeonForgeRenderGrid";
 import {
   computeVisibleCellsForPlayer,
+  expandFogWithPlayerTokenVision,
   isOpenFloorLocation,
   maxFogHopsForLocationType,
 } from "@/lib/dungeonForgeFog";
+import { DEFAULT_PLAYER_VISION_FOG_CELLS, PLAYER_SIGHT_RING_CELLS } from "@/lib/playerMapVision";
 import { renderDungeonToCanvas } from "@/lib/dungeonTileRenderer";
 import { DEFAULT_PALETTE, ENTITY_PALETTE, LOCATION_PALETTE } from "@/lib/dungeonTilePalettes";
 import type { PlayerMapBroadcast } from "@/lib/playerMapBroadcast";
@@ -176,6 +178,12 @@ export default function DungeonsPlayerPage() {
       openFloor: isOpenFloorLocation(locType),
       maxFogHops: maxFogHopsForLocationType(locType),
     });
+    expandFogWithPlayerTokenVision(
+      fogCells,
+      dg.grid as number[][],
+      mapState?.battleTokens ?? [],
+      DEFAULT_PLAYER_VISION_FOG_CELLS,
+    );
 
     const loc = dg.locationType ?? "dungeon";
     const palette = LOCATION_PALETTE[loc] ?? DEFAULT_PALETTE;
@@ -258,7 +266,9 @@ export default function DungeonsPlayerPage() {
       }))
       .filter((t) => t.gx >= 0 && t.gy >= 0 && t.gx < bw && t.gy < bh);
 
-    const sceneLights = (mapState?.sceneLights ?? []).map((L) => ({
+    const sceneLights = (mapState?.sceneLights ?? [])
+      .filter((L) => L.kind !== "token")
+      .map((L) => ({
       ...L,
       gx: L.gx - minX,
       gy: L.gy - minY,
@@ -278,6 +288,7 @@ export default function DungeonsPlayerPage() {
       battleTokens: battleTok.length ? battleTok : null,
       tokenImages,
       sceneLights: sceneLights.length ? sceneLights : null,
+      playerSightRingCells: PLAYER_SIGHT_RING_CELLS,
     });
   }, [mapState, animPhase, tokenImagesVersion]);
 

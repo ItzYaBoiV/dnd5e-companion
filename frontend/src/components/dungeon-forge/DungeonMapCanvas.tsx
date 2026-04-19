@@ -1,4 +1,4 @@
-import { useEffect, useRef, memo } from "react";
+import { useEffect, useRef, memo, useState, useCallback } from "react";
 import {
   renderDungeonToCanvas,
   type EntityPalette,
@@ -31,6 +31,36 @@ export type DungeonMapCanvasProps = {
   style?: React.CSSProperties;
   onCellClick?: (x: number, y: number, cell: RenderCell) => void;
   onCellHover?: (x: number, y: number, cell: RenderCell | null) => void;
+  /** Sight ring radius in grid cells (player tokens); avoids volumetric token lights. */
+  playerSightRingCells?: number | null;
+  tokenDragEnabled?: boolean;
+  /** When true (e.g. laser mode), skip token hover + drag affordances. */
+  suppressTokenInteraction?: boolean;
+  /** Live move while dragging (world grid coords). */
+  onTokenDragTo?: (tokenId: string | undefined, worldGx: number, worldGy: number) => void;
+  onTokenDragEnd?: (payload: {
+    tokenId: string | undefined;
+    worldGx: number;
+    worldGy: number;
+    startWorldGx: number;
+    startWorldGy: number;
+    didDrag: boolean;
+  }) => void;
+  /** Tokens stacked on the hovered cell (local grid coords → world passed in payload). */
+  onTokensAtCell?: (
+    payload: {
+      worldX: number;
+      worldY: number;
+      tokensHere: BattleToken[];
+      clientX: number;
+      clientY: number;
+    } | null,
+  ) => void;
+  /**
+   * Click-drag on empty map to pan the scroll parent (`[data-dm-map-viewport]` ancestor).
+   * Token drag wins when over a token.
+   */
+  mapPanEnabled?: boolean;
 };
 
 function DungeonMapCanvasInner({
@@ -54,10 +84,29 @@ function DungeonMapCanvasInner({
   style,
   onCellClick,
   onCellHover,
+  playerSightRingCells,
+  tokenDragEnabled,
+  suppressTokenInteraction,
+  onTokenDragTo,
+  onTokenDragEnd,
+  onTokensAtCell,
+  mapPanEnabled,
 }: DungeonMapCanvasProps) {
   const ox = worldOffset?.x ?? 0;
   const oy = worldOffset?.y ?? 0;
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const dragRef = useRef<{
+    id: string | undefined;
+    startWx: number;
+    startWy: number;
+    lastWx: number;
+    lastWy: number;
+  } | null>(null);
+  const didDragRef = useRef(false);
+  const suppressClickRef = useRef(false);
+  const [isDraggingToken, setIsDraggingToken] = useState(false);
+  const mapPanRef = useRef<{ sl: number; st: number; x: number; y: number } | null>(null);
+  const [isPanningMap, setIsPanningMap] = useState(false);
   const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
   const { images: tokenImages, version: tokenImagesVersion } = useBattleTokenImages(battleTokens);
 
@@ -82,6 +131,7 @@ function DungeonMapCanvasInner({
       battleTokens: battleTokens ?? null,
       tokenImages,
       inkSaver: false,
+      playerSightRingCells: playerSightRingCells ?? null,
     });
   }, [
     grid,
@@ -101,7 +151,18 @@ function DungeonMapCanvasInner({
     sceneLights,
     battleTokens,
     tokenImagesVersion,
+    playerSightRingCells,
   ]);
+
+  function tokensAtLocal(lx: number, ly: number): BattleToken[] {
+    const list = battleTokens ?? [];
+    return list.filter((t) => Math.floor(t.gx) === lx && Math.floor(t.gy) === ly);
+  }
+
+  function pickTopTokenAtLocal(lx: number, ly: number): BattleToken | null {
+    const stack = tokensAtLocal(lx, ly);
+    return stack.length ? stack[stack.length - 1]! : null;
+  }
 
   function cellFromEvent(e: React.MouseEvent): { x: number; y: number; cell: RenderCell } | null {
     const canvas = canvasRef.current;
@@ -118,22 +179,161 @@ function DungeonMapCanvasInner({
     return { x: gx + ox, y: gy + oy, cell };
   }
 
+  const endTokenDrag = useCallback(() => {
+    const d = dragRef.current;
+    if (!d) return;
+    const moved = didDragRef.current;
+    dragRef.current = null;
+    setIsDraggingToken(false);
+    didDragRef.current = false;
+    if (moved) suppressClickRef.current = true;
+    if (!moved || !onTokenDragEnd) return;
+    onTokenDragEnd({
+      tokenId: d.id,
+      worldGx: d.lastWx,
+      worldGy: d.lastWy,
+      startWorldGx: d.startWx,
+      startWorldGy: d.startWy,
+      didDrag: true,
+    });
+  }, [onTokenDragEnd]);
+
+  useEffect(() => {
+    if (!isDraggingToken) return;
+    const end = () => endTokenDrag();
+    window.addEventListener("mouseup", end);
+    window.addEventListener("blur", end);
+    return () => {
+      window.removeEventListener("mouseup", end);
+      window.removeEventListener("blur", end);
+    };
+  }, [isDraggingToken, endTokenDrag]);
+
+  useEffect(() => {
+    if (!isPanningMap) return;
+    const onMove = (ev: MouseEvent) => {
+      const p = mapPanRef.current;
+      const canvas = canvasRef.current;
+      if (!p || !canvas) return;
+      const sp = canvas.closest("[data-dm-map-viewport]") as HTMLElement | null;
+      if (!sp) return;
+      sp.scrollLeft = p.sl - (ev.clientX - p.x);
+      sp.scrollTop = p.st - (ev.clientY - p.y);
+    };
+    const onUp = (ev: MouseEvent) => {
+      const p = mapPanRef.current;
+      mapPanRef.current = null;
+      setIsPanningMap(false);
+      if (p) {
+        const dx = ev.clientX - p.x;
+        const dy = ev.clientY - p.y;
+        if (dx * dx + dy * dy > 25) suppressClickRef.current = true;
+      }
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("blur", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("blur", onUp);
+    };
+  }, [isPanningMap]);
+
+  const hoverCursor =
+    tokenDragEnabled &&
+    !suppressTokenInteraction &&
+    !isDraggingToken &&
+    onCellClick
+      ? "pointer"
+      : onCellClick
+        ? "pointer"
+        : "default";
+
   return (
     <canvas
       ref={canvasRef}
       className={className}
-      style={{ imageRendering: "pixelated", cursor: onCellClick ? "pointer" : "default", ...style }}
+      style={{
+        imageRendering: "pixelated",
+        cursor: isPanningMap || isDraggingToken ? "grabbing" : mapPanEnabled && !suppressTokenInteraction ? "grab" : hoverCursor,
+        ...style,
+      }}
+      onMouseDown={(e) => {
+        if (e.button !== 0) return;
+        const r = cellFromEvent(e);
+        if (!r) return;
+        const lx = r.x - ox;
+        const ly = r.y - oy;
+        const wantTokenDrag = !!(tokenDragEnabled && !suppressTokenInteraction);
+        const top = wantTokenDrag ? pickTopTokenAtLocal(lx, ly) : null;
+        if (top) {
+          didDragRef.current = false;
+          dragRef.current = {
+            id: top.id,
+            startWx: r.x,
+            startWy: r.y,
+            lastWx: r.x,
+            lastWy: r.y,
+          };
+          setIsDraggingToken(true);
+          return;
+        }
+        if (mapPanEnabled && !suppressTokenInteraction) {
+          const canvas = canvasRef.current;
+          const sp = canvas?.closest("[data-dm-map-viewport]") as HTMLElement | null;
+          if (sp) {
+            mapPanRef.current = { sl: sp.scrollLeft, st: sp.scrollTop, x: e.clientX, y: e.clientY };
+            setIsPanningMap(true);
+            e.preventDefault();
+          }
+        }
+      }}
       onClick={(e) => {
+        if (suppressClickRef.current) {
+          suppressClickRef.current = false;
+          return;
+        }
         const r = cellFromEvent(e);
         if (r) onCellClick?.(r.x, r.y, r.cell);
       }}
       onMouseMove={(e) => {
+        if (isPanningMap) return;
         const r = cellFromEvent(e);
         const hx = r ? r.x : -1;
         const hy = r ? r.y : -1;
         onCellHover?.(hx, hy, r?.cell ?? null);
+
+        if (isDraggingToken && dragRef.current && r && onTokenDragTo) {
+          const d = dragRef.current;
+          if (r.x !== d.lastWx || r.y !== d.lastWy) {
+            didDragRef.current = true;
+            d.lastWx = r.x;
+            d.lastWy = r.y;
+            onTokenDragTo(d.id, r.x, r.y);
+          }
+        }
+
+        if (!suppressTokenInteraction && onTokensAtCell && r) {
+          const lx = r.x - ox;
+          const ly = r.y - oy;
+          onTokensAtCell({
+            worldX: r.x,
+            worldY: r.y,
+            tokensHere: tokensAtLocal(lx, ly),
+            clientX: e.clientX,
+            clientY: e.clientY,
+          });
+        } else if (!suppressTokenInteraction) {
+          onTokensAtCell?.(null);
+        }
       }}
-      onMouseLeave={() => onCellHover?.(-1, -1, null)}
+      onMouseLeave={() => {
+        if (isPanningMap) return;
+        onCellHover?.(-1, -1, null);
+        if (!suppressTokenInteraction) onTokensAtCell?.(null);
+        if (isDraggingToken) endTokenDrag();
+      }}
     />
   );
 }

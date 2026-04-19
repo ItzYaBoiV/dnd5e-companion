@@ -1,4 +1,5 @@
 import { DUNGEON_T as T } from "@/lib/dungeonForgeConstants";
+import type { BattleToken } from "@/lib/playerMapBroadcast";
 
 export type FogDungeonGrid = {
   grid: number[][];
@@ -156,6 +157,56 @@ export function computeVisibleCellsForPlayer(
   }
 
   return cells;
+}
+
+/** Floors / corridors / doors / roads the party can stand on for token placement and marching. */
+export function isDungeonGridWalkable(tile: number): boolean {
+  return (
+    tile === T.F ||
+    tile === T.C ||
+    tile === T.D ||
+    tile === T.ROAD ||
+    tile === T.BRIDGE ||
+    tile === T.SD ||
+    tile === T.SU
+  );
+}
+
+function isDungeonTileVisionTransparent(tile: number): boolean {
+  return tile !== T.V && tile !== T.W;
+}
+
+/**
+ * Adds fog cells in a Chebyshev-radius disc around each **player** token so revealed area moves with the party
+ * (cheap compared to per-token volumetric lights). Uses `sightRadiusCells` per token when set.
+ */
+export function expandFogWithPlayerTokenVision(
+  cells: Set<string>,
+  grid: number[][],
+  tokens: (Pick<BattleToken, "gx" | "gy" | "kind"> & { sightRadiusCells?: number })[] | null | undefined,
+  defaultRadiusCells: number,
+): void {
+  if (!tokens?.length) return;
+  const H = grid.length;
+  const W = H > 0 ? grid[0]?.length ?? 0 : 0;
+  if (W < 1 || H < 1) return;
+  for (const t of tokens) {
+    if (t.kind !== "player") continue;
+    const R = Math.max(1, Math.floor(t.sightRadiusCells ?? defaultRadiusCells));
+    const tx = Math.floor(t.gx);
+    const ty = Math.floor(t.gy);
+    for (let dy = -R; dy <= R; dy++) {
+      for (let dx = -R; dx <= R; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) > R) continue;
+        const x = tx + dx;
+        const y = ty + dy;
+        if (x < 0 || y < 0 || x >= W || y >= H) continue;
+        const tile = grid[y]![x]!;
+        if (!isDungeonTileVisionTransparent(tile)) continue;
+        cells.add(`${x},${y}`);
+      }
+    }
+  }
 }
 
 /**
