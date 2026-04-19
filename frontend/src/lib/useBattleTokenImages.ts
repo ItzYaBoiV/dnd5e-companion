@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BattleToken } from "@/lib/playerMapBroadcast";
+import { publicAssetUrl } from "@/lib/tokenSprites";
 
 /**
  * Preloads token portrait/sprite URLs for canvas drawing; bumps `version` when loading finishes.
@@ -14,8 +15,8 @@ export function useBattleTokenImages(tokens: BattleToken[] | null | undefined): 
   const urlsKey = useMemo(() => {
     const s = new Set<string>();
     for (const t of tokens ?? []) {
-      if (t.portraitUrl) s.add(t.portraitUrl);
-      if (t.spriteUrl) s.add(t.spriteUrl);
+      if (t.portraitUrl) s.add(publicAssetUrl(t.portraitUrl));
+      if (t.spriteUrl) s.add(publicAssetUrl(t.spriteUrl));
     }
     return [...s].sort().join("\n");
   }, [tokens]);
@@ -45,6 +46,9 @@ export function useBattleTokenImages(tokens: BattleToken[] | null | undefined): 
       needCallbacks++;
       const img = new Image();
       img.decoding = "async";
+      if (!url.startsWith("data:") && !url.startsWith("blob:")) {
+        img.crossOrigin = "anonymous";
+      }
       img.onload = tryDone;
       img.onerror = tryDone;
       img.src = url;

@@ -129,7 +129,9 @@ export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: b
               ? trapGlyph(ent.name)
               : ent.type === "item"
                 ? itemGlyph(ent.name)
-                : "?";
+                : ent.type === "riddle"
+                  ? "?"
+                  : "?";
         eType = ent.type;
         extra = ent;
       } else if (deco && String(deco.ch ?? "").trim() !== "") {

@@ -5,6 +5,7 @@
 
 import type { BattleToken, SceneLight } from "@/lib/playerMapBroadcast";
 import { collectTorchFixtureLights, computeOccludedLightDarkness } from "@/lib/dungeonLightOcclusion";
+import { publicAssetUrl } from "@/lib/tokenSprites";
 
 export type TilePalette = {
   void: string;
@@ -39,6 +40,7 @@ export type EntityPalette = {
   monster: string;
   trap: string;
   item: string;
+  riddle: string;
   label: string;
   deco: string;
   theme: string;
@@ -294,7 +296,9 @@ function drawTokenImageInCircle(
 }
 
 function tokenImageUrl(t: BattleToken): string | undefined {
-  return t.portraitUrl || t.spriteUrl;
+  const raw = t.portraitUrl || t.spriteUrl;
+  if (!raw) return undefined;
+  return publicAssetUrl(raw);
 }
 
 function drawBattleTokens(
@@ -306,6 +310,19 @@ function drawBattleTokens(
   rows: number,
   tokenImages: Map<string, HTMLImageElement> | null,
 ): void {
+  const perCell = new Map<string, BattleToken[]>();
+  for (const t of tokens) {
+    const gx = Math.floor(t.gx);
+    const gy = Math.floor(t.gy);
+    const k = `${gx},${gy}`;
+    if (!perCell.has(k)) perCell.set(k, []);
+    perCell.get(k)!.push(t);
+  }
+  const stackIdx = new Map<BattleToken, number>();
+  for (const arr of perCell.values()) {
+    arr.forEach((t, i) => stackIdx.set(t, i));
+  }
+
   for (const t of tokens) {
     const gx = Math.floor(t.gx);
     const gy = Math.floor(t.gy);
@@ -314,8 +331,11 @@ function drawBattleTokens(
     const px = gx * cellPx;
     const py = gy * cellPx;
     const s = cellPx;
-    const cx = px + s / 2;
-    const cy = py + s / 2;
+    const si = stackIdx.get(t) ?? 0;
+    const ox = ((si % 3) - 1) * s * 0.2;
+    const oy = Math.floor(si / 3) * s * 0.18;
+    const cx = px + s / 2 + ox;
+    const cy = py + s / 2 + oy;
     const radius = Math.max(3, s * 0.34);
     const url = tokenImageUrl(t);
     const img = url && tokenImages ? tokenImages.get(url) : undefined;
@@ -372,7 +392,9 @@ function drawBaseTile(
 ): void {
   const t = cell.tile;
 
-  const hideEntityOverlay = !showEnts && (cell.eType === "monster" || cell.eType === "trap" || cell.eType === "item");
+  const hideEntityOverlay =
+    !showEnts &&
+    (cell.eType === "monster" || cell.eType === "trap" || cell.eType === "item" || cell.eType === "riddle");
   const hideLabel = sanitize && cell.eType === "label";
   const hideDecoCell =
     sanitize &&
@@ -713,7 +735,9 @@ function drawOverlays(
   hideDeco: Set<string>,
   animPhase: number,
 ): void {
-  const hideEntity = !showEnts && (cell.eType === "monster" || cell.eType === "trap" || cell.eType === "item");
+  const hideEntity =
+    !showEnts &&
+    (cell.eType === "monster" || cell.eType === "trap" || cell.eType === "item" || cell.eType === "riddle");
   if (hideEntity) return;
 
   if (sanitize && cell.eType === "label") return;
@@ -728,12 +752,18 @@ function drawOverlays(
     return;
   }
 
-  if (cell.eType === "monster" || cell.eType === "trap" || cell.eType === "item") {
+  if (cell.eType === "monster" || cell.eType === "trap" || cell.eType === "item" || cell.eType === "riddle") {
     const radius = Math.max(2, s * 0.35);
     const cx = px + s / 2;
     const cy = py + s / 2;
     const bg =
-      cell.eType === "monster" ? ep.monster : cell.eType === "trap" ? ep.trap : ep.item;
+      cell.eType === "monster"
+        ? ep.monster
+        : cell.eType === "trap"
+          ? ep.trap
+          : cell.eType === "item"
+            ? ep.item
+            : ep.riddle;
     ctx.globalAlpha = 0.25;
     ctx.fillStyle = bg;
     ctx.beginPath();

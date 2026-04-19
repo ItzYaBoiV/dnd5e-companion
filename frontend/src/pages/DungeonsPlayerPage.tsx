@@ -1,9 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { buildRenderGrid } from "@/lib/dungeonForgeRenderGrid";
-import { computeVisibleCellsForPlayer, isOpenFloorLocation } from "@/lib/dungeonForgeFog";
+import {
+  computeVisibleCellsForPlayer,
+  isOpenFloorLocation,
+  maxFogHopsForLocationType,
+} from "@/lib/dungeonForgeFog";
 import { renderDungeonToCanvas } from "@/lib/dungeonTileRenderer";
 import { DEFAULT_PALETTE, ENTITY_PALETTE, LOCATION_PALETTE } from "@/lib/dungeonTilePalettes";
 import type { PlayerMapBroadcast } from "@/lib/playerMapBroadcast";
+import {
+  PLAYER_LASER_CHANNEL,
+  readLaserPointerFromStorage,
+  type LaserPointerPayload,
+} from "@/lib/playerMapLaser";
 import { useBattleTokenImages } from "@/lib/useBattleTokenImages";
 
 function gridDims(dg: NonNullable<PlayerMapBroadcast["dungeonData"]>): { gw: number; gh: number } {
@@ -50,6 +59,46 @@ export default function DungeonsPlayerPage() {
   const mapStateRef = useRef<PlayerMapBroadcast | null>(null);
   mapStateRef.current = mapState;
   const { images: tokenImages, version: tokenImagesVersion } = useBattleTokenImages(mapState?.battleTokens);
+
+  const [laser, setLaser] = useState<LaserPointerPayload | null>(() => readLaserPointerFromStorage());
+  const [viewWindow, setViewWindow] = useState<{
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+    bw: number;
+    bh: number;
+  } | null>(null);
+
+  useEffect(() => {
+    const pullLaser = () => setLaser(readLaserPointerFromStorage());
+    const id = window.setInterval(pullLaser, 200);
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel(PLAYER_LASER_CHANNEL);
+      bc.onmessage = (ev) => {
+        const d = ev.data as { type?: string; gx?: number; gy?: number; ts?: number };
+        if (d?.type === "clear") setLaser(null);
+        else if (d?.type === "point" && typeof d.gx === "number" && typeof d.gy === "number") {
+          setLaser({ gx: d.gx, gy: d.gy, ts: typeof d.ts === "number" ? d.ts : Date.now() });
+        }
+      };
+    } catch {
+      /* ignore */
+    }
+    return () => {
+      window.clearInterval(id);
+      bc?.close();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!laser) return;
+    const t = window.setInterval(() => {
+      setLaser((cur) => (cur && Date.now() - cur.ts > 8000 ? null : cur));
+    }, 1000);
+    return () => window.clearInterval(t);
+  }, [laser]);
 
   useEffect(() => {
     const id = window.setInterval(() => setAnimPhase((p) => (p + 0.04) % 1), 120);
@@ -100,7 +149,10 @@ export default function DungeonsPlayerPage() {
   useEffect(() => {
     const c = canvasRef.current;
     const raw = mapState?.dungeonData;
-    if (!c || !raw?.grid || !raw.rooms?.length) return;
+    if (!c || !raw?.grid || !raw.rooms?.length) {
+      setViewWindow(null);
+      return;
+    }
 
     const dg = {
       ...raw,
@@ -111,7 +163,10 @@ export default function DungeonsPlayerPage() {
     };
 
     const { gw, gh } = gridDims(dg);
-    if (gw < 1 || gh < 1) return;
+    if (gw < 1 || gh < 1) {
+      setViewWindow(null);
+      return;
+    }
 
     const revealed = new Set(mapState?.revealed ?? []);
     const doorOpen =
@@ -119,6 +174,7 @@ export default function DungeonsPlayerPage() {
     const locType = dg.locationType ?? "dungeon";
     const fogCells = computeVisibleCellsForPlayer(revealed, dg, doorOpen, null, {
       openFloor: isOpenFloorLocation(locType),
+      maxFogHops: maxFogHopsForLocationType(locType),
     });
 
     const loc = dg.locationType ?? "dungeon";
@@ -158,6 +214,8 @@ export default function DungeonsPlayerPage() {
 
     const bw = maxX - minX + 1;
     const bh = maxY - minY + 1;
+
+    setViewWindow({ minX, minY, maxX, maxY, bw, bh });
 
     const sub: typeof rg = [];
     for (let y = minY; y <= maxY; y++) {
@@ -223,9 +281,42 @@ export default function DungeonsPlayerPage() {
     });
   }, [mapState, animPhase, tokenImagesVersion]);
 
+  const laserVisible =
+    laser &&
+    viewWindow &&
+    laser.gx >= viewWindow.minX &&
+    laser.gx <= viewWindow.maxX &&
+    laser.gy >= viewWindow.minY &&
+    laser.gy <= viewWindow.maxY;
+
+  const laserLeftPct =
+    laserVisible && viewWindow ? ((laser!.gx - viewWindow.minX + 0.5) / viewWindow.bw) * 100 : 0;
+  const laserTopPct =
+    laserVisible && viewWindow ? ((laser!.gy - viewWindow.minY + 0.5) / viewWindow.bh) * 100 : 0;
+
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black">
-      <canvas ref={canvasRef} className="max-h-[100dvh] max-w-[100dvw]" style={{ imageRendering: "pixelated" }} aria-label="Player dungeon map" />
+      <div className="relative inline-block max-h-[100dvh] max-w-[100dvw]">
+        <canvas
+          ref={canvasRef}
+          className="max-h-[100dvh] max-w-[100dvw]"
+          style={{ imageRendering: "pixelated" }}
+          aria-label="Player dungeon map"
+        />
+        {laserVisible && (
+          <div
+            className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full motion-safe:animate-pulse"
+            style={{
+              left: `${laserLeftPct}%`,
+              top: `${laserTopPct}%`,
+              boxShadow:
+                "0 0 10px 3px rgba(255,60,60,0.95), 0 0 24px 6px rgba(255,100,80,0.55)",
+              background: "rgba(255,70,70,0.98)",
+            }}
+            aria-hidden
+          />
+        )}
+      </div>
     </div>
   );
 }

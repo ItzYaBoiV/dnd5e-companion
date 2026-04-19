@@ -47,7 +47,8 @@ export type SceneLightInput = SceneLight;
 function flickerMul(kind: LightKind | undefined, gx: number, gy: number, animPhase: number): number {
   const base = animPhase * Math.PI * 2;
   if (kind === "room") {
-    return 1 + Math.sin(base * 0.85 + gx * 0.03) * 0.025;
+    // Static room/sconce wash — avoids recomputing heavy flicker across huge radii every frame.
+    return 1;
   }
   if (kind === "token") {
     return 1 + Math.sin(base * 3.2 + gx * 0.4 + gy * 0.31) * 0.055 + Math.sin(base * 5.1 + gx * 0.11) * 0.025;

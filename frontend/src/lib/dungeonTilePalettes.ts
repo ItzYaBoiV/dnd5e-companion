@@ -4,6 +4,7 @@ export const ENTITY_PALETTE: EntityPalette = {
   monster: "#e53",
   trap: "#f80",
   item: "#8cf",
+  riddle: "#c6f",
   label: "#4a8",
   deco: "#999",
   theme: "#0c0",

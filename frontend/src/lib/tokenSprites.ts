@@ -2,6 +2,17 @@
  * Small pixel-style token art (SVG) for classes and common foes when no photo is set.
  */
 
+/** Resolves `/public/...` paths when the app is hosted under a non-root Vite `base`. */
+export function publicAssetUrl(href: string): string {
+  if (href.startsWith("http") || href.startsWith("data:") || href.startsWith("blob:")) return href;
+  const base = import.meta.env.BASE_URL || "/";
+  const path = href.startsWith("/") ? href : `/${href}`;
+  if (!base || base === "/") return path;
+  const b = base.endsWith("/") ? base.slice(0, -1) : base;
+  if (path === b || path.startsWith(`${b}/`)) return path;
+  return `${b}${path}`;
+}
+
 export const DEFAULT_PC_SPRITE = "/tokens/pixel/adventurer.svg";
 export const DEFAULT_MONSTER_SPRITE = "/tokens/pixel/monster.svg";
 
@@ -34,11 +45,11 @@ export const MONSTER_TOKEN_SPRITES: Record<string, string> = {
 
 export function classTokenSprite(classSlug: string): string {
   const k = classSlug.trim().toLowerCase();
-  return CLASS_TOKEN_SPRITES[k] ?? DEFAULT_PC_SPRITE;
+  return publicAssetUrl(CLASS_TOKEN_SPRITES[k] ?? DEFAULT_PC_SPRITE);
 }
 
 export function monsterTokenSprite(monsterSlug: string | null | undefined): string {
   const k = (monsterSlug ?? "").trim().toLowerCase();
-  if (!k) return DEFAULT_MONSTER_SPRITE;
-  return MONSTER_TOKEN_SPRITES[k] ?? DEFAULT_MONSTER_SPRITE;
+  if (!k) return publicAssetUrl(DEFAULT_MONSTER_SPRITE);
+  return publicAssetUrl(MONSTER_TOKEN_SPRITES[k] ?? DEFAULT_MONSTER_SPRITE);
 }

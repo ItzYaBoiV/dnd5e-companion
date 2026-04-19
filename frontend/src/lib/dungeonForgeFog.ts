@@ -25,11 +25,30 @@ function doorPassableAt(
 
 export type ComputeVisibleFogOpts = {
   openFloor?: boolean;
+  /**
+   * Max BFS steps from revealed-room tiles through corridors / roads / bridges / lava.
+   * Without a cap, a single revealed room can expose every corridor tile on the map (e.g. castle),
+   * and adjacent walls outline the entire structure. Omit or `undefined` for unlimited (yards / towns).
+   */
+  maxFogHops?: number;
 };
+
+/** Default hop limit for dungeon-like interiors (castle, sewer, cave, …). */
+export const DEFAULT_INTERIOR_MAX_FOG_HOPS = 28;
 
 /** Yards and outdoor grids where revealed rooms should flood through connective T.F (not only corridors). */
 export function isOpenFloorLocation(locationType: string): boolean {
-  return locationType === "graveyard" || locationType === "swamp" || locationType === "town";
+  return (
+    locationType === "graveyard" ||
+    locationType === "swamp" ||
+    locationType === "town" ||
+    locationType === "road"
+  );
+}
+
+export function maxFogHopsForLocationType(locationType: string | undefined): number | undefined {
+  if (isOpenFloorLocation(locationType ?? "")) return undefined;
+  return DEFAULT_INTERIOR_MAX_FOG_HOPS;
 }
 
 /** Room id whose bounding box contains (x,y), or null if in shared yard / void. */
@@ -54,18 +73,28 @@ export function computeVisibleCellsForPlayer(
   const g = dg.grid;
   if (!g?.length) return cells;
 
+  const openFloor = !!fogOpts?.openFloor;
+  const maxFogHops = fogOpts?.maxFogHops;
+
+  const seeds: string[] = [];
   for (const rm of dg.rooms) {
     if (!rev.has(rm.id)) continue;
     for (let y = rm.y; y < rm.y + rm.h; y++) {
       for (let x = rm.x; x < rm.x + rm.w; x++) {
         if (y < 0 || x < 0 || y >= H || x >= W) continue;
-        cells.add(`${x},${y}`);
+        const k = `${x},${y}`;
+        cells.add(k);
+        seeds.push(k);
       }
     }
   }
 
-  const queue = [...cells];
-  const visited = new Set(cells);
+  const visited = new Set<string>();
+  const queue: { key: string; d: number }[] = [];
+  for (const k of seeds) {
+    visited.add(k);
+    queue.push({ key: k, d: 0 });
+  }
 
   function doorKeyForStep(x: number, y: number, nx: number, ny: number): string | null {
     const t1 = g[y]?.[x];
@@ -76,7 +105,7 @@ export function computeVisibleCellsForPlayer(
   }
 
   while (queue.length) {
-    const key = queue.shift()!;
+    const { key, d } = queue.shift()!;
     const [x, y] = key.split(",").map(Number);
     for (const [dx, dy] of [
       [0, 1],
@@ -88,34 +117,38 @@ export function computeVisibleCellsForPlayer(
       const ny = y + dy;
       const nk = `${nx},${ny}`;
       if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
-      if (visited.has(nk)) continue;
 
       const dk = doorKeyForStep(x, y, nx, ny);
       if (dk && !doorPassableAt(dk, doorOpen, doorStates ?? null)) {
         const nt = g[ny][nx];
-        if (nt === T.D) {
+        if (nt === T.D && (maxFogHops == null || d <= maxFogHops)) {
           cells.add(nk);
-          visited.add(nk);
+          if (!visited.has(nk)) visited.add(nk);
         }
         continue;
       }
 
+      if (visited.has(nk)) continue;
+
       const tile = g[ny][nx];
-      const openFloor = !!fogOpts?.openFloor;
+      const nd = d + 1;
+      if (maxFogHops != null && nd > maxFogHops) {
+        if (tile === T.W && d <= maxFogHops) cells.add(nk);
+        continue;
+      }
 
       if (tile === T.C || tile === T.D || tile === T.ROAD || tile === T.BRIDGE || tile === T.LAVA) {
         visited.add(nk);
         cells.add(nk);
-        queue.push(nk);
+        queue.push({ key: nk, d: nd });
       } else if (openFloor && tile === T.F) {
-        // Shared yard / paths: flood. Building interiors stay fogged until that room is revealed.
         const interiorRid = cellRoomId(dg, nx, ny);
         if (interiorRid != null && !rev.has(interiorRid)) {
           continue;
         }
         visited.add(nk);
         cells.add(nk);
-        queue.push(nk);
+        queue.push({ key: nk, d: nd });
       } else if (tile === T.W) {
         cells.add(nk);
       }

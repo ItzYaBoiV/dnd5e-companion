@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSessionStore } from "@/store/sessionStore";
 import type { Combatant, PlayerRollInfo, DmRollInfo } from "@/store/sessionStore";
 import { characterApi } from "@/services/api";
@@ -10,9 +10,14 @@ import DungeonForge from "@/components/dungeon-forge/DungeonForge";
 import { DungeonMapCanvas } from "@/components/dungeon-forge/DungeonMapCanvas";
 import { buildRenderGrid } from "@/lib/dungeonForgeRenderGrid";
 import { decrementForgeMonsterBySlug, removeEntityAtXY } from "@/lib/dungeonEntityUpdates";
+import { makeSeededRng, pickWallAdjacentFloorCells } from "@/lib/forgeWallLights";
 import type { RenderCell } from "@/lib/dungeonTileRenderer";
 import { DEFAULT_PALETTE, ENTITY_PALETTE, LOCATION_PALETTE } from "@/lib/dungeonTilePalettes";
-import { computeVisibleCellsForPlayer, isOpenFloorLocation } from "@/lib/dungeonForgeFog";
+import {
+  computeVisibleCellsForPlayer,
+  isOpenFloorLocation,
+  maxFogHopsForLocationType,
+} from "@/lib/dungeonForgeFog";
 import {
   broadcastPlayerMapState,
   readLastPlayerMapState,
@@ -21,6 +26,7 @@ import {
   type PlayerMapBroadcast,
   type SceneLight,
 } from "@/lib/playerMapBroadcast";
+import { broadcastLaserPointer } from "@/lib/playerMapLaser";
 import {
   extractDiceNotation,
   rollAttackVsAc,
@@ -532,12 +538,18 @@ function EncounterWorkspace({
   const [launchMsg, setLaunchMsg] = useState<string | null>(null);
   const [animPhase, setAnimPhase] = useState(0);
   const [sceneLighting, setSceneLighting] = useState(true);
+  /** DM laser dot on /dungeons/player (same browser; high-rate sync via BroadcastChannel). */
+  const [laserPointerMode, setLaserPointerMode] = useState(false);
+  const laserThrottleRef = useRef(0);
+  /** When false and a room is selected, the map crops to that room (like the old “zoom to room”). */
+  const [showFullMap, setShowFullMap] = useState(false);
   const [battleTokens, setBattleTokens] = useState<BattleToken[]>([]);
   const [placementCombatantId, setPlacementCombatantId] = useState<string | null>(null);
   const [mapEntityModal, setMapEntityModal] = useState<
     | null
     | { kind: "item"; x: number; y: number; ent: Record<string, unknown> }
     | { kind: "monster"; x: number; y: number; ent: Record<string, unknown> }
+    | { kind: "riddle"; x: number; y: number; ent: Record<string, unknown> }
   >(null);
   const [giveQty, setGiveQty] = useState(1);
   const [giveCharId, setGiveCharId] = useState("");
@@ -550,7 +562,7 @@ function EncounterWorkspace({
   const activeCombatIdForMapRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const id = window.setInterval(() => setAnimPhase((p) => (p + 0.04) % 1), 120);
+    const id = window.setInterval(() => setAnimPhase((p) => (p + 0.04) % 1), 380);
     return () => clearInterval(id);
   }, []);
 
@@ -588,6 +600,27 @@ function EncounterWorkspace({
   useEffect(() => {
     reloadDungeon();
   }, [reloadDungeon]);
+
+  useEffect(() => {
+    if (selectedRoomId != null) setShowFullMap(false);
+  }, [selectedRoomId]);
+
+  const sendLaserHover = useCallback((gx: number, gy: number) => {
+    const now = Date.now();
+    if (now - laserThrottleRef.current < 40) return;
+    laserThrottleRef.current = now;
+    broadcastLaserPointer({ gx, gy });
+  }, []);
+
+  useEffect(() => {
+    if (!laserPointerMode) broadcastLaserPointer(null);
+  }, [laserPointerMode]);
+
+  useEffect(() => {
+    return () => {
+      broadcastLaserPointer(null);
+    };
+  }, []);
 
   useEffect(() => {
     const onMsg = (ev: MessageEvent) => {
@@ -671,16 +704,62 @@ function EncounterWorkspace({
   const palette =
     (dungeon?.locationType && LOCATION_PALETTE[dungeon.locationType]) ?? DEFAULT_PALETTE;
 
-  /** Padding around the selected room when cropping the player TV view. */
+  /** Padding around the focused room (DM crop + player TV crop). */
   const mapPad = 5;
+  const focusCellPxFallback = 20;
   const fullCellPx = 12;
 
   const { displayGrid, worldOffset, cellPx } = useMemo(() => {
     if (!renderGrid || !dungeon) {
       return { displayGrid: null as ReturnType<typeof buildRenderGrid> | null, worldOffset: { x: 0, y: 0 }, cellPx: fullCellPx };
     }
-    return { displayGrid: renderGrid, worldOffset: { x: 0, y: 0 }, cellPx: fullCellPx };
-  }, [renderGrid, dungeon]);
+    const gh = renderGrid.length;
+    const gw = renderGrid[0]?.length ?? 0;
+    if (showFullMap || !room) {
+      return { displayGrid: renderGrid, worldOffset: { x: 0, y: 0 }, cellPx: fullCellPx };
+    }
+    const minX = Math.max(0, room.x - mapPad);
+    const minY = Math.max(0, room.y - mapPad);
+    const maxX = Math.min(gw - 1, room.x + room.w + mapPad - 1);
+    const maxY = Math.min(gh - 1, room.y + room.h + mapPad - 1);
+    const sub: typeof renderGrid = [];
+    for (let y = minY; y <= maxY; y++) {
+      const row = [];
+      for (let x = minX; x <= maxX; x++) {
+        row.push(renderGrid[y]![x]!);
+      }
+      sub.push(row);
+    }
+    return { displayGrid: sub, worldOffset: { x: minX, y: minY }, cellPx: focusCellPxFallback };
+  }, [renderGrid, dungeon, room, showFullMap, mapPad]);
+
+  const mapViewportRef = useRef<HTMLDivElement>(null);
+  const [fitCellPx, setFitCellPx] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (showFullMap || !room || !displayGrid?.length) {
+      setFitCellPx(null);
+      return;
+    }
+    const el = mapViewportRef.current;
+    if (!el) return;
+    const bw = displayGrid[0]?.length ?? 1;
+    const bh = displayGrid.length;
+    const update = () => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w < 24 || h < 24) return;
+      const next = Math.floor(Math.min(w / Math.max(1, bw), h / Math.max(1, bh)));
+      const zoomOutPx = 4;
+      setFitCellPx(Math.max(12, Math.min(64, next - zoomOutPx)));
+    };
+    update();
+    const ro = new ResizeObserver(() => update());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [showFullMap, room?.id, displayGrid]);
+
+  const dmCellPx = !showFullMap && room && fitCellPx != null ? fitCellPx : cellPx;
 
   /** Merge stored positions with current portraits / sprites from party + combat. */
   const tokensForMap = useMemo((): BattleToken[] => {
@@ -695,18 +774,25 @@ function EncounterWorkspace({
   }, [battleTokens, activeCombat, partyCharacters]);
 
   const sceneLightsLocal = useMemo((): SceneLight[] | undefined => {
-    if (!sceneLighting || !room) return undefined;
-    const cx = Math.floor(Number(room.cx) || room.x + room.w / 2);
-    const cy = Math.floor(Number(room.cy) || room.y + room.h / 2);
-    const lights: SceneLight[] = [
-      {
-        gx: cx,
-        gy: cy,
-        radiusCells: Math.max(room.w, room.h) + 2,
-        intensity: 0.2,
-        kind: "room",
-      },
-    ];
+    if (!sceneLighting || !room || !dungeon?.grid) return undefined;
+    const grid = dungeon.grid as number[][];
+    const rng = makeSeededRng((room.id ?? 1) * 10007 + (selectedRoomId ?? 0) * 131);
+    let positions = pickWallAdjacentFloorCells(grid, room, 4, rng);
+    if (positions.length === 0) {
+      positions = [
+        {
+          gx: Math.floor(Number(room.cx) || room.x + room.w / 2),
+          gy: Math.floor(Number(room.cy) || room.y + room.h / 2),
+        },
+      ];
+    }
+    const lights: SceneLight[] = positions.map((p) => ({
+      gx: p.gx,
+      gy: p.gy,
+      radiusCells: 6.2,
+      intensity: 0.24,
+      kind: "room",
+    }));
     for (const t of tokensForMap) {
       lights.push({
         gx: t.gx,
@@ -721,7 +807,7 @@ function EncounterWorkspace({
       gx: L.gx - worldOffset.x,
       gy: L.gy - worldOffset.y,
     }));
-  }, [sceneLighting, room, tokensForMap, worldOffset]);
+  }, [sceneLighting, room, tokensForMap, worldOffset, dungeon, selectedRoomId]);
 
   const tokensLocal = useMemo(
     () =>
@@ -732,6 +818,22 @@ function EncounterWorkspace({
       })),
     [tokensForMap, worldOffset],
   );
+
+  useLayoutEffect(() => {
+    if (!room || !mapViewportRef.current || dmCellPx <= 0) return;
+    const el = mapViewportRef.current;
+    const pad = 2;
+    const rx = room.x - worldOffset.x;
+    const ry = room.y - worldOffset.y;
+    const minPxX = Math.max(0, (rx - pad) * dmCellPx);
+    const minPxY = Math.max(0, (ry - pad) * dmCellPx);
+    const maxPxX = (rx + room.w + pad) * dmCellPx;
+    const maxPxY = (ry + room.h + pad) * dmCellPx;
+    const cx = (minPxX + maxPxX) / 2;
+    const cy = (minPxY + maxPxY) / 2;
+    el.scrollLeft = Math.max(0, cx - el.clientWidth / 2);
+    el.scrollTop = Math.max(0, cy - el.clientHeight / 2);
+  }, [room?.id, selectedRoomId, dmCellPx, worldOffset.x, worldOffset.y]);
 
   const broadcastToPlayer = useCallback(
     (opts: { cropToRoom: boolean }) => {
@@ -773,7 +875,10 @@ function EncounterWorkspace({
         },
         doorForFog,
         null,
-        { openFloor: isOpenFloorLocation(dungeon.locationType ?? "dungeon") },
+        {
+          openFloor: isOpenFloorLocation(dungeon.locationType ?? "dungeon"),
+          maxFogHops: maxFogHopsForLocationType(dungeon.locationType ?? "dungeon"),
+        },
       );
       const lightsWorld: SceneLight[] = [];
       if (sceneLighting && room) {
@@ -834,18 +939,20 @@ function EncounterWorkspace({
   const scatterTokensInRoom = () => {
     if (!room || !activeCombat?.combatants?.length) return;
     const { x, y, w, h } = room;
-    const innerW = Math.max(1, w - 2);
-    const innerH = Math.max(1, h - 2);
+    const cells: { gx: number; gy: number }[] = [];
+    for (let yy = y + 1; yy < y + h - 1; yy++) {
+      for (let xx = x + 1; xx < x + w - 1; xx++) {
+        cells.push({ gx: xx, gy: yy });
+      }
+    }
+    if (cells.length === 0) return;
     const alive = activeCombat.combatants.filter((c) => c.isAlive);
     const next: BattleToken[] = [];
     alive.forEach((c, i) => {
-      const col = i % innerW;
-      const row = Math.floor(i / innerW);
-      const gx = x + 1 + (col % innerW);
-      const gy = y + 1 + (row % innerH);
+      const cell = cells[i % cells.length]!;
       next.push({
-        gx,
-        gy,
+        gx: cell.gx,
+        gy: cell.gy,
         label: c.label.slice(0, 4),
         kind: c.type === "player" ? "player" : "monster",
         id: c.id,
@@ -990,7 +1097,7 @@ function EncounterWorkspace({
       <div className="dnd-card flex min-h-0 flex-col overflow-hidden">
         <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
           <span>
-            {dungeon?.mapName ?? "Dungeon"} · click loot, a creature, or a room{" "}
+            {dungeon?.mapName ?? "Dungeon"} · select a room to zoom; use Full map to see everything{" "}
             {placementCombatantId ? "(placing token)" : ""}
           </span>
           {dungeon && renderGrid && (
@@ -1004,6 +1111,36 @@ function EncounterWorkspace({
                 />
                 Torch / room lights
               </label>
+              <label className="flex cursor-pointer items-center gap-1" title="Move over the map to show a red dot on the player TV page">
+                <input
+                  type="checkbox"
+                  checked={laserPointerMode}
+                  onChange={(e) => setLaserPointerMode(e.target.checked)}
+                  className="rounded border-gray-600"
+                />
+                Laser for TV
+              </label>
+              {room && (
+                <>
+                  {!showFullMap ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowFullMap(true)}
+                      className="rounded border border-gray-600 px-2 py-0.5 text-gray-300 hover:bg-gray-800"
+                    >
+                      Full map
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setShowFullMap(false)}
+                      className="rounded border border-dnd-gold/50 px-2 py-0.5 text-dnd-gold hover:bg-dnd-gold/10"
+                    >
+                      Zoom to room
+                    </button>
+                  )}
+                </>
+              )}
               <button
                 type="button"
                 onClick={() => void syncPlayerTv()}
@@ -1050,11 +1187,11 @@ function EncounterWorkspace({
             )}
           </div>
         )}
-        <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-1">
+        <div ref={mapViewportRef} className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-1">
           {dungeon && renderGrid && displayGrid ? (
             <DungeonMapCanvas
               grid={displayGrid}
-              cellPx={cellPx}
+              cellPx={dmCellPx}
               palette={palette}
               entities={ENTITY_PALETTE}
               highlightRoom={null}
@@ -1062,6 +1199,15 @@ function EncounterWorkspace({
               animPhase={animPhase}
               sceneLights={sceneLightsLocal}
               battleTokens={tokensLocal.length ? tokensLocal : undefined}
+              style={laserPointerMode ? { cursor: "crosshair" } : undefined}
+              onCellHover={
+                laserPointerMode
+                  ? (hx, hy) => {
+                      if (hx < 0 || hy < 0) broadcastLaserPointer(null);
+                      else sendLaserHover(hx, hy);
+                    }
+                  : undefined
+              }
               onCellClick={(gx, gy, cell: RenderCell) => {
                 if (placementCombatantId && activeCombat) {
                   const c = activeCombat.combatants.find((x) => x.id === placementCombatantId);
@@ -1101,6 +1247,15 @@ function EncounterWorkspace({
                   });
                   return;
                 }
+                if (cell.eType === "riddle" && cell.extra && typeof cell.extra === "object") {
+                  setMapEntityModal({
+                    kind: "riddle",
+                    x: gx,
+                    y: gy,
+                    ent: cell.extra as Record<string, unknown>,
+                  });
+                  return;
+                }
                 const r = dungeon.rooms.find(
                   (rm: { x: number; y: number; w: number; h: number; id: number }) =>
                     gx >= rm.x && gx < rm.x + rm.w && gy >= rm.y && gy < rm.y + rm.h,
@@ -1121,21 +1276,26 @@ function EncounterWorkspace({
           )}
         </div>
         <div className="mt-2 flex flex-wrap gap-1 text-xs">
-          {(dungeon?.rooms ?? []).map((r: { id: number; label?: string; type?: string }) => (
-            <button
-              key={r.id}
-              type="button"
-              onClick={() => setSelectedRoomId((prev) => (prev === r.id ? null : r.id))}
-              className={clsx(
-                "rounded border px-2 py-0.5",
-                selectedRoomId === r.id
-                  ? "border-dnd-gold text-dnd-gold"
-                  : "border-gray-700 text-gray-400",
-              )}
-            >
-              {r.id}. {r.label || r.type}
-            </button>
-          ))}
+          {(dungeon?.rooms ?? []).map(
+            (r: { id: number; label?: string; type?: string; isSecretRoom?: boolean }) => (
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => setSelectedRoomId((prev) => (prev === r.id ? null : r.id))}
+                className={clsx(
+                  "rounded border px-2 py-0.5",
+                  selectedRoomId === r.id
+                    ? "border-dnd-gold text-dnd-gold"
+                    : "border-gray-700 text-gray-400",
+                  r.isSecretRoom && "border-cyan-600/80 text-cyan-200/90",
+                )}
+                title={r.isSecretRoom ? "Marked as a secret room on this map" : undefined}
+              >
+                {r.isSecretRoom ? "★ " : ""}
+                {r.id}. {r.label || r.type}
+              </button>
+            ),
+          )}
         </div>
       </div>
 
@@ -1162,20 +1322,73 @@ function EncounterWorkspace({
           <>
             <div>
               <h3 className="font-display font-bold text-dnd-gold">
+                {(room as { isSecretRoom?: boolean }).isSecretRoom ? (
+                  <span className="mr-2 rounded border border-cyan-500/60 bg-cyan-950/40 px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-cyan-200">
+                    Secret room
+                  </span>
+                ) : null}
                 {room.namedRoom || `Room ${room.id}`} — {room.label || room.type}
               </h3>
+              {(room as { secretHint?: string | null }).secretHint ? (
+                <p className="mt-1 text-xs text-cyan-200/90">
+                  Secret clue (DM): {(room as { secretHint?: string }).secretHint}
+                </p>
+              ) : null}
               <p className="text-xs text-gray-500">
                 {room.w}×{room.h} · {roomEntities.length} entities
               </p>
               {roomEntities.length > 0 && (
-                <ul className="mt-2 space-y-0.5 text-xs text-gray-400">
-                  {roomEntities.map((e: { type?: string; name?: string; count?: number }, i: number) => (
-                    <li key={i}>
-                      <span className="font-semibold capitalize text-gray-300">{e.type ?? "?"}</span>
-                      {e.name ? `: ${e.name}` : ""}
-                      {e.type === "monster" && (e.count ?? 1) > 1 ? ` ×${e.count}` : ""}
-                    </li>
-                  ))}
+                <ul className="mt-2 space-y-1 text-xs text-gray-400">
+                  {roomEntities.map(
+                    (
+                      e: {
+                        type?: string;
+                        name?: string;
+                        count?: number;
+                        detectDC?: number;
+                        saveDC?: number;
+                        saveType?: string;
+                        dmg?: string;
+                        effect?: string;
+                        prompt?: string;
+                        answer?: string;
+                        rewardName?: string;
+                        rewardSlug?: string;
+                        slug?: string;
+                      },
+                      i: number,
+                    ) => (
+                      <li key={i}>
+                        <span className="font-semibold capitalize text-gray-300">{e.type ?? "?"}</span>
+                        {e.name ? `: ${e.name}` : ""}
+                        {e.type === "monster" && (e.count ?? 1) > 1 ? ` ×${e.count}` : ""}
+                        {e.slug && e.type === "item" ? (
+                          <span className="text-gray-500"> [{e.slug}]</span>
+                        ) : null}
+                        {e.type === "trap" ? (
+                          <span className="mt-0.5 block pl-1 text-[11px] leading-snug text-gray-500">
+                            Spot DC {e.detectDC ?? "—"} · {e.saveType || "?"} DC {e.saveDC ?? "—"}
+                            {e.dmg ? ` · ${e.dmg}` : ""}
+                            {e.effect ? ` — ${e.effect}` : ""}
+                          </span>
+                        ) : null}
+                        {e.type === "riddle" ? (
+                          <span className="mt-0.5 block pl-1 text-[11px] leading-snug text-purple-200/95">
+                            <span className="font-semibold text-purple-300/90">Q:</span> {e.prompt ?? ""}
+                            <span className="mt-0.5 block text-purple-200/80">
+                              <span className="font-semibold">Answer (DM):</span> {e.answer ?? ""}
+                            </span>
+                            {(e.rewardName || e.rewardSlug) && (
+                              <span className="mt-0.5 block text-dnd-gold/90">
+                                If solved: {e.rewardName ?? e.rewardSlug}
+                                {e.rewardSlug ? ` [${e.rewardSlug}]` : ""}
+                              </span>
+                            )}
+                          </span>
+                        ) : null}
+                      </li>
+                    ),
+                  )}
                 </ul>
               )}
             </div>
@@ -1350,6 +1563,32 @@ function EncounterWorkspace({
         <p className="text-sm text-gray-400">
           Removes this scripted creature from the session map (for example after you resolved it without combat, or
           as a handout). If you are using combat, tokens also clear from the map when a foe&apos;s HP hits 0.
+        </p>
+      </Modal>
+    )}
+
+    {mapEntityModal?.kind === "riddle" && (
+      <Modal
+        title="Riddle (DM only)"
+        onClose={() => setMapEntityModal(null)}
+        footer={
+          <button type="button" onClick={() => setMapEntityModal(null)} className="btn-primary">
+            Close
+          </button>
+        }
+      >
+        <p className="text-sm text-gray-200">{String(mapEntityModal.ent.prompt ?? "")}</p>
+        <p className="mt-3 text-sm text-purple-200/90">
+          <span className="font-semibold text-purple-300">Answer:</span> {String(mapEntityModal.ent.answer ?? "")}
+        </p>
+        {(Boolean(mapEntityModal.ent.rewardName) || Boolean(mapEntityModal.ent.rewardSlug)) && (
+          <p className="mt-2 text-sm text-dnd-gold/90">
+            Suggested treasure if solved: {String(mapEntityModal.ent.rewardName ?? mapEntityModal.ent.rewardSlug ?? "")}
+            {mapEntityModal.ent.rewardSlug ? ` [${String(mapEntityModal.ent.rewardSlug)}]` : ""}
+          </p>
+        )}
+        <p className="mt-3 text-xs text-gray-500">
+          This marker is hidden on the player map. Read the prompt aloud; keep the answer to yourself.
         </p>
       </Modal>
     )}

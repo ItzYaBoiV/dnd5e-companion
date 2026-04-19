@@ -11,8 +11,15 @@ import { MonsterStatCard } from "@/components/dungeon-forge/MonsterStatCard";
 import { useSessionStore } from "@/store/sessionStore";
 import { DUNGEON_T as T } from "@/lib/dungeonForgeConstants";
 import { buildRenderGrid } from "@/lib/dungeonForgeRenderGrid";
-import { computeVisibleCellsForPlayer, inferStartingRoomId, isOpenFloorLocation } from "@/lib/dungeonForgeFog";
+import {
+  computeVisibleCellsForPlayer,
+  inferStartingRoomId,
+  isOpenFloorLocation,
+  maxFogHopsForLocationType,
+} from "@/lib/dungeonForgeFog";
 import { broadcastPlayerMapState } from "@/lib/playerMapBroadcast";
+import { pickReferenceLootItem } from "@/lib/forgeLootFromReference";
+import { pickGoofyRiddle } from "@/lib/forgeRiddles";
 
 /* ═══════════════════════════════════════════════════════════════════════
    D&D 5e DUNGEON FORGE v3 — Location-Aware Procedural Map Generator
@@ -43,6 +50,12 @@ const TRAPS = [
   { name:"Freezing Floor", minLv:4, dmg:"4d8 cold", detectDC:17, saveDC:15, saveType:"CON", effect:"CON save or speed reduced to 0 until end of next turn." },
 ];
 const ITEMS=[{name:"Healing Potion",r:"common",minLv:1},{name:"Gold (2d6x10)",r:"common",minLv:1},{name:"Scroll",r:"common",minLv:1},{name:"+1 Weapon",r:"uncommon",minLv:2},{name:"Bag of Holding",r:"uncommon",minLv:3},{name:"Cloak of Protection",r:"uncommon",minLv:3},{name:"Ring of Protection",r:"rare",minLv:5},{name:"+2 Weapon",r:"rare",minLv:6},{name:"Flame Tongue",r:"rare",minLv:7},{name:"Staff of Power",r:"vr",minLv:10},{name:"+3 Weapon",r:"vr",minLv:12},{name:"Vorpal Sword",r:"legendary",minLv:15},{name:"Staff of the Magi",r:"legendary",minLv:17},{name:"Gold (4d6x100)",r:"rare",minLv:5},{name:"Gem (500gp)",r:"rare",minLv:7}];
+
+const SECRET_HINTS=[
+  "Loose mortar — a cold draft when you tap the third brick from the corner.",
+  "The tapestry hides a hollow sound, like Wi‑Fi from another dimension.",
+  "One flagstone wobbles. Extremely legal. Extremely suspicious.",
+];
 
 // ── Name Generators ──────────────────────────────────────────────────
 const NP=["Oak","Silver","Iron","Storm","Moon","Shadow","Golden","Raven","Wolf","Dragon","Crystal","Amber","Frost","Dark","Bright","Elder","Red","Black","White","Thorn","Cinder","Hollow","Ember","Stone","River"];
@@ -242,6 +255,60 @@ function applyLocationSpecialFeatures(grid,rooms,locationType,rng,W,H){
     for(let y=1;y<H-1;y++){
       for(let x=1;x<W-1;x++){
         if(grid[y][x]===T.F&&rng()<0.05) grid[y][x]=T.P;
+      }
+    }
+  }
+  placeNarrowWaterBridges(grid,locationType,rng,W,H);
+}
+
+/** Convert narrow water crossings into bridges where it reads as a plank span (skip graveyards / towns). */
+function placeNarrowWaterBridges(grid,locationType,rng,W,H){
+  if(locationType==="graveyard"||locationType==="town") return;
+  const ok=["swamp","sewer","volcanic_lair","road","fey_forest","cave","dungeon","castle","temple"];
+  if(!ok.includes(locationType)) return;
+  for(let y=1;y<H-1;y++){
+    for(let x=1;x<W-1;x++){
+      if(grid[y][x]!==T.WA) continue;
+      const h=grid[y][x-1]===T.F&&grid[y][x+1]===T.F;
+      const v=grid[y-1]?.[x]===T.F&&grid[y+1]?.[x]===T.F;
+      if((h||v)&&rng()<0.38) grid[y][x]=T.BRIDGE;
+    }
+  }
+}
+
+/** Flavor lever props by doors (DM hint — not a full door machine yet). */
+function scatterLeversNearDoors(grid,decoOverlay,W,H,rng){
+  const dirs=[[0,-1],[0,1],[-1,0],[1,0]];
+  const purposeForDoorFromLever=(dx,dy)=>{
+    const towardX=-dx,towardY=-dy;
+    let bearing="this doorway";
+    if(towardY<0)bearing="the door to the north";
+    else if(towardY>0)bearing="the door to the south";
+    else if(towardX<0)bearing="the door to the west";
+    else if(towardX>0)bearing="the door to the east";
+    const templates=[
+      `Controls ${bearing} — latch / bar / winch (DM: when pulled, toggle that door’s open state on the map).`,
+      `Wired to ${bearing} — releases a bolt or counterweight (DM: fiction for the adjacent door tile).`,
+      `Mechanism for ${bearing} — may also trip a distant portcullis if you want drama (same door line).`,
+      `Heavy lever for ${bearing} — obvious “something moves” when used (DM: pair with the marked door).`,
+    ];
+    return pick(templates,rng);
+  };
+  for(let y=1;y<H-1;y++){
+    for(let x=1;x<W-1;x++){
+      if(grid[y][x]!==T.D||rng()>0.14) continue;
+      const order=[...dirs].sort(()=>rng()-0.5);
+      for(const [dx,dy] of order){
+        const nx=x+dx, ny=y+dy;
+        if(grid[ny]?.[nx]===T.F){
+          const purpose=purposeForDoorFromLever(dx,dy);
+          decoOverlay.push({
+            x:nx,y:ny,ch:"⚙",fg:"#a62",name:"Lever",roomId:null,decoKey:"lever_icon",
+            purpose,
+            doorGx:x,doorGy:y,
+          });
+          break;
+        }
       }
     }
   }
@@ -1232,7 +1299,8 @@ function generateRoadLayout(cfg,rng){
 
 // ── Generation ───────────────────────────────────────────────────────
 function generateMap(cfg) {
-  const {width:W,height:H,roomCount,depth,level,trapsOn,itemsOn,monstersOn,rng,locationType,stairDown,stairUp,stairDownTo,stairUpTo}=cfg;
+  const {width:W,height:H,roomCount,depth,level,trapsOn,itemsOn,monstersOn,rng,locationType,stairDown,stairUp,stairDownTo,stairUpTo,itemCatalog=null,avgPartyLevel:avgPartyLevelIn}=cfg;
+  const avgPartyLevel=typeof avgPartyLevelIn==="number"?avgPartyLevelIn:level;
   const loc=LOCATIONS[locationType];
   let grid=Array.from({length:H},()=>Array(W).fill(T.V));
   let rooms=[];const entities=[];const decoOverlay=[];
@@ -1430,16 +1498,77 @@ function generateMap(cfg) {
         entities.push({type:"trap",...t,x:tx,y:ty,roomId:room.id});}
     }
     if(itemsOn&&rng()<0.4){
-      const av=ITEMS.filter(i=>i.minLv<=level);
-      if(av.length){const it=pick(av,rng);let ix,iy,tries=0;
+      let it=null;
+      if(itemCatalog&&itemCatalog.length){
+        const ref=pickReferenceLootItem(rng, itemCatalog, avgPartyLevel);
+        if(ref) it={name:ref.name, slug:ref.slug, r:"ref", minLv:1};
+      }
+      if(!it){
+        const av=ITEMS.filter(i=>i.minLv<=level);
+        if(av.length) it=pick(av,rng);
+      }
+      if(it){
+        let ix,iy,tries=0;
         do{ix=rI(room.x+1,room.x+room.w-2,rng);iy=rI(room.y+1,room.y+room.h-2,rng);tries++;}
         while(usedCells.has(`${ix},${iy}`)&&tries<15);
-        entities.push({type:"item",...it,x:ix,y:iy,roomId:room.id});}
+        entities.push({type:"item",...it,x:ix,y:iy,roomId:room.id});
+      }
     }
   }
 
+  const riddles=[];
+  let riddleSeq=0;
+  for(const room of rooms){
+    if(room.id<=1||rng()>0.18) continue;
+    const rr=pickGoofyRiddle(rng);
+    let rx,ry,tries=0;
+    do{rx=rI(room.x+1,room.x+room.w-2,rng);ry=rI(room.y+1,room.y+room.h-2,rng);tries++;}
+    while(usedCells.has(`${rx},${ry}`)&&tries<18);
+    if(tries>=18) continue;
+    usedCells.add(`${rx},${ry}`);
+    let reward=null;
+    if(itemCatalog&&itemCatalog.length){
+      reward=pickReferenceLootItem(rng, itemCatalog, avgPartyLevel);
+    }
+    if(!reward){
+      const av=ITEMS.filter(i=>i.minLv<=level);
+      if(av.length){
+        const it=pick(av,rng);
+        reward={slug:null,name:it.name};
+      }
+    }
+    riddleSeq+=1;
+    const row={
+      id:riddleSeq,
+      roomId:room.id,
+      prompt:rr.prompt,
+      answer:rr.answer,
+      solved:false,
+      rewardSlug:reward?.slug,
+      rewardName:reward?.name,
+    };
+    riddles.push(row);
+    entities.push({
+      type:"riddle",
+      riddleId:row.id,
+      prompt:row.prompt,
+      answer:row.answer,
+      solved:false,
+      rewardSlug:row.rewardSlug,
+      rewardName:row.rewardName,
+      x:rx,
+      y:ry,
+      roomId:room.id,
+      name:"Riddle",
+    });
+  }
+
+  if(cfg.showDecos!==false){
+    scatterLeversNearDoors(grid,decoOverlay,W,H,rng);
+  }
+
   const roomsMeta=enrichForgeRoomMeta(rooms,rng,locationType);
-  return {grid,rooms:roomsMeta,entities,decoOverlay,width:W,height:H,mapName,locationType,glyphs:LOCATION_GLYPHS[locationType]||LOCATION_GLYPHS.dungeon};
+  return {grid,rooms:roomsMeta,entities,decoOverlay,riddles,width:W,height:H,mapName,locationType,glyphs:LOCATION_GLYPHS[locationType]||LOCATION_GLYPHS.dungeon};
 }
 
 function forgeRoomsToDungeonMapRooms(dg){
@@ -1479,7 +1608,11 @@ function enrichForgeRoomMeta(rooms,rng,locationType){
     else if(depth>=6)theme=pick(["guard","trap","treasure","boss"],rng);
     else theme=pick(["guard","lore","puzzle","rest","treasure","trap"],rng);
     const namedRoom=rng()<0.38?`${pick(["Ash","Tallow","Salt","Raven","Iron","Hollow"],rng)} ${pick(["Hall","Vault","Den","Sanctum","Gallery","Pit"],rng)}`:null;
-    return{...r,depth,theme,namedRoom,locationType};
+    const secretHint=r.id>1&&rng()<0.09?pick(SECRET_HINTS,rng):null;
+    const labelBlob=`${String(r.label||"")} ${String(r.type||"")}`;
+    const looksHidden=/smuggler|murder hole|black market|collapsed tunnel|smuggler tunnel|cache|hidden|secret passage|catacomb|ossuary|inner sanctum|arcane vault|reliquary|antechamber|overflow|rat nest|cistern|drain room|breached|hollow|pixie dell|moon pool/i.test(labelBlob);
+    const isSecretRoom=Boolean(secretHint)||(r.id>1&&looksHidden&&rng()<0.62)||(r.id>1&&theme==="treasure"&&depth>=5&&rng()<0.12);
+    return{...r,depth,theme,namedRoom,locationType,secretHint,isSecretRoom};
   });
 }
 
@@ -1506,7 +1639,7 @@ const RM={common:"#aaa",uncommon:"#0f0",rare:"#44f",vr:"#c4f",legendary:"#fa0"};
 const RMG={common:"#888",uncommon:"#282",rare:"#24c",vr:"#82c",legendary:"#c80"};
 
 /** Deco keys hidden on player print export (containers & obvious searchable props). */
-const PLAYER_PRINT_HIDE_DECO_KEYS=new Set(["chest","crate","crate_stack","bookshelf","weapon_rack","crystal"]);
+const PLAYER_PRINT_HIDE_DECO_KEYS=new Set(["chest","crate","crate_stack","bookshelf","weapon_rack","crystal","lever_icon"]);
 
 function wrapTextLine(s,maxLen){
   if(s.length<=maxLen)return[s];
@@ -1529,6 +1662,15 @@ function buildDmExportSidebarLines(dg){
   lines.push("^ trap   ! treasure/item   letter = monster");
   lines.push("─".repeat(44));
   const rooms=[...dg.rooms].sort((a,b)=>a.id-b.id);
+  if(dg.riddles&&dg.riddles.length){
+    lines.push("RIDDLES — DM only (do not read aloud)");
+    lines.push("─".repeat(44));
+    for(const r of dg.riddles){
+      lines.push("#"+r.id+" Room "+r.roomId+": "+r.prompt);
+      lines.push("  Answer: "+r.answer+(r.rewardName?"  Loot: "+r.rewardName+(r.rewardSlug?" ["+r.rewardSlug+"]":""):""));
+    }
+    lines.push("");
+  }
   for(const r of rooms){
     lines.push("Room "+r.id+": "+(r.label||r.type));
     const dnames=[...new Set(dg.decoOverlay.filter(d=>d.roomId===r.id).map(d=>d.name))];
@@ -1537,8 +1679,9 @@ function buildDmExportSidebarLines(dg){
     if(re.length===0&&!dnames.length)lines.push("  (no notes)");
     for(const e of re){
       if(e.type==="monster")lines.push("  [M] "+e.name+" x"+e.count+" (CR "+e.cr+")");
-      else if(e.type==="trap")lines.push("  [T] "+e.name+" — "+e.dmg);
-      else if(e.type==="item")lines.push("  [I] "+e.name+" ("+e.r+")");
+      else if(e.type==="trap")lines.push("  [T] "+e.name+" — spot DC "+(e.detectDC??"?")+", "+(e.saveType||"?")+" DC "+(e.saveDC??"?")+" — "+(e.dmg||""));
+      else if(e.type==="item")lines.push("  [I] "+e.name+(e.slug?" ["+e.slug+"]":"")+" ("+(e.r||"?")+")");
+      else if(e.type==="riddle")lines.push("  [?] Riddle — see RIDDLES section");
     }
     lines.push("");
   }
@@ -1550,6 +1693,7 @@ function cellColor(cell,style,ov={}){
   if(cell.eType==="monster")return{bg:isG?s.floorBg:bg0,fg:s.monsterFg};
   if(cell.eType==="trap")return{bg:isG?s.floorBg:bg0,fg:s.trapFg};
   if(cell.eType==="item")return{bg:isG?s.floorBg:bg0,fg:(isG?RMG:RM)[cell.extra?.r]||s.itemFg};
+  if(cell.eType==="riddle")return{bg:isG?s.floorBg:bg0,fg:"#daf"};
   if(cell.eType==="deco")return{bg:isG?s.floorBg:bg0,fg:cell.fg||s.floorFg};
   if(cell.eType==="theme")return{bg:isG?s.floorBg:bg0,fg:s.accent};
   if(cell.eType==="label")return{bg:s.labelBg,fg:s.labelFg};
@@ -1760,6 +1904,7 @@ export default function DungeonForge(){
   const [floors,setFloors]=useState([]);const [hovered,setHovered]=useState(null);const [legend,setLegend]=useState(false);
   const [view,setView]=useState("dm");const [revealed,setRevealed]=useState(()=>new Set());
   const [statCard,setStatCard]=useState(null);
+  const [forgeInspect,setForgeInspect]=useState(null);
   const cfgSaveTimer=useRef(null);
   const mapViewportRef=useRef(null);const mapPanRef=useRef(null);
   const draggingRef=useRef(null);
@@ -1780,7 +1925,7 @@ export default function DungeonForge(){
   const [animPhase,setAnimPhase]=useState(0);
   const { partyCharacters, sessions, activeSession, loadSessions } = useSessionStore();
   useEffect(()=>{
-    const id=window.setInterval(()=>setAnimPhase((p)=>(p+0.04)%1),120);
+    const id=window.setInterval(()=>setAnimPhase((p)=>(p+0.04)%1),380);
     return()=>clearInterval(id);
   },[]);
   useEffect(()=>{
@@ -1841,6 +1986,14 @@ export default function DungeonForge(){
   },[activeSession,selectedSessionId]);
 
   const generate=useCallback(async()=>{
+    let itemCatalog=null;
+    try{
+      const res=await fetch("/api/reference/items");
+      if(res.ok) itemCatalog=await res.json();
+    }catch(_){/* offline */}
+    const avgPartyLevel=partyCharacters.length
+      ? Math.round(partyCharacters.reduce((s,c)=>s+(c.level||1),0)/partyCharacters.length)
+      : cfg.level;
     const anchorRng=seededRNG(cfg.seed+99991);
     const anchors=Array.from({length:Math.max(0,cfg.depth-1)},()=>({
       x:rI(Math.floor(cfg.width*0.2),Math.floor(cfg.width*0.8),anchorRng),
@@ -1851,7 +2004,7 @@ export default function DungeonForge(){
       const rng=seededRNG(cfg.seed+f*7919);
       const stairDown=f<cfg.depth-1 ? anchors[f] : null;
       const stairUp=f>0 ? anchors[f-1] : null;
-      const d=generateMap({...cfg,rng,stairDown,stairUp,stairDownTo:f+2,stairUpTo:f});
+      const d=generateMap({...cfg,rng,stairDown,stairUp,stairDownTo:f+2,stairUpTo:f,itemCatalog,avgPartyLevel});
       d.floor=f+1;d.seed=cfg.seed;all.push(d);
     }
     const names=new Set();
@@ -1876,8 +2029,8 @@ export default function DungeonForge(){
     });
     const d0=all?.[0];
     const startId=(d0&&inferStartingRoomId(d0))??d0?.rooms?.[0]?.id??1;
-    setFloors(all);setDg(all[0]);setCurFloor(1);setSelRoom(null);setTvRoom(null);setRevealed(new Set([startId]));setDoorOpen(new Set());
-  },[cfg]);
+    setFloors(all);setDg(all[0]);setCurFloor(1);setSelRoom(null);setTvRoom(null);setForgeInspect(null);setRevealed(new Set([startId]));setDoorOpen(new Set());
+  },[cfg, partyCharacters]);
 
   useEffect(()=>{void generate();},[generate]);
 
@@ -1914,8 +2067,11 @@ export default function DungeonForge(){
   const fogOpenFloor=useMemo(()=>isOpenFloorLocation(cfg.locationType),[cfg.locationType]);
   const mapFogCells=useMemo(()=>{
     if(!isP||!dg||!revealed)return null;
-    return computeVisibleCellsForPlayer(revealed,dg,doorOpen,null,{openFloor:fogOpenFloor});
-  },[isP,dg,revealed,doorOpen,fogOpenFloor]);
+    return computeVisibleCellsForPlayer(revealed,dg,doorOpen,null,{
+      openFloor:fogOpenFloor,
+      maxFogHops:maxFogHopsForLocationType(cfg.locationType),
+    });
+  },[isP,dg,revealed,doorOpen,fogOpenFloor,cfg.locationType]);
   useEffect(()=>{fogCellsForHoverRef.current=mapFogCells;},[mapFogCells]);
   useEffect(()=>{lastAppliedHoverSigRef.current="";},[dg]);
   const highlightRoom=useMemo(()=>{
@@ -2057,6 +2213,9 @@ export default function DungeonForge(){
     if(nm||cell.eType==="deco"){
       const detail=ex&&typeof ex==="object"&&"cr" in ex&&ex.cr!=null?` (CR ${ex.cr})`:ex&&ex.dmg?` — ${ex.dmg}`:ex&&ex.r?` [${ex.r}]`:"";
       tip=nm?`${nm}${detail}`:cell.eName?`${cell.eName}`:null;
+      if(ex&&typeof ex==="object"&&ex.decoKey==="lever_icon"&&ex.purpose){
+        tip=`Lever — ${ex.purpose}`;
+      }
     }
     const slug=hoveredNext&&typeof hoveredNext==="object"&&"slug" in hoveredNext?String(hoveredNext.slug??""):"";
     const fullSig=`${gx},${gy}|${tip??""}|${slug}`;
@@ -2080,6 +2239,16 @@ export default function DungeonForge(){
     if(gx<0||gy<0||gx>=dg.width||gy>=dg.height)return;
     const tile=dg.grid?.[gy]?.[gx];
     const key=`${gx},${gy}`;
+    if(!isP){
+      if(cell.eType==="riddle"&&cell.extra&&typeof cell.extra==="object"){
+        setForgeInspect({kind:"riddle",ent:cell.extra});
+        return;
+      }
+      if(cell.eType==="deco"&&cell.extra&&cell.extra.decoKey==="lever_icon"){
+        setForgeInspect({kind:"lever",deco:cell.extra,gx,gy});
+        return;
+      }
+    }
     if(!isP&&cell.extra?.type==="monster"&&cell.extra.slug){setStatCard({slug:cell.extra.slug,view:"dm"});return;}
     if(tile===T.D){
       if(!isP){
@@ -2125,7 +2294,11 @@ export default function DungeonForge(){
     if(!dg)return;
     const mergedRevealed=overrides.revealed!=null?new Set(overrides.revealed):revealed;
     const mergedDoorOpen=overrides.doorOpen!=null?new Set(overrides.doorOpen):doorOpen;
-    const revealedCells=[...computeVisibleCellsForPlayer(mergedRevealed,dg,mergedDoorOpen,null,{openFloor:isOpenFloorLocation(dg.locationType??cfg.locationType)})];
+    const locT=dg.locationType??cfg.locationType;
+    const revealedCells=[...computeVisibleCellsForPlayer(mergedRevealed,dg,mergedDoorOpen,null,{
+      openFloor:isOpenFloorLocation(locT),
+      maxFogHops:maxFogHopsForLocationType(locT),
+    })];
     const state={
       dungeonData:{
         grid:dg.grid,
@@ -2154,7 +2327,11 @@ export default function DungeonForge(){
   const exportPNG=(mode,{ink=false}={})=>{
     if(!dg)return;
     const isDm=mode==="dm";
-    const fogCells=!isDm?computeVisibleCellsForPlayer(revealed,dg,doorOpen,null,{openFloor:isOpenFloorLocation(dg.locationType??cfg.locationType)}):null;
+    const locT2=dg.locationType??cfg.locationType;
+    const fogCells=!isDm?computeVisibleCellsForPlayer(revealed,dg,doorOpen,null,{
+      openFloor:isOpenFloorLocation(locT2),
+      maxFogHops:maxFogHopsForLocationType(locT2),
+    }):null;
     const cellPx=Math.max(cfg.exportCellPx??32,cfg.cellPx??18);
     const dpr=ink?1:2;
     const fc={...cfg,showThemes:!!cfg.showThemes&&isDm};
@@ -2297,7 +2474,7 @@ export default function DungeonForge(){
           <LB S={S}>ASCII COPY</LB>
           <div style={{fontSize:11,color:S.dimText,lineHeight:1.35}}>Plain text grid (same topology as the map).</div>
           <button type="button" onClick={()=>{const u=new URL(window.location.href);u.searchParams.set("seed",String(cfg.seed));u.searchParams.set("loc",cfg.locationType);u.searchParams.set("level",String(cfg.level));void navigator.clipboard.writeText(u.toString());}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>COPY SHARE URL</button>
-          <button type="button" disabled={!dg||!asciiExport?.text} onClick={()=>{if(!dg||!asciiExport)return;const cellPx=Math.max(24,cfg.exportCellPx??32);const gridDm=buildRenderGrid(dg,{...cfg,showThemes:!!cfg.showThemes});const dmEl=document.createElement("canvas");renderDungeonToCanvas(dmEl,gridDm,{palette:LOCATION_PALETTE[dg.locationType]??DEFAULT_PALETTE,entities:ENTITY_PALETTE,cellPx,dpr:2,showEnts:true,playerSanitize:false,inkSaver:false});const dm=dmEl.toDataURL("image/png");const lines=dg.rooms.map(r=>`Room ${r.id}: ${r.namedRoom||r.label||r.type} (depth ${r.depth??"?"}, theme ${r.theme||"?"})`);openForgePrintPacket({title:`${dg.mapName||"Forge"} seed ${cfg.seed}`,asciiText:asciiExport.text,dmMapDataUrl:dm,roomLines:lines});}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PRINT DM PACKET</button>
+          <button type="button" disabled={!dg||!asciiExport?.text} onClick={()=>{if(!dg||!asciiExport)return;const cellPx=Math.max(24,cfg.exportCellPx??32);const gridDm=buildRenderGrid(dg,{...cfg,showThemes:!!cfg.showThemes});const dmEl=document.createElement("canvas");renderDungeonToCanvas(dmEl,gridDm,{palette:LOCATION_PALETTE[dg.locationType]??DEFAULT_PALETTE,entities:ENTITY_PALETTE,cellPx,dpr:2,showEnts:true,playerSanitize:false,inkSaver:false});const dm=dmEl.toDataURL("image/png");const lines=dg.rooms.map(r=>`Room ${r.id}: ${r.isSecretRoom?"[SECRET] ":""}${r.namedRoom||r.label||r.type} (depth ${r.depth??"?"}, theme ${r.theme||"?"})`);openForgePrintPacket({title:`${dg.mapName||"Forge"} seed ${cfg.seed}`,asciiText:asciiExport.text,dmMapDataUrl:dm,roomLines:lines});}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PRINT DM PACKET</button>
           <LB S={S}>SEED</LB>
           <div style={{display:"flex",gap:2}}>
             <input type="number" value={cfg.seed} onChange={e=>u("seed",parseInt(e.target.value)||0)} style={{flex:1,padding:"2px 3px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:30}}/>
@@ -2383,7 +2560,7 @@ export default function DungeonForge(){
           <button type="button" onClick={()=>pushToPlayerScreen({revealed:[...revealed],doorOpen:[...doorOpen],selectedRoomId:selRoom})} disabled={!dg} style={{padding:"6px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PUSH WITH FOG STATE</button>
           <Tg l="Auto-sync fog on change" on={!!cfg.autoSync} S={S} f={()=>u("autoSync",!cfg.autoSync)}/>
           {floors.length>1&&<><LB S={S}>FLOOR</LB><div style={{display:"flex",gap:2,flexWrap:"wrap"}}>
-            {floors.map((_,i)=>(<button key={i} onClick={()=>{setCurFloor(i+1);setDg(floors[i]);setSelRoom(null);setTvRoom(null);setDoorOpen(new Set());}} style={{padding:"1px 5px",fontSize:14,fontFamily:"'Courier New',monospace",background:curFloor===i+1?"rgba(255,255,255,0.08)":"transparent",color:curFloor===i+1?S.accent:S.dimText,border:`1px solid ${curFloor===i+1?S.accent:S.panelBorder}`,borderRadius:2,cursor:"pointer"}}>{i+1}</button>))}
+            {floors.map((_,i)=>(<button key={i} onClick={()=>{setCurFloor(i+1);setDg(floors[i]);setSelRoom(null);setTvRoom(null);setForgeInspect(null);setDoorOpen(new Set());}} style={{padding:"1px 5px",fontSize:14,fontFamily:"'Courier New',monospace",background:curFloor===i+1?"rgba(255,255,255,0.08)":"transparent",color:curFloor===i+1?S.accent:S.dimText,border:`1px solid ${curFloor===i+1?S.accent:S.panelBorder}`,borderRadius:2,cursor:"pointer"}}>{i+1}</button>))}
           </div></>}
           <div style={{marginTop:1}}><button onClick={()=>setLegend(!legend)} style={{background:"none",border:"none",cursor:"pointer",padding:0,color:S.dimText,fontSize:14,fontFamily:"'Courier New',monospace"}}>{legend?"[-]":"[+]"} LEGEND</button>
             {legend&&<div style={{marginTop:2,fontSize:14,lineHeight:1.7,color:S.textColor}}>
@@ -2552,10 +2729,11 @@ export default function DungeonForge(){
           </div>
           <DungeonLegend locationType={cfg.locationType} />
           </div>
-          {hovered&&coarsePointer&&<div style={{position:"fixed",bottom:"max(10px, var(--safe-bottom, 0px))",left:"50%",transform:"translateX(-50%)",background:S.panelBg,color:S.textColor,border:`1px solid ${S.panelBorder}`,padding:"5px 14px",fontSize:13,fontFamily:"'Courier New',monospace",borderRadius:2,zIndex:100,pointerEvents:"none",whiteSpace:"nowrap"}}>
+          {hovered&&coarsePointer&&<div style={{position:"fixed",bottom:"max(10px, var(--safe-bottom, 0px))",left:"50%",transform:"translateX(-50%)",background:S.panelBg,color:S.textColor,border:`1px solid ${S.panelBorder}`,padding:"5px 14px",fontSize:13,fontFamily:"'Courier New',monospace",borderRadius:2,zIndex:100,pointerEvents:"none",maxWidth:"min(96vw,420px)",whiteSpace:"normal"}}>
             {hovered.type==="monster"&&<><b style={{color:S.monsterFg}}>{hovered.name}</b> x{hovered.count} (CR {hovered.cr})</>}
             {hovered.type==="trap"&&<><b style={{color:S.trapFg}}>{hovered.name}</b> — {hovered.dmg}</>}
             {hovered.type==="item"&&<><b style={{color:RM[hovered.r]||S.itemFg}}>{hovered.name}</b> ({hovered.r})</>}
+            {hovered.type==="riddle"&&<><b style={{color:"#daf"}}>Riddle</b><div style={{fontSize:11,marginTop:4,color:S.dimText}}>{hovered.prompt}</div></>}
           </div>}
           <div
             className="forge-sidebar-right"
@@ -2568,15 +2746,17 @@ export default function DungeonForge(){
               boxSizing:"border-box",
             }}
           >
-            {!coarsePointer&&hovered&&<div style={{position:"sticky",top:0,zIndex:5,marginBottom:6,background:S.panelBg,padding:"5px 10px",border:`1px solid ${S.panelBorder}`,borderRadius:2,whiteSpace:"nowrap"}}>
+            {!coarsePointer&&hovered&&<div style={{position:"sticky",top:0,zIndex:5,marginBottom:6,background:S.panelBg,padding:"5px 10px",border:`1px solid ${S.panelBorder}`,borderRadius:2,whiteSpace: hovered.type==="riddle"?"normal":"nowrap"}}>
               {hovered.type==="monster"&&<><b style={{color:S.monsterFg}}>{hovered.name}</b> x{hovered.count} (CR {hovered.cr})</>}
               {hovered.type==="trap"&&<><b style={{color:S.trapFg}}>{hovered.name}</b> — {hovered.dmg}</>}
               {hovered.type==="item"&&<><b style={{color:RM[hovered.r]||S.itemFg}}>{hovered.name}</b> ({hovered.r})</>}
+              {hovered.type==="riddle"&&<><b style={{color:"#daf"}}>Riddle</b><div style={{fontSize:10,marginTop:4,color:S.textColor,maxHeight:72,overflow:"auto"}}>{hovered.prompt}</div></>}
             </div>}
             {selRoom?(()=>{const rm=rooms.find(r=>r.id===selRoom);if(!rm)return null;const re=ents.filter(e=>e.roomId===selRoom);const rd=decos.filter(d=>d.roomId===selRoom);const decoNames=[...new Set(rd.map(d=>d.name))];
               return(<div>
                 <div style={{fontSize:14,fontWeight:"bold",marginBottom:4,color:S.accent,display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
                   <span>{rm.namedRoom||`Room ${rm.id}`}: {rm.label||rm.type}</span>
+                  {!isP&&rm.isSecretRoom&&<span style={{fontSize:9,fontWeight:"bold",letterSpacing:0.5,color:"#9cf",border:"1px solid rgba(120,200,255,0.55)",padding:"1px 6px",borderRadius:3}}>SECRET ROOM</span>}
                   <span style={{fontSize:10,fontWeight:"normal",color:S.dimText}}>{rm.w}x{rm.h}</span>
                   {!isP&&rm.theme&&<span style={{fontSize:10,fontWeight:"normal",color:S.accentAlt}}>theme {rm.theme}</span>}
                   {!isP&&typeof rm.depth==="number"&&<span style={{fontSize:10,fontWeight:"normal",color:S.dimText}}>depth {rm.depth}</span>}
@@ -2588,6 +2768,7 @@ export default function DungeonForge(){
                 {!isP&&rm.stairDownTo&&<div style={{fontSize:12,color:S.dimText,marginBottom:2}}>▼ Stair down → Floor {rm.stairDownTo}</div>}
                 {!isP&&rm.stairUpTo&&<div style={{fontSize:12,color:S.dimText,marginBottom:2}}>▲ Stair up → Floor {rm.stairUpTo}</div>}
                 {!isP&&decoNames.length>0&&<div style={{fontSize:12,color:S.dimText,marginBottom:2}}>Scenery: {decoNames.join(", ")}</div>}
+                {!isP&&rm.secretHint&&<div style={{fontSize:11,color:"#9cf",marginBottom:4}}>Secret clue (DM): {rm.secretHint}</div>}
                 {isP?<div style={{fontSize:12,fontStyle:"italic",color:S.dimText}}>Entities hidden in player view</div>:
                   re.length===0?<div style={{fontSize:12,fontStyle:"italic",color:S.dimText}}>No encounters</div>:
                   <div style={{display:"flex",flexDirection:"column",gap:2}}>
@@ -2639,6 +2820,14 @@ export default function DungeonForge(){
                             </button>
                           ):(<><b>{e.name}</b><span> x{e.count} (CR {e.cr})</span></>)}
                         </>
+                      )}
+                      {e.type==="riddle"&&(
+                        <div style={{background:"rgba(180,140,255,0.08)",border:"1px solid #86a",borderRadius:3,padding:"6px 8px",fontSize:11,width:"100%"}}>
+                          <div style={{fontWeight:"bold",color:"#daf"}}>? Riddle</div>
+                          <div style={{color:S.textColor,marginTop:4}}>{e.prompt}</div>
+                          <div style={{color:S.dimText,marginTop:6,fontStyle:"italic"}}><b>DM answer:</b> {e.answer}</div>
+                          {e.rewardName&&<div style={{fontSize:10,color:S.accentAlt,marginTop:4}}>Reward hook: {e.rewardName}</div>}
+                        </div>
                       )}
                     </div>))}
                     {!isP&&re.some(e=>e.type==="monster")&&(
@@ -2753,6 +2942,44 @@ export default function DungeonForge(){
           </div>
         );
       })()}
+      {forgeInspect&&(
+        <div
+          role="presentation"
+          style={{position:"fixed",inset:0,zIndex:190,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
+          onClick={()=>setForgeInspect(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{maxWidth:480,width:"100%",background:S.panelBg,border:`1px solid ${S.panelBorder}`,padding:16,borderRadius:4,boxSizing:"border-box"}}
+            onClick={(ev)=>ev.stopPropagation()}
+          >
+            {forgeInspect.kind==="riddle"&&forgeInspect.ent&&(
+              <>
+                <div style={{fontSize:12,color:S.accent,marginBottom:8}}>Riddle (DM)</div>
+                <p style={{fontSize:14,color:S.textColor,marginBottom:12,lineHeight:1.4}}>{forgeInspect.ent.prompt}</p>
+                <div style={{fontSize:11,color:S.dimText,marginBottom:4}}>Answer</div>
+                <p style={{fontSize:13,color:"#daf",fontStyle:"italic",lineHeight:1.4}}>{forgeInspect.ent.answer}</p>
+                {forgeInspect.ent.rewardName&&<div style={{fontSize:11,color:S.accentAlt,marginTop:10}}>Loot hook: {forgeInspect.ent.rewardName}</div>}
+              </>
+            )}
+            {forgeInspect.kind==="lever"&&forgeInspect.deco&&(
+              <>
+                <div style={{fontSize:12,color:S.accent,marginBottom:8}}>Lever (DM)</div>
+                <p style={{fontSize:13,color:S.textColor,lineHeight:1.45}}>{forgeInspect.deco.purpose||"Mechanism tied to a nearby door."}</p>
+                {forgeInspect.deco.doorGx!=null&&<div style={{fontSize:10,color:S.dimText,marginTop:10}}>Door cell ({forgeInspect.deco.doorGx},{forgeInspect.deco.doorGy}) · lever ({forgeInspect.gx},{forgeInspect.gy})</div>}
+              </>
+            )}
+            <button
+              type="button"
+              onClick={()=>setForgeInspect(null)}
+              style={{marginTop:14,padding:"6px 14px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.textColor,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
       {statCard&&<MonsterStatCard slug={statCard.slug} initialView={statCard.view} onClose={()=>setStatCard(null)} />}
     </div>);
 }
