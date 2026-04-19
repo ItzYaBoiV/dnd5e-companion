@@ -21,6 +21,7 @@ import {
 import { clsx } from "clsx";
 import DungeonForge from "@/components/dungeon-forge/DungeonForge";
 import { DungeonMapCanvas } from "@/components/dungeon-forge/DungeonMapCanvas";
+import { MonsterStatCard } from "@/components/dungeon-forge/MonsterStatCard";
 import { buildRenderGrid } from "@/lib/dungeonForgeRenderGrid";
 import { decrementForgeMonsterBySlug, removeEntityAtXY } from "@/lib/dungeonEntityUpdates";
 import { makeSeededRng, pickWallAdjacentFloorCells } from "@/lib/forgeWallLights";
@@ -33,7 +34,11 @@ import {
   isOpenFloorLocation,
   maxFogHopsForLocationType,
 } from "@/lib/dungeonForgeFog";
-import { greedyStepToward, walkGreedyStepsOnGrid } from "@/lib/dungeonGridMovement";
+import {
+  greedyStepToward,
+  shortestWalkablePathBfs,
+  walkGreedyStepsOnGrid,
+} from "@/lib/dungeonGridMovement";
 import { DEFAULT_PLAYER_VISION_FOG_CELLS, PLAYER_SIGHT_RING_CELLS } from "@/lib/playerMapVision";
 import { visionRadiusCellsFromCharacter } from "@/lib/playerVisionFromCharacter";
 import {
@@ -571,6 +576,15 @@ function trapDamageDiceFromText(dmg: string | null | undefined): string | null {
   return extractDiceNotation(String(dmg ?? ""));
 }
 
+/** Turn forge slugs like `werewolf_bf` into readable text for tooltips. */
+function humanizeMonsterSlug(slug: string): string {
+  return slug
+    .replace(/_bf$/i, "")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function mapEntityCellHoverLines(cell: RenderCell | null | undefined): string[] | null {
   if (!cell?.eType) return null;
   if (cell.eType === "deco" || cell.eType === "label" || cell.eType === "theme") return null;
@@ -582,8 +596,12 @@ function mapEntityCellHoverLines(cell: RenderCell | null | undefined): string[] 
         `Item: ${String(ex.name ?? ex.slug ?? "?")}`,
         ...(ex.slug ? [`Ref: ${String(ex.slug)}`] : []),
       ];
-    case "monster":
-      return [`Creature: ${String(ex.name ?? "?")}`, ...(ex.slug ? [`${String(ex.slug)}`] : [])];
+    case "monster": {
+      const name = ex.name != null && String(ex.name).trim() !== "" ? String(ex.name).trim() : null;
+      const slug = ex.slug != null ? String(ex.slug).trim() : "";
+      const label = name ?? (slug ? humanizeMonsterSlug(slug) : "Creature");
+      return [`${label}`];
+    }
     case "trap": {
       const lines = [
         `Trap${ex.name ? `: ${String(ex.name)}` : ""}`,
@@ -674,6 +692,12 @@ export function EncounterWorkspace({
     cell: RenderCell;
     worldGx: number;
     worldGy: number;
+    clientX: number;
+    clientY: number;
+  } | null>(null);
+  const [monsterStatCardSlug, setMonsterStatCardSlug] = useState<string | null>(null);
+  const [monsterTokenMenu, setMonsterTokenMenu] = useState<{
+    combatantId: string;
     clientX: number;
     clientY: number;
   } | null>(null);
@@ -782,6 +806,15 @@ export function EncounterWorkspace({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [marchMenu]);
+
+  useEffect(() => {
+    if (!monsterTokenMenu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMonsterTokenMenu(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [monsterTokenMenu]);
 
   useEffect(() => {
     if (!mapEncounterMenu) return;
@@ -1248,6 +1281,83 @@ export function EncounterWorkspace({
       marchIntervalRef.current = window.setInterval(() => {
         marchStepRef.n += 1;
         setBattleTokens((prev) => {
+          const useConga =
+            !!partyLeaderId &&
+            partyFollowIds.length > 0 &&
+            marchIds.has(partyLeaderId) &&
+            partyFollowIds.some((id) => marchIds.has(id));
+
+          if (useConga) {
+            const occ = new Set(prev.map((t) => `${Math.floor(t.gx)},${Math.floor(t.gy)}`));
+            const leader = prev.find((t) => t.id === partyLeaderId);
+            if (!leader?.id) {
+              return prev;
+            }
+            const oldLx = Math.floor(leader.gx);
+            const oldLy = Math.floor(leader.gy);
+            const oldLKey = `${oldLx},${oldLy}`;
+
+            const next = prev.map((t) => ({ ...t }));
+            const write = (id: string, gx: number, gy: number) => {
+              const i = next.findIndex((x) => x.id === id);
+              if (i >= 0) next[i] = { ...next[i]!, gx, gy };
+            };
+
+            let changed = false;
+            const lStep = greedyStepToward(
+              { gx: leader.gx, gy: leader.gy },
+              { gx: targetGx, gy: targetGy },
+              grid,
+              occ,
+              oldLKey,
+            );
+            if (lStep && (lStep.gx !== oldLx || lStep.gy !== oldLy)) {
+              occ.delete(oldLKey);
+              occ.add(`${lStep.gx},${lStep.gy}`);
+              write(partyLeaderId, lStep.gx, lStep.gy);
+              changed = true;
+            }
+
+            for (const fid of partyFollowIds) {
+              if (!marchIds.has(fid)) continue;
+              const ft = next.find((t) => t.id === fid);
+              if (!ft?.id) continue;
+              const fx = Math.floor(ft.gx);
+              const fy = Math.floor(ft.gy);
+              const fk = `${fx},${fy}`;
+              const step = greedyStepToward(
+                { gx: ft.gx, gy: ft.gy },
+                { gx: oldLx, gy: oldLy },
+                grid,
+                occ,
+                fk,
+              );
+              if (step && (step.gx !== fx || step.gy !== fy)) {
+                occ.delete(fk);
+                occ.add(`${step.gx},${step.gy}`);
+                write(fid, step.gx, step.gy);
+                changed = true;
+              }
+            }
+
+            const nl = next.find((t) => t.id === partyLeaderId);
+            const leaderDone =
+              nl != null && Math.floor(nl.gx) === targetGx && Math.floor(nl.gy) === targetGy;
+
+            if (leaderDone || !changed || marchStepRef.n > 900) {
+              if (marchIntervalRef.current != null) {
+                clearInterval(marchIntervalRef.current);
+                marchIntervalRef.current = null;
+              }
+              queueMicrotask(() => broadcastRef.current?.({ cropToRoom: true }));
+              return next;
+            }
+            if (marchStepRef.n % 2 === 0) {
+              queueMicrotask(() => broadcastRef.current?.({ cropToRoom: true }));
+            }
+            return next;
+          }
+
           const occ = new Set(prev.map((t) => `${Math.floor(t.gx)},${Math.floor(t.gy)}`));
           let allDone = true;
           let changed = false;
@@ -1275,7 +1385,7 @@ export function EncounterWorkspace({
               marchIntervalRef.current = null;
             }
             queueMicrotask(() => broadcastRef.current?.({ cropToRoom: true }));
-            return prev;
+            return next;
           }
           if (marchStepRef.n % 2 === 0) {
             queueMicrotask(() => broadcastRef.current?.({ cropToRoom: true }));
@@ -1351,15 +1461,52 @@ export function EncounterWorkspace({
         const ly = Math.floor(p.worldGy);
         occ.add(`${lx},${ly}`);
 
+        const lStart = { gx: Math.floor(p.startWorldGx), gy: Math.floor(p.startWorldGy) };
+        const lEnd = { gx: lx, gy: ly };
+        const path = shortestWalkablePathBfs(grid, lStart, lEnd);
+
         const nextFollowerPos = new Map<string, { gx: number; gy: number }>();
-        for (const fid of Object.keys(snap)) {
-          const o = snap[fid]!;
-          const start = { gx: Math.floor(o.gx), gy: Math.floor(o.gy) };
-          const target = { gx: Math.floor(o.gx + dx), gy: Math.floor(o.gy + dy) };
-          const maxSteps = Math.min(200, Math.abs(dx) + Math.abs(dy) + 48);
-          const end = walkGreedyStepsOnGrid(grid, start, target, occ, maxSteps);
-          nextFollowerPos.set(fid, end);
-          occ.add(`${end.gx},${end.gy}`);
+        const followerIds = Object.keys(snap);
+        const maxSteps = Math.min(200, Math.abs(dx) + Math.abs(dy) + 64);
+
+        if (path && path.length >= 2) {
+          const n = path.length;
+          const taken = new Set<string>();
+          const slotFor = new Map<string, { gx: number; gy: number }>();
+          for (let fi = 0; fi < followerIds.length; fi++) {
+            const fid = followerIds[fi]!;
+            let si = Math.max(0, n - 2 - fi);
+            while (si >= 0 && taken.has(`${path[si]!.gx},${path[si]!.gy}`)) si--;
+            if (si < 0) {
+              for (let j = n - 2; j >= 0; j--) {
+                if (!taken.has(`${path[j]!.gx},${path[j]!.gy}`)) {
+                  si = j;
+                  break;
+                }
+              }
+            }
+            if (si < 0) si = Math.max(0, n - 2);
+            const cell = path[si]!;
+            taken.add(`${cell.gx},${cell.gy}`);
+            slotFor.set(fid, cell);
+          }
+          for (const fid of followerIds) {
+            const o = snap[fid]!;
+            const start = { gx: Math.floor(o.gx), gy: Math.floor(o.gy) };
+            const target = slotFor.get(fid)!;
+            const end = walkGreedyStepsOnGrid(grid, start, target, occ, maxSteps);
+            nextFollowerPos.set(fid, end);
+            occ.add(`${end.gx},${end.gy}`);
+          }
+        } else {
+          for (const fid of followerIds) {
+            const o = snap[fid]!;
+            const start = { gx: Math.floor(o.gx), gy: Math.floor(o.gy) };
+            const target = { gx: Math.floor(o.gx + dx), gy: Math.floor(o.gy + dy) };
+            const end = walkGreedyStepsOnGrid(grid, start, target, occ, maxSteps);
+            nextFollowerPos.set(fid, end);
+            occ.add(`${end.gx},${end.gy}`);
+          }
         }
 
         return prev.map((t) => {
@@ -1825,6 +1972,17 @@ export function EncounterWorkspace({
                       });
                     }
               }
+              onMonsterTokenContextMenu={
+                laserPointerMode || !activeCombat
+                  ? undefined
+                  : (payload) => {
+                      setMonsterTokenMenu({
+                        combatantId: payload.tokenId,
+                        clientX: payload.clientX,
+                        clientY: payload.clientY,
+                      });
+                    }
+              }
               onCellHover={
                 laserPointerMode
                   ? (hx, hy) => {
@@ -1968,11 +2126,20 @@ export function EncounterWorkspace({
             {tokenHoverTip.tokens.map((t) => {
               const c = t.id ? activeCombat?.combatants.find((x) => x.id === t.id) : null;
               const role = t.kind === "player" ? "PC" : "Foe";
-              const line = c ? `${c.label} · ${role}` : `${t.label || "?"} · ${role}`;
+              const line = c
+                ? `${c.label} · ${role}`
+                : `${t.label || "?"} · ${role}`;
               return <div key={t.id ?? `${t.gx}-${t.gy}-${t.label}`}>{line}</div>;
             })}
+            {tokenHoverTip.tokens.some((t) => t.kind === "monster") && (
+              <div className="mt-1 text-[10px] text-gray-500">Right-click for stat card</div>
+            )}
             {(() => {
-              const ent = mapEntityCellHoverLines(tokenHoverTip.cell ?? null);
+              const cell = tokenHoverTip.cell ?? null;
+              const hideForgeMonsterLine =
+                tokenHoverTip.tokens.some((x) => x.kind === "monster") && cell?.eType === "monster";
+              if (hideForgeMonsterLine) return null;
+              const ent = mapEntityCellHoverLines(cell);
               if (!ent?.length) return null;
               return (
                 <div className="mt-1.5 border-t border-gray-700 pt-1.5 text-[10px] text-gray-300">
@@ -2534,6 +2701,67 @@ export function EncounterWorkspace({
           )}
         </div>
       </>
+    )}
+
+    {monsterTokenMenu && activeCombat && (
+      <>
+        <button
+          type="button"
+          className="fixed inset-0 z-[150] cursor-default bg-transparent"
+          aria-label="Close menu"
+          onClick={() => setMonsterTokenMenu(null)}
+        />
+        <div
+          className="fixed z-[160] min-w-[14rem] max-w-[90vw] rounded border border-gray-600 bg-gray-950/98 p-2 text-xs text-gray-200 shadow-2xl"
+          style={{
+            left: Math.min(
+              monsterTokenMenu.clientX,
+              (typeof window !== "undefined" ? window.innerWidth : 800) - 220,
+            ),
+            top: Math.min(
+              monsterTokenMenu.clientY,
+              (typeof window !== "undefined" ? window.innerHeight : 600) - 200,
+            ),
+          }}
+        >
+          {(() => {
+            const mc = activeCombat.combatants.find((c) => c.id === monsterTokenMenu.combatantId);
+            if (!mc || mc.type !== "monster") {
+              return <p className="text-gray-400">No monster data for this token.</p>;
+            }
+            return (
+              <>
+                <p className="mb-2 font-semibold text-dnd-gold">{mc.label}</p>
+                {mc.monsterSlug ? (
+                  <button
+                    type="button"
+                    className="mb-2 w-full rounded border border-dnd-gold/50 bg-dnd-gold/10 px-2 py-1.5 text-left text-dnd-gold hover:bg-dnd-gold/20"
+                    onClick={() => {
+                      setMonsterStatCardSlug(mc.monsterSlug!);
+                      setMonsterTokenMenu(null);
+                    }}
+                  >
+                    View stat card
+                  </button>
+                ) : (
+                  <p className="mb-2 text-[11px] text-gray-500">No compendium slug on this combatant.</p>
+                )}
+                <button
+                  type="button"
+                  className="mt-1 w-full rounded border border-gray-700 py-1 text-[11px] text-gray-500 hover:bg-gray-800"
+                  onClick={() => setMonsterTokenMenu(null)}
+                >
+                  Close
+                </button>
+              </>
+            );
+          })()}
+        </div>
+      </>
+    )}
+
+    {monsterStatCardSlug && (
+      <MonsterStatCard slug={monsterStatCardSlug} initialView="dm" onClose={() => setMonsterStatCardSlug(null)} />
     )}
 
     {mapEntityModal?.kind === "item" && (

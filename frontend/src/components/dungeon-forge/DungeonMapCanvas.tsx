@@ -45,6 +45,14 @@ export type DungeonMapCanvasProps = {
     clientX: number;
     clientY: number;
   }) => void;
+  /** Right-click on a monster battle token (combatant id). */
+  onMonsterTokenContextMenu?: (payload: {
+    tokenId: string;
+    worldGx: number;
+    worldGy: number;
+    clientX: number;
+    clientY: number;
+  }) => void;
   /** Sight ring radius in grid cells (player tokens); avoids volumetric token lights. */
   playerSightRingCells?: number | null;
   tokenDragEnabled?: boolean;
@@ -120,6 +128,7 @@ function DungeonMapCanvasInner({
   onTokensAtCell,
   mapPanEnabled,
   onPlayerTokenContextMenu,
+  onMonsterTokenContextMenu,
   mapViewportPan,
   onMapViewportPanChange,
   onMapCellContextMenu,
@@ -375,6 +384,17 @@ function DungeonMapCanvasInner({
         if (top?.kind === "player" && top.id && onPlayerTokenContextMenu) {
           e.preventDefault();
           onPlayerTokenContextMenu({
+            tokenId: top.id,
+            worldGx: r.x,
+            worldGy: r.y,
+            clientX: e.clientX,
+            clientY: e.clientY,
+          });
+          return;
+        }
+        if (top?.kind === "monster" && top.id && onMonsterTokenContextMenu) {
+          e.preventDefault();
+          onMonsterTokenContextMenu({
             tokenId: top.id,
             worldGx: r.x,
             worldGy: r.y,

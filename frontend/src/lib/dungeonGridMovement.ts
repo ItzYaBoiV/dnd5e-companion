@@ -1,5 +1,63 @@
 import { isDungeonGridWalkable } from "@/lib/dungeonForgeFog";
 
+/** Shortest walkable path (4-neighbor BFS). Returns [start … end] inclusive, or null. */
+export function shortestWalkablePathBfs(
+  grid: number[][],
+  start: { gx: number; gy: number },
+  end: { gx: number; gy: number },
+): { gx: number; gy: number }[] | null {
+  const H = grid.length;
+  const W = grid[0]?.length ?? 0;
+  const sx = Math.floor(start.gx);
+  const sy = Math.floor(start.gy);
+  const ex = Math.floor(end.gx);
+  const ey = Math.floor(end.gy);
+  if (W < 1 || H < 1) return null;
+  if (sx < 0 || sy < 0 || sx >= W || sy >= H || ex < 0 || ey < 0 || ex >= W || ey >= H) return null;
+  const sTile = grid[sy]![sx]!;
+  const eTile = grid[ey]![ex]!;
+  if (!isDungeonGridWalkable(sTile) || !isDungeonGridWalkable(eTile)) return null;
+  if (sx === ex && sy === ey) return [{ gx: sx, gy: sy }];
+
+  const startKey = `${sx},${sy}`;
+  const queue: [number, number][] = [[sx, sy]];
+  const seen = new Set<string>([startKey]);
+  const parent = new Map<string, string | null>();
+  parent.set(startKey, null);
+
+  const orth = (x: number, y: number): [number, number][] => [
+    [x + 1, y],
+    [x - 1, y],
+    [x, y + 1],
+    [x, y - 1],
+  ];
+
+  while (queue.length) {
+    const [x, y] = queue.shift()!;
+    if (x === ex && y === ey) {
+      const path: { gx: number; gy: number }[] = [];
+      let ck: string | null = `${x},${y}`;
+      while (ck) {
+        const [px, py] = ck.split(",").map(Number) as [number, number];
+        path.push({ gx: px, gy: py });
+        ck = parent.get(ck) ?? null;
+      }
+      path.reverse();
+      return path;
+    }
+    for (const [nx, ny] of orth(x, y)) {
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+      if (!isDungeonGridWalkable(grid[ny]![nx]!)) continue;
+      const nk = `${nx},${ny}`;
+      if (seen.has(nk)) continue;
+      seen.add(nk);
+      parent.set(nk, `${x},${y}`);
+      queue.push([nx, ny]);
+    }
+  }
+  return null;
+}
+
 /** One orthogonal step toward a target for token marching (4-way movement). */
 export function greedyStepToward(
   from: { gx: number; gy: number },
