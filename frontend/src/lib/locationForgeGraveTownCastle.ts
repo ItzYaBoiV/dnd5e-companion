@@ -388,7 +388,13 @@ export function enrichTownFeatures(args: {
   W: number;
   H: number;
   usedCells: Set<string>;
-  cfg: { townMarketDay?: boolean; townFortified?: boolean; townChaseMode?: boolean };
+  cfg: {
+    townMarketDay?: boolean;
+    townFortified?: boolean;
+    townChaseMode?: boolean;
+    townDistrictStyle?: string;
+    townWaterfront?: string;
+  };
 }): ForgeDmHints {
   const { grid, rooms, entities, rng, W, H, usedCells, cfg } = args;
   const hints: ForgeDmHints = {};
@@ -513,6 +519,36 @@ export function enrichTownFeatures(args: {
       y: rI(Math.floor(H / 4), Math.floor((3 * H) / 4), rng),
       text: pick(STREET_NAMES, rng),
       rot: rng() < 0.5 ? 0 : -Math.PI / 2,
+    });
+  }
+  const districtLabel: Record<string, string> = {
+    balanced: "Mixed district",
+    market_hub: "Market quarter",
+    temple_ward: "Temple ward",
+    noble_ring: "Noble quarter",
+    poor_sprawl: "Workers' sprawl",
+  };
+  if (cfg.townDistrictStyle && districtLabel[cfg.townDistrictStyle]) {
+    hints.streetLabels.push({
+      x: rI(Math.floor(W / 3), Math.floor((2 * W) / 3), rng),
+      y: rI(Math.floor(H / 3), Math.floor((2 * H) / 3), rng),
+      text: districtLabel[cfg.townDistrictStyle],
+      rot: 0,
+    });
+  }
+  if (cfg.townWaterfront === "edge_river") {
+    hints.streetLabels.push({
+      x: rI(Math.floor(W / 6), Math.floor((5 * W) / 6), rng),
+      y: rI(2, Math.max(2, Math.floor(H / 5)), rng),
+      text: "Riverfront",
+      rot: 0,
+    });
+  } else if (cfg.townWaterfront === "canals") {
+    hints.streetLabels.push({
+      x: Math.floor(W / 2),
+      y: Math.floor(H / 2),
+      text: "Canal ward",
+      rot: 0,
     });
   }
 

@@ -350,24 +350,38 @@ SPELL_N=0
 MON_N=0
 RACE_N=0
 CLASS_FEAT_N=0
+CURRENT_SEED_SIG=""
+SEED_STATE_FILE="$SCRIPT_DIR/.deploy-state/last_srd_seed_signature.txt"
 
-if docker compose exec -T postgres pg_isready -q 2>/dev/null; then
-  RAW="$(
-    docker compose exec -T -e PGPASSWORD="$POSTGRES_PASSWORD" postgres psql -U "$PGU" -d "$PGD" -tAc \
-      "SELECT concat_ws(',', (SELECT COUNT(*)::text FROM \"Spell\"), (SELECT COUNT(*)::text FROM \"Monster\"), (SELECT COUNT(*)::text FROM \"Race\"), (SELECT COUNT(*)::text FROM \"ClassFeature\"));" \
-      2>/dev/null | tr -d ' \r' || true
-  )"
-  if [[ -n "$RAW" && "$RAW" == *","*","*","* ]]; then
-    IFS=',' read -r SPELL_N MON_N RACE_N CLASS_FEAT_N <<< "$RAW"
-    SPELL_N="${SPELL_N:-0}"
-    MON_N="${MON_N:-0}"
-    RACE_N="${RACE_N:-0}"
-    CLASS_FEAT_N="${CLASS_FEAT_N:-0}"
-    # Class features come from Open5e class tables; older seeds left this table empty.
-    if [[ "$SPELL_N" =~ ^[0-9]+$ && "$MON_N" =~ ^[0-9]+$ && "$RACE_N" =~ ^[0-9]+$ && "$CLASS_FEAT_N" =~ ^[0-9]+$ \
-      && "$SPELL_N" -ge 80 && "$MON_N" -ge 80 && "$RACE_N" -ge 8 && "$CLASS_FEAT_N" -ge 80 ]]; then
-      SEED_LOOKS_DONE=1
-    fi
+read_seed_signature() {
+  if ! docker compose exec -T postgres pg_isready -q 2>/dev/null; then
+    return 1
+  fi
+  docker compose exec -T -e PGPASSWORD="$POSTGRES_PASSWORD" postgres psql -U "$PGU" -d "$PGD" -tAc \
+    "SELECT concat_ws(',', (SELECT COUNT(*)::text FROM \"Spell\"), (SELECT COUNT(*)::text FROM \"Monster\"), (SELECT COUNT(*)::text FROM \"Race\"), (SELECT COUNT(*)::text FROM \"ClassFeature\"));" \
+    2>/dev/null | tr -d ' \r'
+}
+
+hydrate_seed_counts() {
+  local raw="$1"
+  if [[ -z "$raw" || "$raw" != *","*","*","* ]]; then
+    return 1
+  fi
+  IFS=',' read -r SPELL_N MON_N RACE_N CLASS_FEAT_N <<< "$raw"
+  SPELL_N="${SPELL_N:-0}"
+  MON_N="${MON_N:-0}"
+  RACE_N="${RACE_N:-0}"
+  CLASS_FEAT_N="${CLASS_FEAT_N:-0}"
+  CURRENT_SEED_SIG="${SPELL_N},${MON_N},${RACE_N},${CLASS_FEAT_N}"
+  return 0
+}
+
+SEED_RAW="$(read_seed_signature || true)"
+if hydrate_seed_counts "$SEED_RAW"; then
+  # Class features come from Open5e class tables; older seeds left this table empty.
+  if [[ "$SPELL_N" =~ ^[0-9]+$ && "$MON_N" =~ ^[0-9]+$ && "$RACE_N" =~ ^[0-9]+$ && "$CLASS_FEAT_N" =~ ^[0-9]+$ \
+    && "$SPELL_N" -ge 80 && "$MON_N" -ge 80 && "$RACE_N" -ge 8 && "$CLASS_FEAT_N" -ge 80 ]]; then
+    SEED_LOOKS_DONE=1
   fi
 fi
 
@@ -376,18 +390,36 @@ run_full_seed() {
   echo -e "${CYAN}Seeding SRD data — you'll see each section as it completes:${RESET}"
   echo ""
   backend_with_db 'node dist/services/seedService.js'
+  mkdir -p "$(dirname "$SEED_STATE_FILE")"
+  local new_raw
+  new_raw="$(read_seed_signature || true)"
+  if hydrate_seed_counts "$new_raw" && [[ -n "$CURRENT_SEED_SIG" ]]; then
+    printf '%s\n' "$CURRENT_SEED_SIG" > "$SEED_STATE_FILE"
+  fi
   ok "Seed complete!"
 }
 
 if [[ "$SEED_LOOKS_DONE" -eq 1 ]]; then
   echo "Reference tables already look populated (SRD-scale): Spell=$SPELL_N, Monster=$MON_N, Race=$RACE_N, ClassFeature=$CLASS_FEAT_N."
   echo "Re-seeding replaces/updates data and usually takes ~5–15 minutes."
-  ask 'Skip seed and keep existing data? (Y/n):'
-  read -r DO_SEED
-  if [[ "$DO_SEED" =~ ^[Nn]$ ]]; then
-    run_full_seed
+  LAST_SEED_SIG=""
+  if [[ -f "$SEED_STATE_FILE" ]]; then
+    LAST_SEED_SIG="$(tr -d ' \r\n' < "$SEED_STATE_FILE" || true)"
+  fi
+  if [[ -n "$CURRENT_SEED_SIG" && "$CURRENT_SEED_SIG" == "$LAST_SEED_SIG" && "${FORCE_SEED:-0}" != "1" ]]; then
+    ok "Seed data signature unchanged from last deploy ($CURRENT_SEED_SIG) — auto-skipping seed."
   else
-    ok "Skipped seed — existing reference data kept."
+    ask 'Skip seed and keep existing data? (Y/n):'
+    read -r DO_SEED
+    if [[ "$DO_SEED" =~ ^[Nn]$ ]]; then
+      run_full_seed
+    else
+      mkdir -p "$(dirname "$SEED_STATE_FILE")"
+      if [[ -n "$CURRENT_SEED_SIG" ]]; then
+        printf '%s\n' "$CURRENT_SEED_SIG" > "$SEED_STATE_FILE"
+      fi
+      ok "Skipped seed — existing reference data kept."
+    fi
   fi
 else
   echo "Seed all D&D 5e SRD data? Races, classes, spells, monsters, items, etc."

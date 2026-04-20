@@ -745,11 +745,11 @@ function rectsOverlapPad(a,b,gap){
 }
 
 /** 1–3 non-overlapping building footprints inside a town lot (leaves yard = open floor). */
-function layoutTownBuildingsInLot(lot,n,rng){
+function layoutTownBuildingsInLot(lot,n,rng,grid){
   const {rx,ry,rw,rh}=lot;
   const rects=[];
   const gap=1;
-  const cap=rw>=12&&rh>=10?3:rw>=9&&rh>=8?2:1;
+  const cap=rw>=20&&rh>=14?4:rw>=12&&rh>=10?3:rw>=9&&rh>=8?2:1;
   const target=Math.min(n,cap,rI(1,Math.min(cap,n),rng));
   let tries=0;
   while(rects.length<target&&tries<target*140){
@@ -766,6 +766,14 @@ function layoutTownBuildingsInLot(lot,n,rng){
     const bx=rI(bxMin,bxMax,rng);
     const by=rI(byMin,byMax,rng);
     const cand={x:bx,y:by,w:brw,h:brh};
+    // Do not place buildings over waterfront/canal water.
+    let watery=false;
+    for(let y=by;y<by+brh&&!watery;y++){
+      for(let x=bx;x<bx+brw;x++){
+        if(grid[y]?.[x]===T.WA||grid[y]?.[x]===T.LAVA){watery=true;break;}
+      }
+    }
+    if(watery) continue;
     if(rects.some((r)=>rectsOverlapPad(cand,r,gap))) continue;
     rects.push(cand);
   }
@@ -774,7 +782,13 @@ function layoutTownBuildingsInLot(lot,n,rng){
     const brh=Math.max(3,Math.min(rh-4,Math.floor(rh*0.52)));
     const bx=rx+Math.max(1,Math.floor((rw-brw)/2));
     const by=ry+Math.max(1,Math.floor((rh-brh)/2));
-    rects.push({x:bx,y:by,w:brw,h:brh});
+    let watery=false;
+    for(let y=by;y<by+brh&&!watery;y++){
+      for(let x=bx;x<bx+brw;x++){
+        if(grid[y]?.[x]===T.WA||grid[y]?.[x]===T.LAVA){watery=true;break;}
+      }
+    }
+    if(!watery) rects.push({x:bx,y:by,w:brw,h:brh});
   }
   return rects;
 }
@@ -818,50 +832,251 @@ function stampTownBuilding(grid,rect,W,H,rng){
   placeTownDoorOnBuilding(grid,rx,ry,rw,rh,W,H,rng);
 }
 
+function pickWeightedTownType(entries,rng){
+  const total=entries.reduce((s,e)=>s+Math.max(0,e.w||0),0);
+  if(total<=0) return entries[0]?.type||"House";
+  let roll=rng()*total;
+  for(const e of entries){
+    roll-=Math.max(0,e.w||0);
+    if(roll<=0) return e.type;
+  }
+  return entries[entries.length-1]?.type||"House";
+}
+
+function chooseTownBuildingType(districtStyle,distN,rng){
+  // distN: 0 center .. 1 edge
+  const center=clamp(1-distN,0,1);
+  const edge=clamp(distN,0,1);
+  const balanced=[
+    {type:"House",w:40+edge*24},
+    {type:"General Store",w:11+center*7},
+    {type:"Market",w:10+center*16},
+    {type:"Inn",w:8+center*8},
+    {type:"Tavern",w:8+center*8},
+    {type:"Temple",w:5+center*6},
+    {type:"Town Hall",w:4+center*7},
+    {type:"Blacksmith",w:7+edge*5},
+    {type:"Stable",w:6+edge*6},
+    {type:"Guard Tower",w:4+edge*7},
+    {type:"Barracks",w:3+edge*6},
+    {type:"Library",w:2+center*4},
+    {type:"Apothecary",w:4+center*3},
+    {type:"Bakery",w:5+center*4},
+    {type:"Well Square",w:3+center*8},
+  ];
+  if(districtStyle==="market_hub"){
+    return pickWeightedTownType([
+      {type:"Market",w:20+center*20},
+      {type:"General Store",w:14+center*12},
+      {type:"Inn",w:12+center*8},
+      {type:"Tavern",w:12+center*10},
+      {type:"Blacksmith",w:9+edge*6},
+      {type:"Bakery",w:8+center*7},
+      {type:"House",w:26+edge*10},
+      {type:"Well Square",w:4+center*8},
+      {type:"Temple",w:3+center*4},
+    ],rng);
+  }
+  if(districtStyle==="temple_ward"){
+    return pickWeightedTownType([
+      {type:"Temple",w:16+center*22},
+      {type:"Library",w:10+center*10},
+      {type:"Apothecary",w:9+center*8},
+      {type:"Town Hall",w:8+center*7},
+      {type:"House",w:36+edge*10},
+      {type:"Inn",w:7+center*6},
+      {type:"General Store",w:6+center*5},
+      {type:"Well Square",w:4+center*8},
+      {type:"Guard Tower",w:3+edge*7},
+    ],rng);
+  }
+  if(districtStyle==="noble_ring"){
+    return pickWeightedTownType([
+      {type:"Town Hall",w:9+center*16},
+      {type:"Library",w:8+center*12},
+      {type:"Temple",w:7+center*10},
+      {type:"Guard Tower",w:6+center*8},
+      {type:"Barracks",w:6+edge*9},
+      {type:"House",w:38+edge*22},
+      {type:"Inn",w:5+center*4},
+      {type:"Well Square",w:4+center*8},
+      {type:"Market",w:4+center*4},
+    ],rng);
+  }
+  if(districtStyle==="poor_sprawl"){
+    return pickWeightedTownType([
+      {type:"House",w:54+edge*18},
+      {type:"Tavern",w:10+center*6},
+      {type:"Bakery",w:8+center*4},
+      {type:"Stable",w:8+edge*8},
+      {type:"Blacksmith",w:8+edge*8},
+      {type:"General Store",w:8+center*4},
+      {type:"Market",w:6+center*8},
+      {type:"Guard Tower",w:4+edge*8},
+      {type:"Temple",w:2+center*4},
+    ],rng);
+  }
+  return pickWeightedTownType(balanced,rng);
+}
+
 function generateTownLayout(cfg,rng){
   const {width:W,height:H,roomCount}=cfg;
   const grid=Array.from({length:H},()=>Array(W).fill(T.V));
   const rooms=[];
-  const ROAD_W=3,BLOCK=16,STRIDE=ROAD_W+BLOCK;
-  const vX=[],hY=[];
-  for(let x=0;x+ROAD_W<=W;x+=STRIDE) vX.push(x);
-  for(let y=0;y+ROAD_W<=H;y+=STRIDE) hY.push(y);
-  for(const rx of vX) for(let y=0;y<H;y++) for(let d=0;d<ROAD_W;d++) grid[y][rx+d]=T.ROAD;
-  for(const ry of hY) for(let x=0;x<W;x++) for(let d=0;d<ROAD_W;d++) grid[ry+d][x]=T.ROAD;
+  const districtStyle=cfg.townDistrictStyle??"balanced";
+  const streetStyle=cfg.townStreetStyle??"organic";
+  const density=cfg.townDensity??"normal";
+  const plazaMode=cfg.townPlazas??"some";
+  const waterfront=cfg.townWaterfront??"none";
+  const densityFactor=density==="sparse"?0.72:density==="dense"?1.34:1;
+  const ROAD_W=streetStyle==="grid"?(rng()<0.7?3:2):rng()<0.45?3:2;
+  const MIN_BLOCK=streetStyle==="grid"?12:9;
+  const MAX_BLOCK=streetStyle==="grid"?18:20;
+  const jitter=streetStyle==="grid"?1:3;
+  const buildAxes=(limit)=>{
+    const out=[0];
+    let cursor=0;
+    let guard=0;
+    while(guard++<240){
+      const span=rI(MIN_BLOCK,MAX_BLOCK,rng);
+      let next=cursor+ROAD_W+span+rI(-jitter,jitter,rng);
+      next=clamp(next,ROAD_W+4,limit-ROAD_W-4);
+      if(next-cursor<ROAD_W+MIN_BLOCK) next=cursor+ROAD_W+MIN_BLOCK;
+      if(next>=limit-ROAD_W-2) break;
+      out.push(next);
+      cursor=next;
+    }
+    out.push(limit-ROAD_W);
+    const dedup=[...new Set(out)].sort((a,b)=>a-b);
+    return dedup.filter((v,i)=>i===0||v-dedup[i-1]>=ROAD_W+6);
+  };
+  const vX=buildAxes(W);
+  const hY=buildAxes(H);
+  const drawV=(rx)=>{for(let y=0;y<H;y++)for(let d=0;d<ROAD_W;d++){const x=rx+d;if(x>=0&&x<W)grid[y][x]=T.ROAD;}};
+  const drawH=(ry)=>{for(let x=0;x<W;x++)for(let d=0;d<ROAD_W;d++){const y=ry+d;if(y>=0&&y<H)grid[y][x]=T.ROAD;}};
+  vX.forEach(drawV);
+  hY.forEach(drawH);
+  // Optional waterfront pass (river/canal) with bridge preservation at street crossings.
+  const paintWater=(x,y)=>{
+    if(x<1||y<1||x>=W-1||y>=H-1) return;
+    const t=grid[y]?.[x];
+    if(t===T.ROAD) grid[y][x]=T.BRIDGE;
+    else if(t!==T.D&&t!==T.GATE&&t!==T.DRAWBRIDGE) grid[y][x]=T.WA;
+  };
+  if(waterfront==="edge_river"){
+    const side=pick(["north","south","east","west"],rng);
+    const w=3;
+    if(side==="north"){
+      const y0=rI(1,Math.max(1,Math.floor(H*0.18)),rng);
+      for(let y=y0;y<Math.min(H-1,y0+w);y++)for(let x=1;x<W-1;x++)paintWater(x,y);
+    }else if(side==="south"){
+      const y0=rI(Math.floor(H*0.78),Math.max(1,H-1-w),rng);
+      for(let y=y0;y<Math.min(H-1,y0+w);y++)for(let x=1;x<W-1;x++)paintWater(x,y);
+    }else if(side==="west"){
+      const x0=rI(1,Math.max(1,Math.floor(W*0.18)),rng);
+      for(let x=x0;x<Math.min(W-1,x0+w);x++)for(let y=1;y<H-1;y++)paintWater(x,y);
+    }else{
+      const x0=rI(Math.floor(W*0.78),Math.max(1,W-1-w),rng);
+      for(let x=x0;x<Math.min(W-1,x0+w);x++)for(let y=1;y<H-1;y++)paintWater(x,y);
+    }
+  }else if(waterfront==="canals"){
+    const vx=clamp(Math.floor(W/2)+rI(-Math.floor(W*0.08),Math.floor(W*0.08),rng),2,W-3);
+    const hy=clamp(Math.floor(H/2)+rI(-Math.floor(H*0.08),Math.floor(H*0.08),rng),2,H-3);
+    for(let y=1;y<H-1;y++) paintWater(vx,y);
+    for(let x=1;x<W-1;x++) paintWater(x,hy);
+  }
+  // Organic street mode: one or two soft diagonal connectors to break strict orthogonality.
+  if(streetStyle==="organic"){
+    const diagCount=rng()<0.55?1:2;
+    for(let i=0;i<diagCount;i++){
+      let x=rI(1,Math.max(1,Math.floor(W*0.2)),rng);
+      let y=rI(1,Math.max(1,Math.floor(H*0.2)),rng);
+      const tx=rI(Math.floor(W*0.65),W-2,rng);
+      const ty=rI(Math.floor(H*0.65),H-2,rng);
+      for(let s=0;s<W+H;s++){
+        if(x<1||y<1||x>=W-1||y>=H-1) break;
+        grid[y][x]=T.ROAD;
+        if(rng()<0.45&&y+1<H-1) grid[y+1][x]=T.ROAD;
+        if(rng()<0.45&&x+1<W-1) grid[y][x+1]=T.ROAD;
+        if(x===tx&&y===ty) break;
+        if(Math.abs(tx-x)>=Math.abs(ty-y)) x+=tx>x?1:-1;
+        else y+=ty>y?1:-1;
+        if(rng()<0.22) { if(rng()<0.5&&x+1<W-1)x++; else if(y+1<H-1)y++; }
+      }
+    }
+  }
 
   const blocks=[];
-  const cxIdx=(vX.length-1)/2, cyIdx=(hY.length-1)/2;
   for(let ci=0;ci<vX.length-1;ci++){
     for(let ri=0;ri<hY.length-1;ri++){
       const bx=vX[ci]+ROAD_W, by=hY[ri]+ROAD_W;
       const bw=(vX[ci+1]??W)-bx, bh=(hY[ri+1]??H)-by;
-      if(bw<5||bh<5) continue;
+      if(bw<6||bh<6) continue;
       const rx=bx+1, ry=by+1, rw=bw-2, rh=bh-2;
       if(rw<5||rh<5) continue;
-      const dist=Math.abs(ci-cxIdx)+Math.abs(ri-cyIdx);
-      blocks.push({rx,ry,rw,rh,dist});
+      const cx=rx+Math.floor(rw/2), cy=ry+Math.floor(rh/2);
+      const dist=Math.abs(cx-Math.floor(W/2))+Math.abs(cy-Math.floor(H/2));
+      blocks.push({rx,ry,rw,rh,cx,cy,dist});
     }
   }
   blocks.sort((a,b)=>a.dist-b.dist);
 
+  // Fill all lots as walkable yards first; buildings are stamped afterward.
   for(const b of blocks){
-    for(let y=b.ry;y<b.ry+b.rh;y++) for(let x=b.rx;x<b.rx+b.rw;x++){
-      if(y>=0&&y<H&&x>=0&&x<W) grid[y][x]=T.F;
+    for(let y=b.ry;y<b.ry+b.rh;y++)for(let x=b.rx;x<b.rx+b.rw;x++){
+      if(y>=0&&y<H&&x>=0&&x<W&&grid[y][x]===T.V) grid[y][x]=T.F;
     }
   }
 
-  const typeQ=['Well Square','Tavern','Blacksmith','Market','Temple','Town Hall','Stable','Inn','Apothecary','General Store','Barracks','Library','Bakery','Guard Tower','House'];
-  let ti=0;
-  for(const b of blocks){
-    if(rooms.length>=roomCount) break;
-    const remaining=roomCount-rooms.length;
-    const want=Math.min(remaining,rI(1,Math.min(3,remaining),rng));
-    const sub=layoutTownBuildingsInLot(b,want,rng);
+  // Reserve 1-2 central plazas to break perfect repetition.
+  const plazaKeys=new Set();
+  const plazaTarget=plazaMode==="none"?0:plazaMode==="many"?3:1;
+  for(const b of blocks.slice(0,6)){
+    if(plazaKeys.size>=plazaTarget) break;
+    if(b.rw>=10&&b.rh>=9&&rng()<0.85) plazaKeys.add(`${b.rx},${b.ry}`);
+  }
+
+  const blocksShuffled=[...blocks].sort((a,b)=>(a.dist-b.dist)+(rng()-0.5));
+  const targetBuildings=Math.max(roomCount,Math.min(80,Math.max(roomCount*4,Math.floor(blocks.length*2.1*densityFactor))));
+  const maxDist=Math.max(1,...blocks.map((b)=>b.dist));
+  let seededCore=0;
+
+  for(const b of blocksShuffled){
+    if(rooms.length>=targetBuildings) break;
+    const k=`${b.rx},${b.ry}`;
+    if(plazaKeys.has(k)){
+      const px=b.cx, py=b.cy;
+      if(grid[py]?.[px]===T.F) grid[py][px]=T.P;
+      continue;
+    }
+    // Add occasional alley inside larger lots to mimic real town cuts.
+    if((b.rw>=13||b.rh>=13)&&rng()<0.35){
+      if(b.rw>=b.rh){
+        const ay=clamp(b.cy+rI(-1,1,rng),b.ry,b.ry+b.rh-1);
+        for(let x=b.rx;x<b.rx+b.rw;x++) if(grid[ay]?.[x]===T.F) grid[ay][x]=T.ROAD;
+      }else{
+        const ax=clamp(b.cx+rI(-1,1,rng),b.rx,b.rx+b.rw-1);
+        for(let y=b.ry;y<b.ry+b.rh;y++) if(grid[y]?.[ax]===T.F) grid[y][ax]=T.ROAD;
+      }
+    }
+    const remaining=targetBuildings-rooms.length;
+    const want=Math.min(
+      remaining,
+      b.rw>=18&&b.rh>=12 ? rI(2,4,rng) : b.rw>=11&&b.rh>=9 ? rI(1,3,rng) : 1,
+    );
+    const sub=layoutTownBuildingsInLot(b,want,rng,grid);
     for(const rect of sub){
-      if(rooms.length>=roomCount) break;
+      if(rooms.length>=targetBuildings) break;
       stampTownBuilding(grid,rect,W,H,rng);
-      const roomType=typeQ[ti%typeQ.length];
-      ti++;
+      const distN=b.dist/maxDist;
+      let roomType;
+      // Seed a few anchors early so every town has key service buildings.
+      if(seededCore<4){
+        roomType=["Well Square","Tavern","Market","Blacksmith"][seededCore];
+        seededCore++;
+      }else{
+        roomType=chooseTownBuildingType(districtStyle,distN,rng);
+      }
       const label=roomType==='Tavern'?genTavernName(rng):roomType;
       rooms.push({
         id:rooms.length+1,
@@ -874,8 +1089,12 @@ function generateTownLayout(cfg,rng){
   if(rooms.length===0&&blocks[0]){
     const b=blocks[0];
     const rect={x:b.rx+2,y:b.ry+2,w:Math.max(4,b.rw-4),h:Math.max(3,b.rh-4)};
-    stampTownBuilding(grid,rect,W,H,rng);
-    rooms.push({id:1,x:rect.x,y:rect.y,w:rect.w,h:rect.h,cx:Math.floor(rect.x+rect.w/2),cy:Math.floor(rect.y+rect.h/2),type:'Well Square',label:'Well Square'});
+    let watery=false;
+    for(let y=rect.y;y<rect.y+rect.h&&!watery;y++)for(let x=rect.x;x<rect.x+rect.w;x++) if(grid[y]?.[x]===T.WA) {watery=true;break;}
+    if(!watery){
+      stampTownBuilding(grid,rect,W,H,rng);
+      rooms.push({id:1,x:rect.x,y:rect.y,w:rect.w,h:rect.h,cx:Math.floor(rect.x+rect.w/2),cy:Math.floor(rect.y+rect.h/2),type:'Well Square',label:'Well Square'});
+    }
   }
   return {grid,rooms};
 }
@@ -925,6 +1144,17 @@ function carveWindingCorridor(grid,a,b,W,H,rng,widthTiles){
   const tx=b.cx, ty=b.cy;
   const maxSteps=W*H;
   const rad=Math.max(0,Math.floor(widthTiles-1)); // width=2 => rad=1 => 3x3 brush
+  const paint=(px,py)=>{
+    for(let oy=-rad;oy<=rad;oy++){
+      for(let ox=-rad;ox<=rad;ox++){
+        const nx=px+ox, ny=py+oy;
+        if(ny<0||ny>=H||nx<0||nx>=W) continue;
+        const t=grid[ny][nx];
+        if(t===T.V || t===T.W) grid[ny][nx]=T.C;
+      }
+    }
+  };
+  let prevDx=0, prevDy=0;
   for(let steps=0;steps<maxSteps;steps++){
     const dx=tx-x, dy=ty-y;
     if(Math.abs(dx)+Math.abs(dy)<=1) break;
@@ -937,15 +1167,97 @@ function carveWindingCorridor(grid,a,b,W,H,rng,widthTiles){
       sy=dy===0?0:(dy>0?1:-1);
       sx=rng()<0.25 ? (dx>0?1:-1) : 0;
     }
-    x=clamp(x+sx,1,W-2); y=clamp(y+sy,1,H-2);
-    for(let oy=-rad;oy<=rad;oy++){
-      for(let ox=-rad;ox<=rad;ox++){
-        const nx=x+ox, ny=y+oy;
-        if(ny<0||ny>=H||nx<0||nx>=W) continue;
-        const t=grid[ny][nx];
-        if(t===T.V || t===T.W) grid[ny][nx]=T.C;
+    // Never rely on diagonal-only adjacency; carve orthogonally so token/path movement stays valid.
+    if(sx!==0 && sy!==0){
+      const hx=clamp(x+sx,1,W-2), hy=y;
+      paint(hx,hy);
+      x=hx;
+      const vx=x, vy=clamp(y+sy,1,H-2);
+      paint(vx,vy);
+      y=vy;
+    }else{
+      x=clamp(x+sx,1,W-2);
+      y=clamp(y+sy,1,H-2);
+      paint(x,y);
+    }
+    // Add extra elbow clearance at turns for angled corridors (helps avoid apparent wall pinches).
+    if((prevDx!==0&&sy!==0)||(prevDy!==0&&sx!==0)){
+      if(x-1>=1&&x+1<=W-2) paint(x-1,y), paint(x+1,y);
+      if(y-1>=1&&y+1<=H-2) paint(x,y-1), paint(x,y+1);
+    }
+    prevDx=sx;
+    prevDy=sy;
+  }
+}
+
+function isTunnelWalkableTile(t){
+  return (
+    t===T.C||
+    t===T.F||
+    t===T.D||
+    t===T.SECRET_DOOR||
+    t===T.GATE||
+    t===T.DRAWBRIDGE||
+    t===T.ROAD||
+    t===T.BRIDGE||
+    t===T.PIT||
+    t===T.ALLEY||
+    t===T.SU||
+    t===T.SD
+  );
+}
+
+/**
+ * Stricter corridor safety pass for winding cave corridors:
+ * - opens extra elbow clearance where angled turns pinch movement
+ * - widens single-cell choke lines that are boxed by walls
+ */
+function enforceCorridorClearance(grid,W,H){
+  const carveKeys=new Set();
+  const mark=(x,y)=>{
+    if(x<=0||y<=0||x>=W-1||y>=H-1) return;
+    const t=grid[y]?.[x];
+    if(t===T.V||t===T.W) carveKeys.add(`${x},${y}`);
+  };
+  const isWallish=(t)=>t===T.V||t===T.W;
+
+  for(let y=1;y<H-1;y++){
+    for(let x=1;x<W-1;x++){
+      if(grid[y][x]!==T.C) continue;
+      const l=isTunnelWalkableTile(grid[y][x-1]);
+      const r=isTunnelWalkableTile(grid[y][x+1]);
+      const u=isTunnelWalkableTile(grid[y-1][x]);
+      const d=isTunnelWalkableTile(grid[y+1][x]);
+      const hasH=l||r;
+      const hasV=u||d;
+
+      // Elbows: carve additional shoulder around turns so tokens do not snag visually/physically.
+      if(hasH&&hasV){
+        mark(x-1,y); mark(x+1,y); mark(x,y-1); mark(x,y+1);
+        continue;
+      }
+
+      // Straight corridor boxed on both sides -> widen to at least 2-cell movement channel.
+      if(l&&r&&!u&&!d){
+        const upT=grid[y-1][x], dnT=grid[y+1][x];
+        if(isWallish(upT)&&isWallish(dnT)){
+          if((x+y)%2===0) mark(x,y-1);
+          else mark(x,y+1);
+        }
+      }else if(u&&d&&!l&&!r){
+        const lfT=grid[y][x-1], rtT=grid[y][x+1];
+        if(isWallish(lfT)&&isWallish(rtT)){
+          if((x+y)%2===0) mark(x-1,y);
+          else mark(x+1,y);
+        }
       }
     }
+  }
+
+  if(!carveKeys.size) return;
+  for(const k of carveKeys){
+    const [x,y]=k.split(",").map(Number);
+    grid[y][x]=T.C;
   }
 }
 
@@ -992,6 +1304,9 @@ function generateCaveLayout(cfg,rng){
       conn.add(bb);unconn.delete(bb);
     }
   }
+
+  // Strict anti-pinch pass for angled cave corridors.
+  enforceCorridorClearance(grid,W,H);
 
   // Ring floors so void becomes walls.
   for(let y=0;y<H;y++){
@@ -1705,7 +2020,7 @@ function generateMap(cfg) {
   if(locationType==="graveyard"){
     forgeDmHints={...(forgeDmHints||{}),...enrichGraveyardFeatures({grid,rooms,entities,decoOverlay,riddles,rng,W,H,usedCells})};
   }else if(locationType==="town"){
-    forgeDmHints={...(forgeDmHints||{}),...enrichTownFeatures({grid,rooms,entities,decoOverlay,rng,W,H,usedCells,cfg:{townMarketDay:!!cfg.townMarketDay,townFortified:!!cfg.townFortified,townChaseMode:!!cfg.townChaseMode}})};
+    forgeDmHints={...(forgeDmHints||{}),...enrichTownFeatures({grid,rooms,entities,decoOverlay,rng,W,H,usedCells,cfg:{townMarketDay:!!cfg.townMarketDay,townFortified:!!cfg.townFortified,townChaseMode:!!cfg.townChaseMode,townDistrictStyle:cfg.townDistrictStyle,townWaterfront:cfg.townWaterfront}})};
   }else if(locationType==="castle"){
     forgeDmHints={...(forgeDmHints||{}),...enrichCastleFeatures({grid,rooms,entities,decoOverlay,rng,W,H,usedCells})};
   }
@@ -1821,7 +2136,7 @@ function carvePath(grid,a,b,W,H,rng,isRoad){
 const STY={
   app:{
     bg:"#14110e",
-    void:"#0c0a08",
+    void:"#1f1a15",
     wallFg:"#6b5c4a",
     floorFg:"#9a8a72",
     corrFg:"#8a7a64",
@@ -2125,7 +2440,7 @@ export default function DungeonForge(){
   /** Locked display behavior — no sidebar toggles (tiny cells, fill viewport, 2× PNG, scenery). */
   const FIXED_FORGE_DISPLAY={showDecos:true,showThemes:false};
   const [cfg,setCfg]=useState(()=>{
-    const base={roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:FORGE_STYLE,seed:Math.floor(Math.random()*999999),locationType:"dungeon",dungeonLighting:"lit",dungeonWanderMin:10,graveyardTime:"day",graveyardWeather:"clear",townMarketDay:false,townFortified:false,townChaseMode:false,roadVariant:"dirt_trail",wildernessWeather:"clear",volcanicActivity:"dormant",eruptionRounds:15,feyShiftingPaths:false,feyPlayerDisorient:false,feyBioluminescent:true,caveVariant:"auto",caveBioluminescentMode:"auto",templeDeity:"auto",templeCondition:"auto",...FIXED_FORGE_DISPLAY,cellPx:18,exportCellPx:32,autoSync:false};
+    const base={roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:FORGE_STYLE,seed:Math.floor(Math.random()*999999),locationType:"dungeon",dungeonLighting:"lit",dungeonWanderMin:10,graveyardTime:"day",graveyardWeather:"clear",townMarketDay:false,townFortified:false,townChaseMode:false,townDistrictStyle:"balanced",townStreetStyle:"organic",townDensity:"normal",townPlazas:"some",townWaterfront:"none",roadVariant:"dirt_trail",wildernessWeather:"clear",volcanicActivity:"dormant",eruptionRounds:15,feyShiftingPaths:false,feyPlayerDisorient:false,feyBioluminescent:true,caveVariant:"auto",caveBioluminescentMode:"auto",templeDeity:"auto",templeCondition:"auto",...FIXED_FORGE_DISPLAY,cellPx:18,exportCellPx:32,autoSync:false};
     try{
       const raw=localStorage.getItem(FORGE_CFG_KEY);
       if(raw){
@@ -2671,83 +2986,13 @@ export default function DungeonForge(){
       revealedCells,
       doorOpen:[...mergedDoorOpen],
       selectedRoomId:overrides.selectedRoomId!==undefined?overrides.selectedRoomId:selRoom,
-      fogColor:overrides.fogColor??"#000000",
+      fogColor:overrides.fogColor??"#1f1a15",
     };
     broadcastPlayerMapState(state);
   },[dg,revealed,doorOpen,selRoom,cfg.locationType,graveyardInteriorRevealed]);
   useEffect(()=>{
     if(cfg.autoSync&&dg)pushToPlayerScreen();
   },[cfg.autoSync,dg,pushToPlayerScreen]);
-
-  const exportPNG=(mode,{ink=false}={})=>{
-    if(!dg)return;
-    const isDm=mode==="dm";
-    const locT2=dg.locationType??cfg.locationType;
-    const fogCells=!isDm?computeVisibleCellsForPlayer(revealed,dg,doorOpen,null,{
-      openFloor:isOpenFloorLocation(locT2),
-      maxFogHops:maxFogHopsForLocationType(locT2),
-      locationType:locT2,
-      graveyardInteriorRevealed,
-    }):null;
-    const cellPx=Math.max(cfg.exportCellPx??32,cfg.cellPx??18);
-    const dpr=ink?1:2;
-    const fc={...cfg,showThemes:!!cfg.showThemes&&isDm};
-    const gridEx=buildRenderGrid(dg,fc);
-    const mapCanvas=document.createElement("canvas");
-    renderDungeonToCanvas(mapCanvas,gridEx,{
-      palette:forgePaletteForDungeon(dg),
-      entities:ENTITY_PALETTE,
-      cellPx,
-      dpr,
-      fogCells,
-      doorOpen:!isDm?doorOpen:null,
-      showEnts:isDm,
-      playerSanitize:!isDm,
-      hideDecoKeys:PLAYER_PRINT_HIDE_DECO_KEYS,
-      inkSaver:ink,
-      forgeDmHints:isDm?dg.forgeDmHints??null:null,
-      dungeonLighting:isDm&&(dg.locationType??cfg.locationType)==="dungeon"?(cfg.dungeonLighting??dg.dungeonLighting??"lit"):undefined,
-      graveyardAmbience:isDm&&(dg.locationType??cfg.locationType)==="graveyard"?{timeOfDay:cfg.graveyardTime??dg.graveyardTime??"day",weather:cfg.graveyardWeather??dg.graveyardWeather??"clear"}:undefined,
-    });
-    let out=mapCanvas;
-    if(isDm){
-      const sidebarRaw=buildDmExportSidebarLines(dg);
-      const sidebarLines=[];
-      for(const ln of sidebarRaw)sidebarLines.push(...wrapTextLine(ln,50));
-      const fontPx=11*dpr;
-      const lineH=Math.round(13*dpr);
-      const maxChars=sidebarLines.reduce((m,l)=>Math.max(m,l.length),36);
-      const sidebarW=Math.min(520*dpr,Math.max(280*dpr,Math.ceil(maxChars*7*dpr+24*dpr)));
-      const S0={...STY[FORGE_STYLE],...(LOCATION_STYLE_OVERRIDE[cfg.locationType]||{})};
-      const padTop=28*dpr;
-      const full=document.createElement("canvas");
-      full.width=mapCanvas.width+sidebarW+16*dpr;
-      full.height=padTop+Math.max(mapCanvas.height,sidebarLines.length*lineH+16*dpr);
-      const fctx=full.getContext("2d");
-      if(fctx){
-        fctx.fillStyle=ink?hexToGray(S0.bg):S0.bg;
-        fctx.fillRect(0,0,full.width,full.height);
-        fctx.fillStyle=ink?hexToGray(S0.accent||"#ccc"):S0.accent||"#ccc";
-        fctx.font=`bold ${11*dpr}px monospace`;
-        fctx.fillText(`${dg.mapName||"Map"} | DM PRINT | Floor ${dg.floor||1} | Seed ${dg.seed??""}`,4*dpr,18*dpr);
-        fctx.drawImage(mapCanvas,0,padTop);
-        fctx.fillStyle=ink?"#111":S0.textColor;
-        fctx.font=`${fontPx}px monospace`;
-        let ly=padTop+8*dpr;
-        const sx=mapCanvas.width+12*dpr;
-        for(const line of sidebarLines){
-          fctx.fillText(line,sx,ly);
-          ly+=lineH;
-        }
-      }
-      out=full;
-    }
-    const a=document.createElement("a");
-    const inkTag=ink?"-ink":"";
-    a.download=`${(dg.mapName||cfg.locationType).replace(/\s/g,"_")}_f${curFloor}_${mode}${inkTag}_${cfg.seed}.png`;
-    a.href=out.toDataURL("image/png");
-    a.click();
-  };
 
   return(
     <div
@@ -2941,6 +3186,37 @@ export default function DungeonForge(){
           {cfg.locationType==="town"&&(
             <>
               <LB S={S}>TOWN OPTIONS</LB>
+              <div style={{fontSize:10,color:S.dimText,lineHeight:1.35,marginBottom:2}}>District style</div>
+              <select value={cfg.townDistrictStyle??"balanced"} onChange={e=>u("townDistrictStyle",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
+                <option value="balanced">Balanced town mix</option>
+                <option value="market_hub">Market hub (trade-heavy center)</option>
+                <option value="temple_ward">Temple ward (civic/religious core)</option>
+                <option value="noble_ring">Noble ring (civic center + outer housing)</option>
+                <option value="poor_sprawl">Poor sprawl (dense housing + workshops)</option>
+              </select>
+              <div style={{fontSize:10,color:S.dimText,lineHeight:1.35,marginBottom:2}}>Street pattern</div>
+              <select value={cfg.townStreetStyle??"organic"} onChange={e=>u("townStreetStyle",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
+                <option value="organic">Organic (irregular + connectors)</option>
+                <option value="grid">Planned grid (straighter blocks)</option>
+              </select>
+              <div style={{fontSize:10,color:S.dimText,lineHeight:1.35,marginBottom:2}}>Building density</div>
+              <select value={cfg.townDensity??"normal"} onChange={e=>u("townDensity",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
+                <option value="sparse">Sparse</option>
+                <option value="normal">Normal</option>
+                <option value="dense">Dense</option>
+              </select>
+              <div style={{fontSize:10,color:S.dimText,lineHeight:1.35,marginBottom:2}}>Plazas</div>
+              <select value={cfg.townPlazas??"some"} onChange={e=>u("townPlazas",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
+                <option value="none">None</option>
+                <option value="some">Some</option>
+                <option value="many">Many</option>
+              </select>
+              <div style={{fontSize:10,color:S.dimText,lineHeight:1.35,marginBottom:2}}>Waterfront</div>
+              <select value={cfg.townWaterfront??"none"} onChange={e=>u("townWaterfront",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
+                <option value="none">None</option>
+                <option value="edge_river">Edge river</option>
+                <option value="canals">Crossing canals</option>
+              </select>
               <Tg l="Market Day" on={!!cfg.townMarketDay} S={S} f={()=>u("townMarketDay",!cfg.townMarketDay)}/>
               <Tg l="Fortified perimeter" on={!!cfg.townFortified} S={S} f={()=>u("townFortified",!cfg.townFortified)}/>
               <Tg l="Chase road ft" on={!!cfg.townChaseMode} S={S} f={()=>u("townChaseMode",!cfg.townChaseMode)}/>
@@ -2966,7 +3242,7 @@ export default function DungeonForge(){
               onClick={()=>setCfg((c)=>({...c,cellPx:Math.min(48,(c.cellPx??18)+4)}))}>+</button>
           </div>
           <div style={{fontSize:10,color:S.dimText,marginTop:4,lineHeight:1.35}}>Live map uses this size; the canvas may shrink to fit the panel.</div>
-          <LB S={S}>PNG EXPORT SCALE</LB>
+          <LB S={S}>PRINT SCALE</LB>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             <button type="button" className="btn-secondary" style={{padding:"4px 10px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",minHeight:0}}
               onClick={()=>setCfg((c)=>({...c,exportCellPx:Math.max(16,(c.exportCellPx??32)-4)}))}>−</button>
@@ -2974,7 +3250,7 @@ export default function DungeonForge(){
             <button type="button" className="btn-secondary" style={{padding:"4px 10px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",minHeight:0}}
               onClick={()=>setCfg((c)=>({...c,exportCellPx:Math.min(64,(c.exportCellPx??32)+4)}))}>+</button>
           </div>
-          <div style={{fontSize:10,color:S.dimText,marginTop:2,lineHeight:1.35}}>Same pixel renderer as the live map; larger cells for sharper PNGs (DM/Player buttons use max of this and map zoom).</div>
+          <div style={{fontSize:10,color:S.dimText,marginTop:2,lineHeight:1.35}}>Used by print packet generation; larger cells produce a sharper map image in the print layout.</div>
           <LB S={S}>ASCII COPY</LB>
           <div style={{fontSize:11,color:S.dimText,lineHeight:1.35}}>Plain text grid (same topology as the map).</div>
           <button type="button" onClick={()=>{const u=new URL(window.location.href);u.searchParams.set("seed",String(cfg.seed));u.searchParams.set("loc",cfg.locationType);u.searchParams.set("level",String(cfg.level));void navigator.clipboard.writeText(u.toString());}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>COPY SHARE URL</button>
@@ -3002,16 +3278,6 @@ export default function DungeonForge(){
               <button onClick={()=>{const id=dg?inferStartingRoomId(dg):null;setRevealed(new Set([id??rooms[0]?.id??1]));setDoorOpen(new Set());}} style={{flex:1,padding:"1px",fontSize:16,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Reset</button>
             </div>
           </div>}
-          <LB S={S}>EXPORT PNG</LB>
-          <div style={{fontSize:11,color:S.dimText,lineHeight:1.35,marginBottom:4}}>Color exports match the app palette and location tints. DM includes the room key column. Player hides secrets. Ink uses grayscale from the same map (saves toner, not blocky).</div>
-          <div style={{display:"flex",gap:2,flexWrap:"wrap"}}>
-            <button type="button" onClick={()=>exportPNG("dm")} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>DM · color</button>
-            <button type="button" onClick={()=>exportPNG("player")} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Player · color</button>
-          </div>
-          <div style={{display:"flex",gap:2,flexWrap:"wrap",marginTop:4}}>
-            <button type="button" onClick={()=>exportPNG("dm",{ink:true})} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>DM · ink</button>
-            <button type="button" onClick={()=>exportPNG("player",{ink:true})} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Player · ink</button>
-          </div>
           <LB S={S}>LIBRARY</LB>
           <button type="button" onClick={async()=>{
             if(!dg) return;
@@ -3186,7 +3452,7 @@ export default function DungeonForge(){
                         left:10,
                         zIndex:5,
                         pointerEvents:"none",
-                        background:"rgba(0,0,0,0.78)",
+                        background:"rgba(31,26,21,0.9)",
                         color:S.textColor,
                         fontSize:11,
                         padding:"4px 8px",
@@ -3495,7 +3761,6 @@ export default function DungeonForge(){
         const mc=re.filter(e=>e.type==="monster").reduce((a,e)=>a+(e.count||1),0);
         const traps=re.filter(e=>e.type==="trap").length;
         const items=re.filter(e=>e.type==="item").length;
-        const slug=(String(rm.label||rm.type||rm.id)).replace(/[^\w\-]+/g,"_").replace(/_+/g,"_").slice(0,48);
         return(
           <div style={{position:"fixed",top:0,left:0,width:"100vw",height:"100vh",zIndex:9999,background:"#000",display:"flex",flexDirection:"column",fontFamily:"'Courier New',ui-monospace,monospace"}}>
             <div style={{display:"flex",alignItems:"center",flexWrap:"wrap",gap:10,padding:"12px 16px",borderBottom:"1px solid #2a4a2a",color:"#cfc"}}>
@@ -3503,13 +3768,6 @@ export default function DungeonForge(){
               <span style={{fontSize:18,color:"#e8ffe8"}}>{rm.label||rm.type}</span>
               <span style={{fontSize:17,color:"#9f9",flex:"1 1 auto",textAlign:"right"}}>Monsters: {mc} · Traps: {traps} · Items: {items}</span>
               <button type="button" onClick={()=>setTvRoom(null)} style={{padding:"6px 12px",fontSize:16,fontFamily:"inherit",background:"#111",color:"#6f6",border:"1px solid #393",borderRadius:4,cursor:"pointer"}}>CLOSE [Esc]</button>
-              <button type="button" onClick={()=>{
-                const c=renderRoomCanvas(dg,tvRoom,FORGE_STYLE,cfg.locationType,tvForgeCfg,{cellPx:64,dpr:2,fontPx:Math.max(6,Math.round(64*0.72))});
-                const a=document.createElement("a");
-                a.download=`room_${rm.id}_${slug}_tv_${cfg.seed}.png`;
-                a.href=c.toDataURL("image/png");
-                a.click();
-              }} style={{padding:"6px 12px",fontSize:16,fontFamily:"inherit",background:"#082008",color:"#afa",border:"1px solid #484",borderRadius:4,cursor:"pointer"}}>EXPORT PNG</button>
             </div>
             <div style={{flex:1,minHeight:0,display:"flex",alignItems:"center",justifyContent:"center",padding:12,background:"#020202"}}>
               {tvPreviewUrl?<img src={tvPreviewUrl} alt="" style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain",imageRendering:"pixelated"}}/>:null}

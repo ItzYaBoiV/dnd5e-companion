@@ -1,5 +1,8 @@
 import type { EntityPalette, TilePalette } from "@/lib/dungeonTileRenderer";
 
+/** Shared parchment-dark void to avoid stark black map framing. */
+const APP_VOID = "#1f1a15";
+
 export const ENTITY_PALETTE: EntityPalette = {
   monster: "#e53",
   trap: "#f80",
@@ -375,14 +378,15 @@ export function forgePaletteForDungeon(
 ): TilePalette {
   const loc = dg?.locationType ?? fallbackLoc ?? "dungeon";
   const fm = dg?.forgeLocationMeta;
+  const withAppVoid = (p: TilePalette): TilePalette => ({ ...p, void: APP_VOID });
   if (fm?.caveBioluminescent && loc === "cave") {
-    return LOCATION_PALETTE.cave_biolum ?? LOCATION_PALETTE.cave;
+    return withAppVoid(LOCATION_PALETTE.cave_biolum ?? LOCATION_PALETTE.cave);
   }
   if (loc === "temple" && fm?.templeCondition === "desecrated") {
-    return LOCATION_PALETTE.temple_desecrated ?? LOCATION_PALETTE.temple;
+    return withAppVoid(LOCATION_PALETTE.temple_desecrated ?? LOCATION_PALETTE.temple);
   }
   if (loc === "temple" && fm?.templeCondition === "abandoned") {
-    return LOCATION_PALETTE.temple_abandoned ?? LOCATION_PALETTE.temple;
+    return withAppVoid(LOCATION_PALETTE.temple_abandoned ?? LOCATION_PALETTE.temple);
   }
-  return LOCATION_PALETTE[loc] ?? DEFAULT_PALETTE;
+  return withAppVoid(LOCATION_PALETTE[loc] ?? DEFAULT_PALETTE);
 }

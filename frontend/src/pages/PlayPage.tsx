@@ -1223,7 +1223,7 @@ export function EncounterWorkspace({
         dungeonData: gd,
         revealed,
         revealedCells: [...fogCells],
-        fogColor: prev?.fogColor ?? "#000000",
+        fogColor: prev?.fogColor ?? "#1f1a15",
         selectedRoomId: room?.id ?? prev?.selectedRoomId,
         viewCrop,
         battleTokens: tokensForMap,
