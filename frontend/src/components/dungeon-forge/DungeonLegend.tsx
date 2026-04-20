@@ -127,7 +127,7 @@ export function DungeonLegend({ locationType }: { locationType?: string } = {}) 
 
   return (
     <div
-      className="flex flex-wrap gap-x-4 gap-y-1 px-2 py-1 text-xs text-stone-400 border-t border-stone-700"
+      className="flex flex-wrap gap-x-4 gap-y-1 px-2 py-1 text-xs text-stone-400 border-t border-dnd-border/70 bg-dnd-darker/40"
       role="note"
     >
       {locationType ? (

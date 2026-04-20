@@ -1817,13 +1817,47 @@ function carvePath(grid,a,b,W,H,rng,isRoad){
   else{while(y!==b.cy){carve(x,y);y+=y<b.cy?1:-1;}carve(x,y);while(x!==b.cx){carve(x,y);x+=x<b.cx?1:-1;}carve(x,y);}
 }
 
+/** Single UI theme aligned with AppShell / Tailwind `dnd-*` + parchment text (no TERM / DARK / LIGHT switch). */
 const STY={
-  terminal:{bg:"#000",void:"#000",wallFg:"#555",floorFg:"#1a1a1a",doorFg:"#cc0",stairsFg:"#0f0",waterFg:"#06f",pillarFg:"#555",monsterFg:"#f22",trapFg:"#f80",itemFg:"#f0f",labelFg:"#0c0",roadFg:"#444",panelBg:"#000",panelBorder:"#222",textColor:"#ccc",dimText:"#444",accent:"#0c0",accentAlt:"#f22",inputBg:"#0a0a0a",inputBorder:"#333",inputFg:"#0f0",btnBorder:"#0a0",btnFg:"#0f0",headerBg:"#000",selectedBg:"#0a1a0a",floorBg:"#000",wallBg:"#000",labelBg:"#000",doorBg:"#000",stairsBg:"#000",roadBg:"#000"},
-  rogue:{bg:"#08081a",void:"#0d0d1a",wallFg:"#555570",floorFg:"#333350",doorFg:"#c8a020",stairsFg:"#0d0",waterFg:"#26c",pillarFg:"#668",monsterFg:"#f33",trapFg:"#f80",itemFg:"#4af",labelFg:"#aad",roadFg:"#444466",panelBg:"#0a0a1f",panelBorder:"#1a1a33",textColor:"#c8c8e0",dimText:"#456",accent:"#a8f",accentAlt:"#f44",inputBg:"#151530",inputBorder:"#2a2a44",inputFg:"#b9f",btnBorder:"#43b",btnFg:"#ddd",headerBg:"#0c0c22",selectedBg:"#1a1a55",floorBg:"#1a1a2e",wallBg:"#2a2a3a",labelBg:"#1a1a2e",doorBg:"#1a1a2e",stairsBg:"#1a1a2e",roadBg:"#1a1a2e"},
-  grid:{bg:"#6b6560",void:"#8a8680",wallFg:"#5a5647",floorFg:"#c8c0b0",doorFg:"#5c4400",stairsFg:"#2d8b2d",waterFg:"#3a7ca5",pillarFg:"#6b6358",monsterFg:"#c22",trapFg:"#c80",itemFg:"#24c",labelFg:"#333",roadFg:"#a09888",panelBg:"#5e5955",panelBorder:"#4a4540",textColor:"#f0e8d8",dimText:"#aa9",accent:"#f0e8d8",accentAlt:"#c22",inputBg:"#e8e4dc",inputBorder:"#8a8580",inputFg:"#333",btnBorder:"#8a6820",btnFg:"#fff",headerBg:"#5a5550",selectedBg:"#e8e0c0",floorBg:"#f5f0e6",wallBg:"#d4d0c8",labelBg:"#f5f0e6",doorBg:"#8b6914",stairsBg:"#f5f0e6",roadBg:"#e8e0d0"},
+  app:{
+    bg:"#14110e",
+    void:"#0c0a08",
+    wallFg:"#6b5c4a",
+    floorFg:"#9a8a72",
+    corrFg:"#8a7a64",
+    doorFg:"#c9a84c",
+    stairsFg:"#7eb8c9",
+    waterFg:"#5a8eb8",
+    pillarFg:"#7a6e5a",
+    monsterFg:"#c45c6a",
+    trapFg:"#c9a03c",
+    itemFg:"#c9a84c",
+    labelFg:"#f5e6c8",
+    roadFg:"#7a6a58",
+    panelBg:"#1f1a15",
+    panelBorder:"#4a3f32",
+    textColor:"#e8dcc8",
+    dimText:"#7a7268",
+    accent:"#c9a84c",
+    accentAlt:"#8b2635",
+    inputBg:"#1a1612",
+    inputBorder:"#4a3f32",
+    inputFg:"#f5e6c8",
+    btnBorder:"#8b2635",
+    btnFg:"#f5e6c8",
+    headerBg:"#1f1a15",
+    selectedBg:"rgba(139,38,53,0.22)",
+    floorBg:"#262018",
+    wallBg:"#1c1812",
+    labelBg:"#2a241c",
+    doorBg:"#2a1f14",
+    stairsBg:"#242018",
+    roadBg:"#2c261c",
+  },
 };
-const RM={common:"#aaa",uncommon:"#0f0",rare:"#44f",vr:"#c4f",legendary:"#fa0"};
-const RMG={common:"#888",uncommon:"#282",rare:"#24c",vr:"#82c",legendary:"#c80"};
+const FORGE_STYLE="app";
+const RM={common:"#a8a090",uncommon:"#7c9c6a",rare:"#6a8ccc",vr:"#a884c4",legendary:"#c9a84c"};
+const RMG={common:"#888",uncommon:"#5a7050",rare:"#4a6caa",vr:"#8866aa",legendary:"#a08040"};
 
 /** Deco keys hidden on player print export (containers & obvious searchable props). */
 const PLAYER_PRINT_HIDE_DECO_KEYS=new Set(["chest","crate","crate_stack","bookshelf","weapon_rack","crystal","lever_icon","glamour_chest_dm","illusory_wall_dm","fey_circle_mushroom","wanted_poster","cooled_lava_loot"]);
@@ -1881,35 +1915,37 @@ function buildDmExportSidebarLines(dg){
 }
 
 function cellColor(cell,style,ov={}){
-  const s={...STY[style],...ov};const isG=style==="grid";const bg0=s.bg;
-  if(cell.eType==="monster")return{bg:isG?s.floorBg:bg0,fg:s.monsterFg};
-  if(cell.eType==="trap")return{bg:isG?s.floorBg:bg0,fg:s.trapFg};
-  if(cell.eType==="item")return{bg:isG?s.floorBg:bg0,fg:(isG?RMG:RM)[cell.extra?.r]||s.itemFg};
-  if(cell.eType==="riddle")return{bg:isG?s.floorBg:bg0,fg:"#daf"};
-  if(cell.eType==="deco")return{bg:isG?s.floorBg:bg0,fg:cell.fg||s.floorFg};
-  if(cell.eType==="theme")return{bg:isG?s.floorBg:bg0,fg:s.accent};
+  const s={...(STY[style]||STY[FORGE_STYLE]),...ov};
+  const rich=style===FORGE_STYLE;
+  const bg0=s.bg;
+  if(cell.eType==="monster")return{bg:rich?s.floorBg:bg0,fg:s.monsterFg};
+  if(cell.eType==="trap")return{bg:rich?s.floorBg:bg0,fg:s.trapFg};
+  if(cell.eType==="item")return{bg:rich?s.floorBg:bg0,fg:(rich?RMG:RM)[cell.extra?.r]||s.itemFg};
+  if(cell.eType==="riddle")return{bg:rich?s.floorBg:bg0,fg:"#c4b8e8"};
+  if(cell.eType==="deco")return{bg:rich?s.floorBg:bg0,fg:cell.fg||s.floorFg};
+  if(cell.eType==="theme")return{bg:rich?s.floorBg:bg0,fg:s.accent};
   if(cell.eType==="label")return{bg:s.labelBg,fg:s.labelFg};
   switch(cell.tile){
     case T.V:return{bg:s.void,fg:s.void};
-    case T.W:return{bg:isG?s.wallBg:bg0,fg:s.wallFg};
-    case T.F:return{bg:isG?s.floorBg:bg0,fg:s.floorFg};
-    case T.C:return{bg:isG?s.floorBg:bg0,fg:s.corrFg??s.floorFg};
-    case T.D:return{bg:isG?s.doorBg:bg0,fg:s.doorFg};
+    case T.W:return{bg:rich?s.wallBg:bg0,fg:s.wallFg};
+    case T.F:return{bg:rich?s.floorBg:bg0,fg:s.floorFg};
+    case T.C:return{bg:rich?s.floorBg:bg0,fg:s.corrFg??s.floorFg};
+    case T.D:return{bg:rich?s.doorBg:bg0,fg:s.doorFg};
     case T.SU:
-    case T.SD:return{bg:isG?s.stairsBg:bg0,fg:s.stairsFg};
-    case T.WA:return{bg:isG?"#a8d4e6":(style==="terminal"?"#000008":"#0a1428"),fg:s.waterFg};
-    case T.P:return{bg:isG?"#b8b0a0":bg0,fg:s.pillarFg};
-    case T.ROAD:return{bg:isG?s.roadBg:bg0,fg:s.roadFg};
-    case T.BRIDGE:return{bg:isG?s.floorBg:bg0,fg:s.corrFg??s.floorFg};
-    case T.LAVA:return{bg:isG?"#4a1808":bg0,fg:s.waterFg};
-    case T.PIT:return{bg:isG?s.floorBg:bg0,fg:s.floorFg};
+    case T.SD:return{bg:rich?s.stairsBg:bg0,fg:s.stairsFg};
+    case T.WA:return{bg:rich?"#2a3d4e":"#121820",fg:s.waterFg};
+    case T.P:return{bg:rich?"#3a3428":bg0,fg:s.pillarFg};
+    case T.ROAD:return{bg:rich?s.roadBg:bg0,fg:s.roadFg};
+    case T.BRIDGE:return{bg:rich?s.floorBg:bg0,fg:s.corrFg??s.floorFg};
+    case T.LAVA:return{bg:rich?"#4a1808":bg0,fg:s.waterFg};
+    case T.PIT:return{bg:rich?s.floorBg:bg0,fg:s.floorFg};
     case T.GATE:
-    case T.DRAWBRIDGE:return{bg:isG?s.doorBg:bg0,fg:s.doorFg};
-    case T.HEADSTONE:return{bg:isG?s.floorBg:bg0,fg:"#8a8a92"};
+    case T.DRAWBRIDGE:return{bg:rich?s.doorBg:bg0,fg:s.doorFg};
+    case T.HEADSTONE:return{bg:rich?s.floorBg:bg0,fg:"#8a8a92"};
     case T.ARROW_SLIT:
     case T.MURDER_HOLE:
-    case T.CELL_BARS:return{bg:isG?s.wallBg:bg0,fg:s.wallFg};
-    case T.ALLEY:return{bg:isG?s.roadBg:bg0,fg:s.roadFg};
+    case T.CELL_BARS:return{bg:rich?s.wallBg:bg0,fg:s.wallFg};
+    case T.ALLEY:return{bg:rich?s.roadBg:bg0,fg:s.roadFg};
     default:return{bg:s.void,fg:s.void};
   }
 }
@@ -1966,7 +2002,7 @@ function renderCanvas(dg,style,options={}){
   const inkSaver=!!options.inkSaver;
   const forgeCfg=options.forgeCfg||{};
   const locOv=LOCATION_STYLE_OVERRIDE[forgeCfg.locationType]||{};
-  const S0={...STY[style],...locOv};
+  const S0={...STY[style]||STY[FORGE_STYLE],...locOv};
   const rg=buildRenderGrid(dg,forgeCfg);
   const cW=10*scale,cH=14*scale;
   const mapW=dg.width*cW+4*scale,mapH=dg.height*cH+32*scale;
@@ -1984,7 +2020,7 @@ function renderCanvas(dg,style,options={}){
   canvas.width=mapW+sidebarW+(sidebarW?12*scale:0);
   canvas.height=Math.max(mapH,sidebarTextH);
   const ctx=canvas.getContext("2d");
-  const s=STY[style];
+  const s=STY[style]||STY[FORGE_STYLE];
   let pageBg=S0.bg;
   if(printExport){
     if(screenMatch&&!inkSaver)pageBg=S0.bg;
@@ -2002,7 +2038,7 @@ function renderCanvas(dg,style,options={}){
   const fogSet=!showEnts&&revArr!=null?new Set(Array.isArray(revArr)?revArr:[...revArr]):null;
   const yO=28*scale;
   ctx.font=`${fontPx}px monospace`;ctx.textBaseline="top";
-  const floorBgBase=style==="grid"?S0.floorBg:S0.bg;
+  const floorBgBase=style===FORGE_STYLE?S0.floorBg:S0.bg;
   for(let y=0;y<dg.height;y++){for(let x=0;x<dg.width;x++){
     const cell=rg[y][x];
     if(!showEnts&&fogCells){
@@ -2089,13 +2125,13 @@ export default function DungeonForge(){
   /** Locked display behavior — no sidebar toggles (tiny cells, fill viewport, 2× PNG, scenery). */
   const FIXED_FORGE_DISPLAY={showDecos:true,showThemes:false};
   const [cfg,setCfg]=useState(()=>{
-    const base={roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:"terminal",seed:Math.floor(Math.random()*999999),locationType:"dungeon",dungeonLighting:"lit",dungeonWanderMin:10,graveyardTime:"day",graveyardWeather:"clear",townMarketDay:false,townFortified:false,townChaseMode:false,roadVariant:"dirt_trail",wildernessWeather:"clear",volcanicActivity:"dormant",eruptionRounds:15,feyShiftingPaths:false,feyPlayerDisorient:false,feyBioluminescent:true,caveVariant:"auto",caveBioluminescentMode:"auto",templeDeity:"auto",templeCondition:"auto",...FIXED_FORGE_DISPLAY,cellPx:18,exportCellPx:32,autoSync:false};
+    const base={roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:FORGE_STYLE,seed:Math.floor(Math.random()*999999),locationType:"dungeon",dungeonLighting:"lit",dungeonWanderMin:10,graveyardTime:"day",graveyardWeather:"clear",townMarketDay:false,townFortified:false,townChaseMode:false,roadVariant:"dirt_trail",wildernessWeather:"clear",volcanicActivity:"dormant",eruptionRounds:15,feyShiftingPaths:false,feyPlayerDisorient:false,feyBioluminescent:true,caveVariant:"auto",caveBioluminescentMode:"auto",templeDeity:"auto",templeCondition:"auto",...FIXED_FORGE_DISPLAY,cellPx:18,exportCellPx:32,autoSync:false};
     try{
       const raw=localStorage.getItem(FORGE_CFG_KEY);
       if(raw){
         const p=JSON.parse(raw);
         delete p.asciiDensity;delete p.asciiFontPx;delete p.hiRes;delete p.hiResExport;delete p.tinyMode;delete p.compactCells;delete p.density;
-        return{...base,...p,...FIXED_FORGE_DISPLAY};
+        return{...base,...p,...FIXED_FORGE_DISPLAY,style:FORGE_STYLE};
       }
     }catch(_){/* ignore */}
     return base;
@@ -2313,7 +2349,7 @@ export default function DungeonForge(){
   },[]);
   const isP=view==="player";
   const forgeGridCfg={...cfg,showThemes:!!cfg.showThemes&&!isP};
-  const rg=dg?buildRenderGrid(dg,forgeGridCfg):null;const S=STY[cfg.style];
+  const rg=dg?buildRenderGrid(dg,forgeGridCfg):null;const S=STY[FORGE_STYLE];
   const Wm=dg?dg.width:1;const Hm=dg?dg.height:1;
   const cs=useMemo(()=>{
     const n=computeCellSize({
@@ -2402,8 +2438,8 @@ export default function DungeonForge(){
   const tvForgeCfg=useMemo(()=>({showThemes:!!cfg.showThemes}),[cfg.showThemes]);
   const tvPreviewUrl=useMemo(()=>{
     if(tvRoom==null||!dg)return"";
-    return renderRoomCanvas(dg,tvRoom,cfg.style,cfg.locationType,tvForgeCfg,{cellPx:32,dpr:2,fontPx:24}).toDataURL("image/png");
-  },[tvRoom,dg,cfg.style,cfg.locationType,tvForgeCfg]);
+    return renderRoomCanvas(dg,tvRoom,FORGE_STYLE,cfg.locationType,tvForgeCfg,{cellPx:32,dpr:2,fontPx:24}).toDataURL("image/png");
+  },[tvRoom,dg,cfg.locationType,tvForgeCfg]);
 
   useEffect(()=>{
     setZoom(1);setPan({x:0,y:0});
@@ -2682,7 +2718,7 @@ export default function DungeonForge(){
       const lineH=Math.round(13*dpr);
       const maxChars=sidebarLines.reduce((m,l)=>Math.max(m,l.length),36);
       const sidebarW=Math.min(520*dpr,Math.max(280*dpr,Math.ceil(maxChars*7*dpr+24*dpr)));
-      const S0={...STY[cfg.style],...(LOCATION_STYLE_OVERRIDE[cfg.locationType]||{})};
+      const S0={...STY[FORGE_STYLE],...(LOCATION_STYLE_OVERRIDE[cfg.locationType]||{})};
       const padTop=28*dpr;
       const full=document.createElement("canvas");
       full.width=mapCanvas.width+sidebarW+16*dpr;
@@ -2728,22 +2764,17 @@ export default function DungeonForge(){
         boxSizing:"border-box",
         background:S.bg,
         color:S.textColor,
-        fontFamily:"'Courier New',monospace",
-        fontSize:13,
+        fontFamily:"'Crimson Text',Georgia,serif",
+        fontSize:15,
         ["--forge-border"]:S.panelBorder,
         ["--forge-bg"]:S.bg,
       }}
     >
       <style>{`@keyframes forge-pulse { 0%,100%{opacity:0.35;} 50%{opacity:1;} }`}</style>
-      <div style={{padding:"7px 12px",borderBottom:`1px solid ${S.panelBorder}`,background:S.headerBg,display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:4}}>
+      <div style={{padding:"7px 12px",borderBottom:`1px solid ${S.panelBorder}`,background:S.headerBg,display:"flex",alignItems:"center",justifyContent:"flex-start",flexWrap:"wrap",gap:4}}>
         <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-          <span style={{fontSize:17,fontWeight:"bold",color:S.accent,letterSpacing:3}}>DUNGEON FORGE</span>
-          {dg?.mapName&&<span style={{fontSize:14,color:S.accent,fontStyle:"italic"}}>— {dg.mapName}{floors.length>1?` (Floor ${curFloor}/${floors.length})`:""}</span>}
-        </div>
-        <div style={{display:"flex",gap:2}}>
-          {[["terminal","TERM"],["rogue","DARK"],["grid","LIGHT"]].map(([k,l])=>(
-            <button key={k} onClick={()=>u("style",k)} style={{padding:"3px 10px",fontSize:12,letterSpacing:1,fontFamily:"'Courier New',monospace",background:cfg.style===k?"rgba(255,255,255,0.08)":"transparent",color:cfg.style===k?S.accent:S.dimText,border:cfg.style===k?`1px solid ${S.accent}`:"1px solid transparent",borderRadius:2,cursor:"pointer"}}>{l}</button>
-          ))}
+          <span style={{fontFamily:"Cinzel,serif",fontSize:18,fontWeight:"bold",color:S.accent,letterSpacing:3}}>DUNGEON FORGE</span>
+          {dg?.mapName&&<span style={{fontSize:15,color:S.textColor,fontStyle:"italic",opacity:0.92}}>— {dg.mapName}{floors.length>1?` (Floor ${curFloor}/${floors.length})`:""}</span>}
         </div>
       </div>
       <div className="forge-layout-row">
@@ -2763,19 +2794,19 @@ export default function DungeonForge(){
           }}
         >
           <LB S={S}>LOCATION</LB>
-          <select value={cfg.locationType} onChange={e=>u("locationType",e.target.value)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+          <select value={cfg.locationType} onChange={e=>u("locationType",e.target.value)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
             {Object.entries(LOCATIONS).map(([k,v])=><option key={k} value={k}>{v.name}</option>)}
           </select>
           {LOCATION_DESCRIPTIONS[cfg.locationType]&&<div style={{fontSize:11,color:S.dimText,fontStyle:"italic",lineHeight:1.35}}>{LOCATION_DESCRIPTIONS[cfg.locationType]}</div>}
           {cfg.locationType==="road"&&(
             <>
               <LB S={S}>WILDERNESS ROAD</LB>
-              <select value={cfg.roadVariant??"dirt_trail"} onChange={e=>u("roadVariant",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+              <select value={cfg.roadVariant??"dirt_trail"} onChange={e=>u("roadVariant",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
                 <option value="dirt_trail">Dirt Trail — 1 wide, winding, brush</option>
                 <option value="kings_highway">King&apos;s Highway — 2 wide, posts/inns</option>
                 <option value="mountain_pass">Mountain Pass — cliffs, switchbacks</option>
               </select>
-              <select value={cfg.wildernessWeather??"clear"} onChange={e=>u("wildernessWeather",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginTop:4}}>
+              <select value={cfg.wildernessWeather??"clear"} onChange={e=>u("wildernessWeather",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginTop:4}}>
                 <option value="clear">Weather: Clear</option>
                 <option value="rain">Rain (ranged dis. in storm)</option>
                 <option value="storm">Storm + lightning hazard</option>
@@ -2793,7 +2824,7 @@ export default function DungeonForge(){
           {cfg.locationType==="volcanic_lair"&&(
             <>
               <LB S={S}>VOLCANIC LAIR</LB>
-              <select value={cfg.volcanicActivity??"dormant"} onChange={e=>u("volcanicActivity",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+              <select value={cfg.volcanicActivity??"dormant"} onChange={e=>u("volcanicActivity",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
                 <option value="dormant">Volcanic activity: Dormant</option>
                 <option value="active">Active (tremors: d6/2 rnds)</option>
                 <option value="erupting">Erupting (blocked corridors)</option>
@@ -2819,7 +2850,7 @@ export default function DungeonForge(){
           {(cfg.locationType==="cave"||cfg.locationType==="volcanic_lair")&&(
             <>
               <LB S={S}>CAVE VARIANT</LB>
-              <select value={cfg.caveVariant??"auto"} onChange={e=>u("caveVariant",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+              <select value={cfg.caveVariant??"auto"} onChange={e=>u("caveVariant",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
                 <option value="auto">Auto (weighted random)</option>
                 <option value="natural">Natural cave</option>
                 <option value="goblin">Goblin lair</option>
@@ -2832,7 +2863,7 @@ export default function DungeonForge(){
           {cfg.locationType==="cave"&&(
             <>
               <LB S={S}>CAVE LIGHTING</LB>
-              <select value={cfg.caveBioluminescentMode??"auto"} onChange={e=>u("caveBioluminescentMode",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+              <select value={cfg.caveBioluminescentMode??"auto"} onChange={e=>u("caveBioluminescentMode",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
                 <option value="auto">Bioluminescent — Auto (~35%)</option>
                 <option value="on">Bioluminescent — On (teal palette + moss lights)</option>
                 <option value="off">Bioluminescent — Off</option>
@@ -2842,7 +2873,7 @@ export default function DungeonForge(){
           {cfg.locationType==="temple"&&(
             <>
               <LB S={S}>TEMPLE</LB>
-              <select value={cfg.templeDeity??"auto"} onChange={e=>u("templeDeity",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
+              <select value={cfg.templeDeity??"auto"} onChange={e=>u("templeDeity",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
                 <option value="auto">Deity — Auto (random)</option>
                 <option value="Sun">Sun</option>
                 <option value="Moon">Moon</option>
@@ -2853,7 +2884,7 @@ export default function DungeonForge(){
                 <option value="Trickery">Trickery</option>
                 <option value="Life">Life</option>
               </select>
-              <select value={cfg.templeCondition??"auto"} onChange={e=>u("templeCondition",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+              <select value={cfg.templeCondition??"auto"} onChange={e=>u("templeCondition",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
                 <option value="auto">Condition — Auto</option>
                 <option value="active">Active (maintained)</option>
                 <option value="abandoned">Abandoned</option>
@@ -2875,14 +2906,14 @@ export default function DungeonForge(){
           {cfg.locationType==="dungeon"&&(
             <>
               <LB S={S}>DUNGEON LIGHTING</LB>
-              <select value={cfg.dungeonLighting??"lit"} onChange={e=>u("dungeonLighting",e.target.value)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+              <select value={cfg.dungeonLighting??"lit"} onChange={e=>u("dungeonLighting",e.target.value)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
                 <option value="lit">Lit (sconces)</option>
                 <option value="dim">Dim</option>
                 <option value="dark">Dark (no sconces)</option>
               </select>
               <div style={{fontSize:10,color:S.dimText,lineHeight:1.35}}>Dim/dark darken the DM map overlay; dark skips auto wall lights.</div>
               <LB S={S}>WANDER CHECK (MIN)</LB>
-              <select value={String(cfg.dungeonWanderMin??10)} onChange={e=>u("dungeonWanderMin",parseInt(e.target.value,10)||10)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+              <select value={String(cfg.dungeonWanderMin??10)} onChange={e=>u("dungeonWanderMin",parseInt(e.target.value,10)||10)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
                 <option value="5">Every 5 min (timer)</option>
                 <option value="10">Every 10 min</option>
                 <option value="15">Every 15 min</option>
@@ -2892,18 +2923,18 @@ export default function DungeonForge(){
           {cfg.locationType==="graveyard"&&(
             <>
               <LB S={S}>GRAVEYARD TIME / WEATHER</LB>
-              <select value={cfg.graveyardTime??"day"} onChange={e=>u("graveyardTime",e.target.value)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
+              <select value={cfg.graveyardTime??"day"} onChange={e=>u("graveyardTime",e.target.value)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
                 <option value="day">Day</option>
                 <option value="dusk">Dusk (−5 ft vision, Perception dis.)</option>
                 <option value="night">Night (darkness overlay)</option>
               </select>
-              <select value={cfg.graveyardWeather??"clear"} onChange={e=>u("graveyardWeather",e.target.value)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+              <select value={cfg.graveyardWeather??"clear"} onChange={e=>u("graveyardWeather",e.target.value)} style={{padding:"4px 6px",fontSize:13,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
                 <option value="clear">Clear</option>
                 <option value="rain">Rain (CON DC 10 / hr)</option>
                 <option value="heavy_rain">Heavy rain (difficult terrain note)</option>
               </select>
               {isP&&dg?.rooms?.length?(
-                <button type="button" onClick={()=>setGraveyardInteriorRevealed(new Set(dg.rooms.map((r)=>r.id)))} style={{marginTop:6,padding:"4px 6px",fontSize:11,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>Reveal all mausoleum interiors (player fog)</button>
+                <button type="button" onClick={()=>setGraveyardInteriorRevealed(new Set(dg.rooms.map((r)=>r.id)))} style={{marginTop:6,padding:"4px 6px",fontSize:11,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>Reveal all mausoleum interiors (player fog)</button>
               ):null}
             </>
           )}
@@ -2919,7 +2950,7 @@ export default function DungeonForge(){
                   <div style={{fontSize:10,color:S.dimText,lineHeight:1.35,marginBottom:6}}>1 tile ≈ 5 ft. Advance when everyone has acted.</div>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:6}}>
                     <span style={{fontSize:12,color:S.textColor}}>Round <b>{chaseRound}</b></span>
-                    <button type="button" onClick={()=>setChaseRound((r)=>r+1)} style={{padding:"4px 10px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Next round</button>
+                    <button type="button" onClick={()=>setChaseRound((r)=>r+1)} style={{padding:"4px 10px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Next round</button>
                   </div>
                   <div style={{fontSize:10,color:S.dimText,lineHeight:1.35}}>{CHASE_ROUND_HINTS[chaseRound%CHASE_ROUND_HINTS.length]}</div>
                 </>
@@ -2928,58 +2959,58 @@ export default function DungeonForge(){
           )}
           <LB S={S}>MAP ZOOM</LB>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <button type="button" className="btn-secondary" style={{padding:"4px 10px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",minHeight:0}}
+            <button type="button" className="btn-secondary" style={{padding:"4px 10px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",minHeight:0}}
               onClick={()=>setCfg((c)=>({...c,cellPx:Math.max(8,(c.cellPx??18)-4)}))}>−</button>
-            <span style={{fontSize:13,fontFamily:"'Courier New',monospace",color:S.textColor,width:52,textAlign:"center"}}>{cfg.cellPx??18}px</span>
-            <button type="button" className="btn-secondary" style={{padding:"4px 10px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",minHeight:0}}
+            <span style={{fontSize:13,fontFamily:"'Crimson Text',Georgia,serif",color:S.textColor,width:52,textAlign:"center"}}>{cfg.cellPx??18}px</span>
+            <button type="button" className="btn-secondary" style={{padding:"4px 10px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",minHeight:0}}
               onClick={()=>setCfg((c)=>({...c,cellPx:Math.min(48,(c.cellPx??18)+4)}))}>+</button>
           </div>
           <div style={{fontSize:10,color:S.dimText,marginTop:4,lineHeight:1.35}}>Live map uses this size; the canvas may shrink to fit the panel.</div>
           <LB S={S}>PNG EXPORT SCALE</LB>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <button type="button" className="btn-secondary" style={{padding:"4px 10px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",minHeight:0}}
+            <button type="button" className="btn-secondary" style={{padding:"4px 10px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",minHeight:0}}
               onClick={()=>setCfg((c)=>({...c,exportCellPx:Math.max(16,(c.exportCellPx??32)-4)}))}>−</button>
-            <span style={{fontSize:13,fontFamily:"'Courier New',monospace",color:S.textColor,width:52,textAlign:"center"}}>{cfg.exportCellPx??32}px</span>
-            <button type="button" className="btn-secondary" style={{padding:"4px 10px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",minHeight:0}}
+            <span style={{fontSize:13,fontFamily:"'Crimson Text',Georgia,serif",color:S.textColor,width:52,textAlign:"center"}}>{cfg.exportCellPx??32}px</span>
+            <button type="button" className="btn-secondary" style={{padding:"4px 10px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",minHeight:0}}
               onClick={()=>setCfg((c)=>({...c,exportCellPx:Math.min(64,(c.exportCellPx??32)+4)}))}>+</button>
           </div>
           <div style={{fontSize:10,color:S.dimText,marginTop:2,lineHeight:1.35}}>Same pixel renderer as the live map; larger cells for sharper PNGs (DM/Player buttons use max of this and map zoom).</div>
           <LB S={S}>ASCII COPY</LB>
           <div style={{fontSize:11,color:S.dimText,lineHeight:1.35}}>Plain text grid (same topology as the map).</div>
-          <button type="button" onClick={()=>{const u=new URL(window.location.href);u.searchParams.set("seed",String(cfg.seed));u.searchParams.set("loc",cfg.locationType);u.searchParams.set("level",String(cfg.level));void navigator.clipboard.writeText(u.toString());}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>COPY SHARE URL</button>
-          <button type="button" disabled={!dg||!asciiExport?.text} onClick={()=>{if(!dg||!asciiExport)return;const cellPx=Math.max(24,cfg.exportCellPx??32);const gridDm=buildRenderGrid(dg,{...cfg,showThemes:!!cfg.showThemes});const dmEl=document.createElement("canvas");const locP=dg.locationType??cfg.locationType;renderDungeonToCanvas(dmEl,gridDm,{palette:forgePaletteForDungeon(dg),entities:ENTITY_PALETTE,cellPx,dpr:2,showEnts:true,playerSanitize:false,inkSaver:false,forgeDmHints:dg.forgeDmHints??null,dungeonLighting:cfg.dungeonLighting??dg.dungeonLighting??"lit",graveyardAmbience:locP==="graveyard"?{timeOfDay:cfg.graveyardTime??dg.graveyardTime??"day",weather:cfg.graveyardWeather??dg.graveyardWeather??"clear"}:undefined});const dm=dmEl.toDataURL("image/png");const lines=dg.rooms.map(r=>{const rt=r.roomType?` [${r.roomType}]`:"";const desc=r.description?` — ${r.description}`:"";return`Room ${r.id}:${rt} ${r.isSecretRoom?"[SECRET] ":""}${r.namedRoom||r.label||r.type} (depth ${r.depth??"?"}, theme ${r.theme||"?"})${desc}`;});const safe=(t)=>String(t??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");const structureTableHtml=locP==="graveyard"?`<table border="1" cellpadding="4" style="border-collapse:collapse;font-size:10pt;margin-top:8px"><thead><tr><th>#</th><th>Dimensions</th><th>Contains</th><th>Notes</th></tr></thead><tbody>${dg.rooms.map((r)=>`<tr><td>${r.id}</td><td>${r.w}×${r.h}</td><td>${safe(r.containsSummary)}</td><td>${safe(r.dmNotes)}</td></tr>`).join("")}</tbody></table>`:null;openForgePrintPacket({title:`${dg.mapName||"Forge"} seed ${cfg.seed}`,asciiText:asciiExport.text,dmMapDataUrl:dm,roomLines:lines,structureTableHtml});}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PRINT DM PACKET</button>
+          <button type="button" onClick={()=>{const u=new URL(window.location.href);u.searchParams.set("seed",String(cfg.seed));u.searchParams.set("loc",cfg.locationType);u.searchParams.set("level",String(cfg.level));void navigator.clipboard.writeText(u.toString());}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>COPY SHARE URL</button>
+          <button type="button" disabled={!dg||!asciiExport?.text} onClick={()=>{if(!dg||!asciiExport)return;const cellPx=Math.max(24,cfg.exportCellPx??32);const gridDm=buildRenderGrid(dg,{...cfg,showThemes:!!cfg.showThemes});const dmEl=document.createElement("canvas");const locP=dg.locationType??cfg.locationType;renderDungeonToCanvas(dmEl,gridDm,{palette:forgePaletteForDungeon(dg),entities:ENTITY_PALETTE,cellPx,dpr:2,showEnts:true,playerSanitize:false,inkSaver:false,forgeDmHints:dg.forgeDmHints??null,dungeonLighting:cfg.dungeonLighting??dg.dungeonLighting??"lit",graveyardAmbience:locP==="graveyard"?{timeOfDay:cfg.graveyardTime??dg.graveyardTime??"day",weather:cfg.graveyardWeather??dg.graveyardWeather??"clear"}:undefined});const dm=dmEl.toDataURL("image/png");const lines=dg.rooms.map(r=>{const rt=r.roomType?` [${r.roomType}]`:"";const desc=r.description?` — ${r.description}`:"";return`Room ${r.id}:${rt} ${r.isSecretRoom?"[SECRET] ":""}${r.namedRoom||r.label||r.type} (depth ${r.depth??"?"}, theme ${r.theme||"?"})${desc}`;});const safe=(t)=>String(t??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");const structureTableHtml=locP==="graveyard"?`<table border="1" cellpadding="4" style="border-collapse:collapse;font-size:10pt;margin-top:8px"><thead><tr><th>#</th><th>Dimensions</th><th>Contains</th><th>Notes</th></tr></thead><tbody>${dg.rooms.map((r)=>`<tr><td>${r.id}</td><td>${r.w}×${r.h}</td><td>${safe(r.containsSummary)}</td><td>${safe(r.dmNotes)}</td></tr>`).join("")}</tbody></table>`:null;openForgePrintPacket({title:`${dg.mapName||"Forge"} seed ${cfg.seed}`,asciiText:asciiExport.text,dmMapDataUrl:dm,roomLines:lines,structureTableHtml});}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PRINT DM PACKET</button>
           <LB S={S}>SEED</LB>
           <div style={{display:"flex",gap:2}}>
-            <input type="number" value={cfg.seed} onChange={e=>u("seed",parseInt(e.target.value,10)||0)} style={{flex:1,padding:"2px 3px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:30}}/>
-            <button onClick={()=>u("seed",Math.floor(Math.random()*999999))} style={{padding:"2px 5px",fontSize:14,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>RNG</button>
+            <input type="number" value={cfg.seed} onChange={e=>u("seed",parseInt(e.target.value,10)||0)} style={{flex:1,padding:"2px 3px",fontSize:16,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:30}}/>
+            <button onClick={()=>u("seed",Math.floor(Math.random()*999999))} style={{padding:"2px 5px",fontSize:14,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>RNG</button>
           </div>
           {cfg.seed===0 ? (
             <div style={{fontSize:10,color:"#d9a036",lineHeight:1.35}}>Seed 0 is not valid — using seed 1 instead.</div>
           ) : null}
-          <button onClick={()=>u("seed",Math.floor(Math.random()*999999))} style={{marginTop:3,padding:"6px 0",fontSize:16,fontWeight:"bold",fontFamily:"'Courier New',monospace",letterSpacing:2,background:S.inputBg,color:S.btnFg,border:`1px solid ${S.btnBorder}`,borderRadius:2,cursor:"pointer"}}>NEW MAP [Ctrl+G]</button>
-          <button onClick={()=>void generate()} style={{marginTop:3,padding:"6px 0",fontSize:16,fontWeight:"bold",fontFamily:"'Courier New',monospace",letterSpacing:2,background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>RE-RUN</button>
+          <button onClick={()=>u("seed",Math.floor(Math.random()*999999))} style={{marginTop:3,padding:"6px 0",fontSize:16,fontWeight:"bold",fontFamily:"'Crimson Text',Georgia,serif",letterSpacing:2,background:S.inputBg,color:S.btnFg,border:`1px solid ${S.btnBorder}`,borderRadius:2,cursor:"pointer"}}>NEW MAP [Ctrl+G]</button>
+          <button onClick={()=>void generate()} style={{marginTop:3,padding:"6px 0",fontSize:16,fontWeight:"bold",fontFamily:"'Crimson Text',Georgia,serif",letterSpacing:2,background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>RE-RUN</button>
           <LB S={S}>VIEW</LB>
           <div style={{display:"flex",gap:2}}>
             {[["dm","DM"],["player","PLAYER"]].map(([k,l])=>(
-              <button key={k} onClick={()=>setView(k)} style={{flex:1,padding:"2px 0",fontSize:14,fontFamily:"'Courier New',monospace",background:view===k?"rgba(255,255,255,0.06)":"transparent",color:view===k?S.accent:S.dimText,border:`1px solid ${view===k?S.accent:S.panelBorder}`,borderRadius:2,cursor:"pointer"}}>{l}</button>
+              <button key={k} onClick={()=>setView(k)} style={{flex:1,padding:"2px 0",fontSize:14,fontFamily:"'Crimson Text',Georgia,serif",background:view===k?"rgba(255,255,255,0.06)":"transparent",color:view===k?S.accent:S.dimText,border:`1px solid ${view===k?S.accent:S.panelBorder}`,borderRadius:2,cursor:"pointer"}}>{l}</button>
             ))}
           </div>
           {isP&&<div style={{fontSize:14,color:S.dimText}}>
             <div style={{marginBottom:2}}>Fog uses revealed rooms + open doors. On the DM map, click a door to open or close it (gold = open, braced = closed).</div>
             <div style={{display:"flex",gap:2}}>
-              <button onClick={()=>setRevealed(new Set(rooms.map(r=>r.id)))} style={{flex:1,padding:"1px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Reveal All</button>
-              <button onClick={()=>{const id=dg?inferStartingRoomId(dg):null;setRevealed(new Set([id??rooms[0]?.id??1]));setDoorOpen(new Set());}} style={{flex:1,padding:"1px",fontSize:16,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Reset</button>
+              <button onClick={()=>setRevealed(new Set(rooms.map(r=>r.id)))} style={{flex:1,padding:"1px",fontSize:16,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Reveal All</button>
+              <button onClick={()=>{const id=dg?inferStartingRoomId(dg):null;setRevealed(new Set([id??rooms[0]?.id??1]));setDoorOpen(new Set());}} style={{flex:1,padding:"1px",fontSize:16,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Reset</button>
             </div>
           </div>}
           <LB S={S}>EXPORT PNG</LB>
-          <div style={{fontSize:11,color:S.dimText,lineHeight:1.35,marginBottom:4}}>Color exports match the header theme (TERM / DARK / LIGHT) and location tints. DM includes the room key column. Player hides secrets. Ink uses grayscale from the same map (saves toner, not blocky).</div>
+          <div style={{fontSize:11,color:S.dimText,lineHeight:1.35,marginBottom:4}}>Color exports match the app palette and location tints. DM includes the room key column. Player hides secrets. Ink uses grayscale from the same map (saves toner, not blocky).</div>
           <div style={{display:"flex",gap:2,flexWrap:"wrap"}}>
-            <button type="button" onClick={()=>exportPNG("dm")} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>DM · color</button>
-            <button type="button" onClick={()=>exportPNG("player")} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Player · color</button>
+            <button type="button" onClick={()=>exportPNG("dm")} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>DM · color</button>
+            <button type="button" onClick={()=>exportPNG("player")} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Player · color</button>
           </div>
           <div style={{display:"flex",gap:2,flexWrap:"wrap",marginTop:4}}>
-            <button type="button" onClick={()=>exportPNG("dm",{ink:true})} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>DM · ink</button>
-            <button type="button" onClick={()=>exportPNG("player",{ink:true})} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Player · ink</button>
+            <button type="button" onClick={()=>exportPNG("dm",{ink:true})} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>DM · ink</button>
+            <button type="button" onClick={()=>exportPNG("player",{ink:true})} style={{flex:1,minWidth:100,padding:"4px",fontSize:14,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Player · ink</button>
           </div>
           <LB S={S}>LIBRARY</LB>
           <button type="button" onClick={async()=>{
@@ -2992,13 +3023,13 @@ export default function DungeonForge(){
               setSaveLibraryMsg("Saved to Dungeons library.");
               setTimeout(()=>setSaveLibraryMsg(null),5000);
             }catch(err){ setSaveLibraryMsg(String(err)); }
-          }} style={{padding:"6px 0",fontSize:14,fontWeight:"bold",fontFamily:"'Courier New',monospace",letterSpacing:1,background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>SAVE TO LIBRARY</button>
+          }} style={{padding:"6px 0",fontSize:14,fontWeight:"bold",fontFamily:"'Crimson Text',Georgia,serif",letterSpacing:1,background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>SAVE TO LIBRARY</button>
           {saveLibraryMsg&&<div style={{fontSize:12,color:saveLibraryMsg.startsWith("Saved")?S.accent:S.accentAlt}}>{saveLibraryMsg}</div>}
           <LB S={S}>ACTIVE SESSION</LB>
           <select
             value={selectedSessionId}
             onChange={e=>setSelectedSessionId(e.target.value)}
-            style={{padding:"4px 6px",fontSize:13,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}
+            style={{padding:"4px 6px",fontSize:13,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}
           >
             <option value="">Select session...</option>
             {sessions.map(s=><option key={s.id} value={s.id}>{s.name}{s.status==="active"?" (active)":""}</option>)}
@@ -3025,20 +3056,20 @@ export default function DungeonForge(){
               setSendMsg("Sent to session!");
               setTimeout(()=>setSendMsg(null),3000);
             }}
-            style={{marginTop:3,padding:"6px 0",fontSize:14,fontWeight:"bold",fontFamily:"'Courier New',monospace",letterSpacing:2,background:S.inputBg,color:S.accent,border:`1px solid ${S.btnBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}
+            style={{marginTop:3,padding:"6px 0",fontSize:14,fontWeight:"bold",fontFamily:"'Crimson Text',Georgia,serif",letterSpacing:2,background:S.inputBg,color:S.accent,border:`1px solid ${S.btnBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}
           >
             SEND TO SESSION
           </button>
           {sendMsg&&<div style={{color:S.accent,fontSize:11}}>{sendMsg}</div>}
           <LB S={S}>PLAYER SCREEN</LB>
-          <button type="button" onClick={()=>window.open("/dungeons/player","_blank","noopener")} style={{padding:"6px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>OPEN PLAYER SCREEN ↗</button>
-          <button type="button" onClick={()=>pushToPlayerScreen()} disabled={!dg} style={{padding:"6px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PUSH MAP TO SCREEN</button>
-          <button type="button" onClick={()=>pushToPlayerScreen({revealed:[...revealed],doorOpen:[...doorOpen],selectedRoomId:selRoom})} disabled={!dg} style={{padding:"6px 0",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PUSH WITH FOG STATE</button>
+          <button type="button" onClick={()=>window.open("/dungeons/player","_blank","noopener")} style={{padding:"6px 0",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>OPEN PLAYER SCREEN ↗</button>
+          <button type="button" onClick={()=>pushToPlayerScreen()} disabled={!dg} style={{padding:"6px 0",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PUSH MAP TO SCREEN</button>
+          <button type="button" onClick={()=>pushToPlayerScreen({revealed:[...revealed],doorOpen:[...doorOpen],selectedRoomId:selRoom})} disabled={!dg} style={{padding:"6px 0",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PUSH WITH FOG STATE</button>
           <Tg l="Auto-sync fog on change" on={!!cfg.autoSync} S={S} f={()=>u("autoSync",!cfg.autoSync)}/>
           {floors.length>1&&<><LB S={S}>FLOOR</LB><div style={{display:"flex",gap:2,flexWrap:"wrap"}}>
-            {floors.map((_,i)=>(<button key={i} onClick={()=>{setCurFloor(i+1);setDg(floors[i]);setSelRoom(null);setTvRoom(null);setForgeInspect(null);setDoorOpen(new Set());setTrapTriggeredKeys(new Set());}} style={{padding:"1px 5px",fontSize:14,fontFamily:"'Courier New',monospace",background:curFloor===i+1?"rgba(255,255,255,0.08)":"transparent",color:curFloor===i+1?S.accent:S.dimText,border:`1px solid ${curFloor===i+1?S.accent:S.panelBorder}`,borderRadius:2,cursor:"pointer"}}>{i+1}</button>))}
+            {floors.map((_,i)=>(<button key={i} onClick={()=>{setCurFloor(i+1);setDg(floors[i]);setSelRoom(null);setTvRoom(null);setForgeInspect(null);setDoorOpen(new Set());setTrapTriggeredKeys(new Set());}} style={{padding:"1px 5px",fontSize:14,fontFamily:"'Crimson Text',Georgia,serif",background:curFloor===i+1?"rgba(255,255,255,0.08)":"transparent",color:curFloor===i+1?S.accent:S.dimText,border:`1px solid ${curFloor===i+1?S.accent:S.panelBorder}`,borderRadius:2,cursor:"pointer"}}>{i+1}</button>))}
           </div></>}
-          <div style={{marginTop:1}}><button onClick={()=>setLegend(!legend)} style={{background:"none",border:"none",cursor:"pointer",padding:0,color:S.dimText,fontSize:14,fontFamily:"'Courier New',monospace"}}>{legend?"[-]":"[+]"} LEGEND</button>
+          <div style={{marginTop:1}}><button onClick={()=>setLegend(!legend)} style={{background:"none",border:"none",cursor:"pointer",padding:0,color:S.dimText,fontSize:14,fontFamily:"'Crimson Text',Georgia,serif"}}>{legend?"[-]":"[+]"} LEGEND</button>
             {legend&&<div style={{marginTop:2,fontSize:14,lineHeight:1.7,color:S.textColor}}>
               {[["#","Wall",S.wallFg],[".","Floor",S.floorFg],["+","Door",S.doorFg],[":","Road",S.roadFg],["<","Up",S.stairsFg],[">","Down",S.stairsFg],["A-Z","Monster",S.monsterFg],["^","Trap",S.trapFg],["!","Item",S.itemFg],["var","Decor","#f80"]].map(([c,d,f],i)=>(
                 <div key={i} style={{display:"flex",alignItems:"center",gap:5}}><span style={{color:f,fontWeight:"bold",minWidth:22,textAlign:"center"}}>{c}</span><span>{d}</span></div>))}
@@ -3190,7 +3221,7 @@ export default function DungeonForge(){
                         style={{
                           padding:"4px 10px",
                           fontSize:12,
-                          fontFamily:"'Courier New',monospace",
+                          fontFamily:"'Crimson Text',Georgia,serif",
                           background:S.inputBg,
                           color:S.accent,
                           border:`1px solid ${S.inputBorder}`,
@@ -3230,7 +3261,7 @@ export default function DungeonForge(){
                           marginTop:8,
                           padding:"3px 8px",
                           fontSize:10,
-                          fontFamily:"'Courier New',monospace",
+                          fontFamily:"'Crimson Text',Georgia,serif",
                           background:S.inputBg,
                           color:S.accent,
                           border:`1px solid ${S.inputBorder}`,
@@ -3249,7 +3280,7 @@ export default function DungeonForge(){
                     style={{
                       padding:"4px 8px",
                       fontSize:11,
-                      fontFamily:"'Courier New',monospace",
+                      fontFamily:"'Crimson Text',Georgia,serif",
                       background:S.inputBg,
                       color:S.dimText,
                       border:`1px solid ${S.inputBorder}`,
@@ -3265,7 +3296,7 @@ export default function DungeonForge(){
           </div>
           <DungeonLegend locationType={cfg.locationType} />
           </div>
-          {hovered&&coarsePointer&&<div style={{position:"fixed",bottom:"max(10px, var(--safe-bottom, 0px))",left:"50%",transform:"translateX(-50%)",background:S.panelBg,color:S.textColor,border:`1px solid ${S.panelBorder}`,padding:"5px 14px",fontSize:13,fontFamily:"'Courier New',monospace",borderRadius:2,zIndex:100,pointerEvents:"none",maxWidth:"min(96vw,420px)",whiteSpace:"normal"}}>
+          {hovered&&coarsePointer&&<div style={{position:"fixed",bottom:"max(10px, var(--safe-bottom, 0px))",left:"50%",transform:"translateX(-50%)",background:S.panelBg,color:S.textColor,border:`1px solid ${S.panelBorder}`,padding:"5px 14px",fontSize:13,fontFamily:"'Crimson Text',Georgia,serif",borderRadius:2,zIndex:100,pointerEvents:"none",maxWidth:"min(96vw,420px)",whiteSpace:"normal"}}>
             {hovered.type==="monster"&&<><b style={{color:S.monsterFg}}>{hovered.name}</b> x{hovered.count} (CR {hovered.cr})</>}
             {hovered.type==="trap"&&<><b style={{color:S.trapFg}}>{hovered.name}</b> — {hovered.dmg}</>}
             {hovered.type==="item"&&<><b style={{color:RM[hovered.r]||S.itemFg}}>{hovered.name}</b> ({hovered.r})</>}
@@ -3302,10 +3333,10 @@ export default function DungeonForge(){
                   <span style={{fontSize:10,fontWeight:"normal",color:S.dimText}}>{rm.w}x{rm.h}</span>
                   {!isP&&rm.theme&&<span style={{fontSize:10,fontWeight:"normal",color:S.accentAlt}}>theme {rm.theme}</span>}
                   {!isP&&typeof rm.depth==="number"&&<span style={{fontSize:10,fontWeight:"normal",color:S.dimText}}>depth {rm.depth}</span>}
-                  {isP&&<button onClick={()=>{const n=new Set(revealed);if(n.has(rm.id))n.delete(rm.id);else n.add(rm.id);setRevealed(n);}} style={{marginLeft:"auto",padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:revealed.has(rm.id)?S.accentAlt:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>{revealed.has(rm.id)?"HIDE":"REVEAL ROOM"}</button>}
-                  <button type="button" onClick={()=>setSelRoom(null)} style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>✕ Clear</button>
-                  {!isP&&<button type="button" onClick={()=>setRevealed(new Set([rm.id]))} style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Set as Start Room</button>}
-                  <button type="button" onClick={()=>setTvRoom(rm.id)} style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>📺 TV</button>
+                  {isP&&<button onClick={()=>{const n=new Set(revealed);if(n.has(rm.id))n.delete(rm.id);else n.add(rm.id);setRevealed(n);}} style={{marginLeft:"auto",padding:"3px 8px",fontSize:10,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:revealed.has(rm.id)?S.accentAlt:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>{revealed.has(rm.id)?"HIDE":"REVEAL ROOM"}</button>}
+                  <button type="button" onClick={()=>setSelRoom(null)} style={{padding:"3px 8px",fontSize:10,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>✕ Clear</button>
+                  {!isP&&<button type="button" onClick={()=>setRevealed(new Set([rm.id]))} style={{padding:"3px 8px",fontSize:10,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Set as Start Room</button>}
+                  <button type="button" onClick={()=>setTvRoom(rm.id)} style={{padding:"3px 8px",fontSize:10,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>📺 TV</button>
                   {!isP&&(cfg.locationType==="town"||cfg.locationType==="castle")&&(
                     <button
                       type="button"
@@ -3314,7 +3345,7 @@ export default function DungeonForge(){
                         const seed=(Math.max(1,cfg.seed||1))*10007+rm.id;
                         setInteriorModal({snap:generateBuildingInteriorSnapshot(arch,seed)});
                       }}
-                      style={{padding:"3px 8px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}
+                      style={{padding:"3px 8px",fontSize:10,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}
                     >
                       Interior map
                     </button>
@@ -3420,7 +3451,7 @@ export default function DungeonForge(){
                               setTimeout(()=>setSaveLibraryMsg(null),6000);
                             }catch(err){ setSaveLibraryMsg(String(err)); }
                           }}
-                          style={{padding:"6px 8px",fontSize:11,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:selectedSessionId?"pointer":"not-allowed",width:"100%",opacity:selectedSessionId?1:0.45}}
+                          style={{padding:"6px 8px",fontSize:11,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accent,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:selectedSessionId?"pointer":"not-allowed",width:"100%",opacity:selectedSessionId?1:0.45}}
                         >
                           START COMBAT IN SESSION
                         </button>
@@ -3428,7 +3459,7 @@ export default function DungeonForge(){
                     )}
                   </div>}
                 <div style={{marginTop:10}}>
-                  <button type="button" onClick={()=>setTvRoom(rm.id)} style={{width:"100%",padding:"6px 8px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>POP OUT ROOM</button>
+                  <button type="button" onClick={()=>setTvRoom(rm.id)} style={{width:"100%",padding:"6px 8px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>POP OUT ROOM</button>
                 </div>
               </div>);})():(<div>
               {isP&&(
@@ -3441,14 +3472,14 @@ export default function DungeonForge(){
                 {rooms.map(r=>{const re=ents.filter(e=>e.roomId===r.id);const vis=revealed.has(r.id);
                   return(
                     <div key={r.id} style={{display:"flex",alignItems:"stretch",gap:2}}>
-                      <button type="button" onClick={()=>setSelRoom((prev)=>prev===r.id?null:r.id)} style={{padding:"3px 6px",fontSize:10,fontFamily:"'Courier New',monospace",background:"rgba(255,255,255,0.03)",color:isP&&!vis?S.dimText:S.textColor,border:`1px solid ${S.panelBorder}`,borderRadius:2,cursor:"pointer",display:"flex",alignItems:"center",gap:3,opacity:isP&&!vis?0.4:1}}>
+                      <button type="button" onClick={()=>setSelRoom((prev)=>prev===r.id?null:r.id)} style={{padding:"3px 6px",fontSize:10,fontFamily:"'Crimson Text',Georgia,serif",background:"rgba(255,255,255,0.03)",color:isP&&!vis?S.dimText:S.textColor,border:`1px solid ${S.panelBorder}`,borderRadius:2,cursor:"pointer",display:"flex",alignItems:"center",gap:3,opacity:isP&&!vis?0.4:1}}>
                         <b>{r.id}</b><span style={{fontSize:9}}>{r.label||r.type}</span>
                         {!isP&&re.some(e=>e.type==="monster")&&<span style={{color:S.monsterFg,fontSize:8}}>M</span>}
                         {!isP&&re.some(e=>e.type==="trap")&&<span style={{color:S.trapFg,fontSize:8}}>T</span>}
                         {!isP&&re.some(e=>e.type==="item")&&<span style={{color:S.itemFg,fontSize:8}}>I</span>}
                         {isP&&<span style={{fontSize:8,color:vis?S.accent:S.dimText}}>{vis?"vis":"fog"}</span>}
                       </button>
-                      <button type="button" title="TV view" onClick={(ev)=>{ev.stopPropagation();setTvRoom(r.id);}} style={{padding:"2px 6px",fontSize:10,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>📺 TV</button>
+                      <button type="button" title="TV view" onClick={(ev)=>{ev.stopPropagation();setTvRoom(r.id);}} style={{padding:"2px 6px",fontSize:10,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.accentAlt,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>📺 TV</button>
                     </div>
                   );})}
               </div></div>)}
@@ -3473,7 +3504,7 @@ export default function DungeonForge(){
               <span style={{fontSize:17,color:"#9f9",flex:"1 1 auto",textAlign:"right"}}>Monsters: {mc} · Traps: {traps} · Items: {items}</span>
               <button type="button" onClick={()=>setTvRoom(null)} style={{padding:"6px 12px",fontSize:16,fontFamily:"inherit",background:"#111",color:"#6f6",border:"1px solid #393",borderRadius:4,cursor:"pointer"}}>CLOSE [Esc]</button>
               <button type="button" onClick={()=>{
-                const c=renderRoomCanvas(dg,tvRoom,cfg.style,cfg.locationType,tvForgeCfg,{cellPx:64,dpr:2,fontPx:Math.max(6,Math.round(64*0.72))});
+                const c=renderRoomCanvas(dg,tvRoom,FORGE_STYLE,cfg.locationType,tvForgeCfg,{cellPx:64,dpr:2,fontPx:Math.max(6,Math.round(64*0.72))});
                 const a=document.createElement("a");
                 a.download=`room_${rm.id}_${slug}_tv_${cfg.seed}.png`;
                 a.href=c.toDataURL("image/png");
@@ -3587,7 +3618,7 @@ export default function DungeonForge(){
             <button
               type="button"
               onClick={()=>setForgeInspect(null)}
-              style={{marginTop:14,padding:"6px 14px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.textColor,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}
+              style={{marginTop:14,padding:"6px 14px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.textColor,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}
             >
               Close
             </button>
@@ -3613,7 +3644,7 @@ export default function DungeonForge(){
               {interiorModal.snap.featureLines.map((ln,i)=>(<li key={i}>{ln}</li>))}
             </ul>
             <div style={{fontSize:10,color:S.dimText,marginTop:8,lineHeight:1.35}}>Not to scale with the street map — procedural ground-floor sketch for theater-of-the-mind or TV.</div>
-            <button type="button" onClick={()=>setInteriorModal(null)} style={{marginTop:12,padding:"6px 14px",fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.textColor,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Close</button>
+            <button type="button" onClick={()=>setInteriorModal(null)} style={{marginTop:12,padding:"6px 14px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.textColor,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer"}}>Close</button>
           </div>
         </div>
       )}
@@ -3621,15 +3652,15 @@ export default function DungeonForge(){
     </div>);
 }
 
-function LB({children,S}){return<div style={{fontSize:10,letterSpacing:2,fontWeight:"bold",color:S.dimText,borderBottom:`1px solid ${S.panelBorder}`,paddingBottom:3,fontFamily:"'Courier New',monospace"}}>{children}</div>;}
+function LB({children,S}){return<div style={{fontSize:10,letterSpacing:2,fontWeight:"bold",color:S.dimText,borderBottom:`1px solid ${S.panelBorder}`,paddingBottom:3,fontFamily:"Cinzel,serif"}}>{children}</div>;}
 function NI({l,v,mn,mx,S,set}){const[lc,sL]=useState(String(v));useEffect(()=>sL(String(v)),[v]);const commit=()=>{let n=parseInt(lc);if(isNaN(n))n=mn;n=Math.max(mn,Math.min(mx,n));sL(String(n));set(n);};
   return(<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:3}}>
     <span style={{fontSize:11,color:S.textColor,minWidth:52}}>{l}</span>
     <div style={{display:"flex",alignItems:"center",gap:2}}>
-      <button onClick={()=>set(Math.max(mn,v-1))} style={{width:22,height:22,padding:0,fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>-</button>
+      <button onClick={()=>set(Math.max(mn,v-1))} style={{width:22,height:22,padding:0,fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>-</button>
       <input type="text" value={lc} onChange={e=>sL(e.target.value)} onBlur={commit} onKeyDown={e=>{if(e.key==="Enter")commit();}}
-        style={{width:34,padding:"2px 4px",fontSize:16,textAlign:"center",fontWeight:"bold",fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2}}/>
-      <button onClick={()=>set(Math.min(mx,v+1))} style={{width:22,height:22,padding:0,fontSize:12,fontFamily:"'Courier New',monospace",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+        style={{width:34,padding:"2px 4px",fontSize:16,textAlign:"center",fontWeight:"bold",fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2}}/>
+      <button onClick={()=>set(Math.min(mx,v+1))} style={{width:22,height:22,padding:0,fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
     </div>
   </div>);}
 function Tg({l,on,S,f}){return(<div onClick={f} style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:11,color:S.textColor}}><span style={{color:on?S.accent:S.dimText,fontWeight:"bold",minWidth:20,textAlign:"center"}}>{on?"[x]":"[ ]"}</span>{l}</div>);}

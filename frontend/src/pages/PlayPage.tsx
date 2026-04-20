@@ -2191,7 +2191,7 @@ export function EncounterWorkspace({
         )}
         {mapCellHover && mapCellHover.lines.length > 0 && !laserPointerMode && !tokenHoverTip && (
           <div
-            className="pointer-events-none fixed z-[199] max-w-[18rem] rounded border border-cyan-900/50 bg-gray-950/95 px-2 py-1.5 text-[11px] leading-snug text-gray-100 shadow-xl"
+            className="pointer-events-none fixed z-[199] max-w-[18rem] rounded border border-cyan-800 bg-zinc-950 px-2 py-1.5 text-[11px] leading-snug text-zinc-50 shadow-xl ring-1 ring-black/30"
             style={{
               left: Math.min(
                 mapCellHover.clientX + 14,
@@ -2524,12 +2524,12 @@ export function EncounterWorkspace({
       <>
         <button
           type="button"
-          className="fixed inset-0 z-[150] cursor-default bg-transparent"
+          className="fixed inset-0 z-[150] cursor-default bg-black/50"
           aria-label="Close menu"
           onClick={() => setMapEncounterMenu(null)}
         />
         <div
-          className="fixed z-[160] min-w-[12rem] max-w-[90vw] rounded border border-gray-600 bg-gray-950/98 p-2 text-xs text-gray-200 shadow-2xl"
+          className="fixed z-[160] min-w-[12rem] max-w-[90vw] rounded border border-zinc-600 bg-zinc-950 p-2 text-xs text-zinc-100 shadow-2xl ring-1 ring-black/40"
           style={{
             left: Math.min(
               mapEncounterMenu.clientX,
@@ -2562,7 +2562,7 @@ export function EncounterWorkspace({
                   <button
                     type="button"
                     disabled={launching}
-                    className="mb-2 w-full rounded border border-gray-600 px-2 py-1.5 text-left hover:bg-gray-800 disabled:opacity-50"
+                    className="mb-2 w-full rounded border border-zinc-600 bg-zinc-900 px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800 disabled:opacity-50"
                     onClick={() => void addCellMonsterToInitiative()}
                   >
                     {launching ? "Adding…" : "Add this creature to initiative"}
@@ -2570,7 +2570,7 @@ export function EncounterWorkspace({
                   <button
                     type="button"
                     disabled={launching}
-                    className="mb-2 w-full rounded border border-gray-600 px-2 py-1.5 text-left hover:bg-gray-800 disabled:opacity-50"
+                    className="mb-2 w-full rounded border border-zinc-600 bg-zinc-900 px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800 disabled:opacity-50"
                     onClick={() => void addAllRoomMonstersAtMenuPosition()}
                   >
                     {launching ? "Adding…" : "Add all monsters in this room"}
@@ -2589,35 +2589,35 @@ export function EncounterWorkspace({
                 <>
                   <p className="mb-1 font-semibold text-amber-200/90">Trap</p>
                   {ex.name ? <p className="text-[11px] text-gray-200">{String(ex.name)}</p> : null}
-                  <div className="mb-2 space-y-1 rounded border border-gray-800 bg-black/30 p-2 text-[10px] text-gray-400">
+                  <div className="mb-2 space-y-1 rounded border border-zinc-700 bg-zinc-900 p-2 text-[10px] text-zinc-200">
                     <p>
-                      <span className="font-semibold text-gray-300">Notice (before it fires):</span> compare passive
-                      Perception or an active check to <span className="text-gray-200">DC {detect}</span> (Perception to
+                      <span className="font-semibold text-zinc-100">Notice (before it fires):</span> compare passive
+                      Perception or an active check to <span className="text-white">DC {detect}</span> (Perception to
                       spot, Investigation to study mechanisms, etc.).
                     </p>
                     <p>
-                      <span className="font-semibold text-gray-300">If it triggers:</span>{" "}
-                      <span className="text-gray-200">{saveT}</span> save <span className="text-gray-200">DC {saveDc}</span>
+                      <span className="font-semibold text-zinc-100">If it triggers:</span>{" "}
+                      <span className="text-white">{saveT}</span> save <span className="text-white">DC {saveDc}</span>
                       {ex.dmg ? (
                         <>
                           {" "}
                           — on a failed save, typical damage:{" "}
-                          <span className="text-amber-100/90">{String(ex.dmg)}</span>
+                          <span className="text-amber-200">{String(ex.dmg)}</span>
                         </>
                       ) : null}
                     </p>
                     {ex.saveDC != null && (
-                      <p className="text-[10px] text-amber-200/70">
+                      <p className="text-[10px] text-amber-100">
                         {saveT} save DC {saveDc} — half damage on success. Roll damage once, halve it for saves.
                       </p>
                     )}
-                    {ex.effect ? <p className="text-gray-500">{String(ex.effect)}</p> : null}
+                    {ex.effect ? <p className="text-zinc-400">{String(ex.effect)}</p> : null}
                   </div>
                   {dice ? (
                     <div className="mb-2 space-y-1">
                       <button
                         type="button"
-                        className="w-full rounded border border-amber-700/50 bg-amber-950/30 px-2 py-1.5 text-left text-amber-100/90 hover:bg-amber-950/50"
+                        className="w-full rounded border border-amber-600 bg-amber-950 px-2 py-1.5 text-left text-amber-50 hover:bg-amber-900"
                         onClick={() => {
                           const r = rollMonsterDamage(dice, 0);
                           setTrapMenuDamageRoll(r);
@@ -2626,7 +2626,7 @@ export function EncounterWorkspace({
                         Roll damage ({dice})
                       </button>
                       {trapMenuDamageRoll ? (
-                        <p className="rounded border border-gray-700 px-2 py-1 font-mono text-[11px] text-gray-200">
+                        <p className="rounded border border-zinc-600 bg-zinc-900 px-2 py-1 font-mono text-[11px] text-zinc-100">
                           {trapMenuDamageRoll.breakdown}
                         </p>
                       ) : null}
@@ -2655,7 +2655,7 @@ export function EncounterWorkspace({
                       <button
                         type="button"
                         disabled={!trapDmTargetId || trapMenuDamageRoll == null}
-                        className="w-full rounded border border-dnd-red/40 bg-dnd-red/15 px-2 py-1.5 text-left text-red-100/90 hover:bg-dnd-red/25 disabled:opacity-40"
+                        className="w-full rounded border border-red-800 bg-red-950 px-2 py-1.5 text-left text-red-50 hover:bg-red-900 disabled:opacity-40"
                         onClick={() => {
                           if (!trapMenuDamageRoll || !trapDmTargetId) return;
                           void damageCombatant(trapDmTargetId, trapMenuDamageRoll.total);
@@ -2678,7 +2678,7 @@ export function EncounterWorkspace({
           )}
           <button
             type="button"
-            className="mt-1 w-full rounded border border-gray-700 py-1 text-[11px] text-gray-500 hover:bg-gray-800"
+            className="mt-1 w-full rounded border border-zinc-600 bg-zinc-800 py-1.5 text-[11px] font-medium text-zinc-100 hover:bg-zinc-700"
             onClick={() => setMapEncounterMenu(null)}
           >
             Close
@@ -2691,12 +2691,12 @@ export function EncounterWorkspace({
       <>
         <button
           type="button"
-          className="fixed inset-0 z-[150] cursor-default bg-transparent"
+          className="fixed inset-0 z-[150] cursor-default bg-black/50"
           aria-label="Close menu"
           onClick={() => setMarchMenu(null)}
         />
         <div
-          className="fixed z-[160] min-w-[14rem] max-w-[90vw] rounded border border-gray-600 bg-gray-950/98 p-2 text-xs text-gray-200 shadow-2xl"
+          className="fixed z-[160] min-w-[14rem] max-w-[90vw] rounded border border-zinc-600 bg-zinc-950 p-2 text-xs text-zinc-100 shadow-2xl ring-1 ring-black/40"
           style={{
             left: Math.min(
               marchMenu.clientX,
@@ -2721,7 +2721,7 @@ export function EncounterWorkspace({
           >
             Set as march leader (TV follows)
           </button>
-          <p className="mb-1 text-[10px] uppercase tracking-wide text-gray-500">Follow when marching</p>
+          <p className="mb-1 text-[10px] uppercase tracking-wide text-zinc-400">Follow when marching</p>
           <div className="space-y-1.5">
             {playerCombatants
               .filter((c) => c.id !== (partyLeaderId ?? marchMenu.tokenId))
@@ -2742,7 +2742,7 @@ export function EncounterWorkspace({
               ))}
           </div>
           {playerCombatants.filter((c) => c.id !== (partyLeaderId ?? marchMenu.tokenId)).length === 0 && (
-            <p className="text-[10px] text-gray-500">No other PCs in combat.</p>
+            <p className="text-[10px] text-zinc-400">No other PCs in combat.</p>
           )}
         </div>
       </>
@@ -2752,12 +2752,12 @@ export function EncounterWorkspace({
       <>
         <button
           type="button"
-          className="fixed inset-0 z-[150] cursor-default bg-transparent"
+          className="fixed inset-0 z-[150] cursor-default bg-black/50"
           aria-label="Close menu"
           onClick={() => setMonsterTokenMenu(null)}
         />
         <div
-          className="fixed z-[160] min-w-[14rem] max-w-[90vw] rounded border border-gray-600 bg-gray-950/98 p-2 text-xs text-gray-200 shadow-2xl"
+          className="fixed z-[160] min-w-[14rem] max-w-[90vw] rounded border border-zinc-600 bg-zinc-950 p-2 text-xs text-zinc-100 shadow-2xl ring-1 ring-black/40"
           style={{
             left: Math.min(
               monsterTokenMenu.clientX,
@@ -2793,7 +2793,7 @@ export function EncounterWorkspace({
                 )}
                 <button
                   type="button"
-                  className="mt-1 w-full rounded border border-gray-700 py-1 text-[11px] text-gray-500 hover:bg-gray-800"
+                  className="mt-1 w-full rounded border border-zinc-600 bg-zinc-800 py-1.5 text-[11px] font-medium text-zinc-100 hover:bg-zinc-700"
                   onClick={() => setMonsterTokenMenu(null)}
                 >
                   Close
