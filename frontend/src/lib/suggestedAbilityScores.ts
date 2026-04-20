@@ -21,6 +21,30 @@ export function scoresAfterRace(base: AbilityScores, race: Race | undefined, sub
   return out;
 }
 
+/** Undo `scoresAfterRace`: derive base scores (before racial bonuses) from totals on a filled sheet. */
+export function scoresBaseBeforeRace(
+  finalScores: AbilityScores,
+  race: Race | undefined,
+  subraceSlug: string,
+): AbilityScores {
+  if (!race) return { ...finalScores };
+  const sub = race.subraces.find((s) => s.slug === subraceSlug);
+  const add: Partial<Record<AbilityName, number>> = {};
+  for (const b of race.abilityBonuses) {
+    add[b.ability] = (add[b.ability] ?? 0) + b.bonus;
+  }
+  if (sub) {
+    for (const b of sub.abilityBonuses) {
+      add[b.ability] = (add[b.ability] ?? 0) + b.bonus;
+    }
+  }
+  const out = { ...finalScores };
+  for (const a of ABILITY_NAMES) {
+    out[a] = Math.min(20, Math.max(1, finalScores[a] - (add[a] ?? 0)));
+  }
+  return out;
+}
+
 /**
  * Walking speed shown for the character after common subrace overrides (race card still shows base race speed).
  */

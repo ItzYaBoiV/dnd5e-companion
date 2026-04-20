@@ -31,6 +31,19 @@ services:
       dockerfile: Dockerfile
     container_name: dnd5e_backend
     restart: unless-stopped
+    healthcheck:
+      # node:20-alpine may not ship wget; fetch is always available
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 120s
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,7 +89,8 @@ services:
     container_name: dnd5e_frontend
     restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "56790:4173"
     networks:
@@ -90,4 +104,4 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.22.0.0/24
+        - subnet: 172.20.0.0/24

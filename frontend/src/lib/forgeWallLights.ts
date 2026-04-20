@@ -117,3 +117,181 @@ export function collectCaveBiolumSceneLights(decoOverlay: DecoLite[] | null | un
   }
   return out;
 }
+
+const MAX_BIOME_LIGHTS = 20;
+
+/**
+ * Biome-aware fixture lights for Dungeon Forge maps (deterministic from `seed`).
+ */
+export type CollectBiomeLightsOpts = {
+  /** When false, fey forest uses dim torches instead of wisps. */
+  feyBioluminescent?: boolean;
+};
+
+export function collectBiomeLights(
+  grid: number[][],
+  rooms: Array<{ x: number; y: number; w: number; h: number }>,
+  locationType: string,
+  seed: number,
+  opts?: CollectBiomeLightsOpts | null,
+): SceneLight[] {
+  const rng = makeSeededRng(seed >>> 0);
+  const out: SceneLight[] = [];
+  const H = grid.length;
+  const W = grid[0]?.length ?? 0;
+
+  const push = (L: SceneLight) => {
+    if (out.length >= MAX_BIOME_LIGHTS) return;
+    out.push(L);
+  };
+
+  const addFromRooms = (perRoom: number, mk: (gx: number, gy: number) => SceneLight) => {
+    for (const room of rooms) {
+      if (out.length >= MAX_BIOME_LIGHTS) return;
+      const cells = pickWallAdjacentFloorCells(grid, room, perRoom, rng);
+      for (const c of cells) push(mk(c.gx, c.gy));
+    }
+  };
+
+  switch (locationType) {
+    case "dungeon":
+      addFromRooms(2, (gx, gy) => ({
+        gx,
+        gy,
+        radiusCells: 4 + rng() * 1,
+        intensity: 0.42,
+        kind: "torch",
+        flicker: true,
+      }));
+      break;
+
+    case "cave": {
+      const fungi = rng() < 0.35;
+      if (fungi) {
+        for (let t = 0; t < 80 && out.length < MAX_BIOME_LIGHTS; t++) {
+          const gx = 2 + Math.floor(rng() * Math.max(1, W - 4));
+          const gy = 2 + Math.floor(rng() * Math.max(1, H - 4));
+          if (grid[gy]?.[gx] !== T.F && grid[gy]?.[gx] !== T.C) continue;
+          push({ gx, gy, radiusCells: 3, intensity: 0.1, kind: "fey", flicker: false });
+        }
+      } else {
+        addFromRooms(1, (gx, gy) => ({
+          gx,
+          gy,
+          radiusCells: 3,
+          intensity: 0.2,
+          kind: "torch",
+          flicker: true,
+        }));
+      }
+      break;
+    }
+
+    case "temple":
+      addFromRooms(2, (gx, gy) => ({
+        gx,
+        gy,
+        radiusCells: 5,
+        intensity: 0.36,
+        kind: "divine",
+        flicker: false,
+      }));
+      if (rng() < 0.22 && rooms[0]) {
+        const r = rooms[Math.floor(rng() * rooms.length)]!;
+        const cells = pickWallAdjacentFloorCells(grid, r, 1, rng);
+        const c = cells[0];
+        if (c) push({ gx: c.gx, gy: c.gy, radiusCells: 2, intensity: 0.28, kind: "magic", flicker: true });
+      }
+      break;
+
+    case "graveyard":
+      addFromRooms(2, (gx, gy) => ({
+        gx,
+        gy,
+        radiusCells: 2,
+        intensity: 0.22,
+        kind: "cold",
+        flicker: true,
+      }));
+      break;
+
+    case "volcanic_lair": {
+      for (const L of collectVolcanicLavaGlowLights(grid, 10)) {
+        push({ ...L, kind: "lava", flicker: true, intensity: L.intensity ?? 0.2 });
+      }
+      addFromRooms(1, (gx, gy) => ({
+        gx,
+        gy,
+        radiusCells: 5,
+        intensity: 0.34,
+        kind: "fire",
+        flicker: true,
+      }));
+      break;
+    }
+
+    case "fey_forest":
+      if (opts?.feyBioluminescent === false) {
+        addFromRooms(1, (gx, gy) => ({
+          gx,
+          gy,
+          radiusCells: 3,
+          intensity: 0.14,
+          kind: "torch",
+          flicker: true,
+        }));
+      } else {
+        for (const L of collectFeyForestWispLights(grid, rng, 8)) {
+          push({ ...L, kind: "wisp", radiusCells: 3, intensity: 0.12, flicker: false });
+        }
+      }
+      break;
+
+    case "sewer":
+      addFromRooms(2, (gx, gy) => ({
+        gx,
+        gy,
+        radiusCells: 3,
+        intensity: 0.08,
+        kind: "lantern",
+        flicker: false,
+      }));
+      break;
+
+    case "castle":
+      addFromRooms(2, (gx, gy) => ({
+        gx,
+        gy,
+        radiusCells: 5,
+        intensity: 0.4,
+        kind: "torch",
+        flicker: true,
+      }));
+      break;
+
+    case "swamp":
+      addFromRooms(2, (gx, gy) => ({
+        gx,
+        gy,
+        radiusCells: 2,
+        intensity: 0.16,
+        kind: "wisp",
+        color: "#80ffff",
+        flicker: true,
+      }));
+      break;
+
+    default:
+      addFromRooms(1, (gx, gy) => ({
+        gx,
+        gy,
+        radiusCells: 4.5,
+        intensity: 0.38,
+        kind: "torch",
+        flicker: true,
+      }));
+      break;
+  }
+
+  return out;
+}

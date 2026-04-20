@@ -476,6 +476,20 @@ export interface AttackRollResult extends RollResult {
 }
 
 // ── Character creation wizard state ──────────────────────────────
+
+/** Step numbers match `CharacterCreation` full builder (1–7 before level-up slots). */
+export const PDF_IMPORT_REVIEW_STEP = {
+  basicInfo: 1,
+  race: 2,
+  class: 3,
+  abilityScores: 4,
+  background: 5,
+  startingEquipment: 6,
+  startingSpells: 7,
+} as const;
+
+export type PdfImportReviewIssue = { step: number; message: string };
+
 export interface StartingInventoryDraftRow {
   itemSlug?: string;
   /** Resolved catalog name for display (kit / browse). Not sent to create-character API. */
@@ -557,6 +571,26 @@ export interface CharacterDraft {
   multiclassFirstClassSlug: string;
   /** Multiclass + level &gt; 1: length = level − 1; class slug leveled at character levels 2…L in order. */
   multiclassLevelOrder: string[];
+
+  /** Carried through to `POST /characters` when present (also filled from Wizards PDF import). */
+  experiencePoints: number;
+  age: string;
+  height: string;
+  weight: string;
+  eyes: string;
+  skin: string;
+  hair: string;
+  allies: string;
+  appearance: string;
+
+  copper: number;
+  silver: number;
+  electrum: number;
+  gold: number;
+  platinum: number;
+
+  /** After PDF import: builder steps to revisit (with jump links in the UI). Omitted after reset. */
+  pdfImportReviewIssues?: PdfImportReviewIssue[];
 }
 
 export const DEFAULT_DRAFT: CharacterDraft = {
@@ -590,6 +624,20 @@ export const DEFAULT_DRAFT: CharacterDraft = {
   creationLevelUps: [],
   multiclassFirstClassSlug: "",
   multiclassLevelOrder: [],
+  experiencePoints: 0,
+  age: "",
+  height: "",
+  weight: "",
+  eyes: "",
+  skin: "",
+  hair: "",
+  allies: "",
+  appearance: "",
+  copper: 0,
+  silver: 0,
+  electrum: 0,
+  gold: 0,
+  platinum: 0,
 };
 
 // ============================================================

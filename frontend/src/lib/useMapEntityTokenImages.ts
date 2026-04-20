@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RenderCell } from "@/lib/dungeonTileRenderer";
-import { monsterTokenSprite, publicAssetUrl } from "@/lib/tokenSprites";
+import { monsterTokenSpriteWithFallback, publicAssetUrl } from "@/lib/tokenSprites";
 
 /**
  * Preloads monster SVGs used by scripted map entities (forge cells), for canvas drawing.
@@ -17,8 +17,10 @@ export function useMapEntityTokenImages(grid: RenderCell[][] | null | undefined)
     for (const row of grid ?? []) {
       for (const cell of row) {
         if (cell.eType !== "monster" || !cell.extra || typeof cell.extra !== "object") continue;
-        const slug = (cell.extra as { slug?: string }).slug;
-        if (slug) s.add(publicAssetUrl(monsterTokenSprite(String(slug))));
+        const ex = cell.extra && typeof cell.extra === "object" ? (cell.extra as { slug?: string }) : null;
+        const slug = ex?.slug;
+        const key = slug ?? cell.eName;
+        if (key) s.add(publicAssetUrl(monsterTokenSpriteWithFallback(String(key))));
       }
     }
     return [...s].sort().join("\n");

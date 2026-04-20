@@ -12,6 +12,9 @@ import Step7_StartingSpells from "./Step7_StartingSpells";
 import Step8_Review from "./Step8_Review";
 import CreationLevelUpStep from "./CreationLevelUpStep";
 import QuickCharacterCreation from "./QuickCharacterCreation";
+import PdfCharacterSheetImport from "./PdfCharacterSheetImport";
+import PdfImportReviewBanner from "./PdfImportReviewBanner";
+import PdfImportStepHints from "./PdfImportStepHints";
 import { ChevronLeft } from "lucide-react";
 
 const BASE_STEPS = [
@@ -126,11 +129,15 @@ export default function CharacterCreation() {
       )}
 
       {mode === "full" ? (
-        <p className="text-xs text-stone-600 mb-6 leading-relaxed">
-          Rules follow the D&amp;D 5e SRD (Open5e). Starting above 1st level runs guided steps for each level (HP,
-          features, spells, ASI) before review — for both single-class and multiclass (multiclass also sets 1st-level
-          class and level order on the Class step).
-        </p>
+        <>
+          <PdfCharacterSheetImport />
+          <PdfImportReviewBanner />
+          <p className="text-xs text-stone-600 mb-6 leading-relaxed">
+            Rules follow the D&amp;D 5e SRD (Open5e). Starting above 1st level runs guided steps for each level (HP,
+            features, spells, ASI) before review — for both single-class and multiclass (multiclass also sets 1st-level
+            class and level order on the Class step).
+          </p>
+        </>
       ) : (
         <p className="text-xs text-stone-600 mb-6 leading-relaxed">
           Quick Create keeps the full builder untouched and auto-fills the remaining choices from your race/class/playstyle selections.
@@ -141,13 +148,48 @@ export default function CharacterCreation() {
         <QuickCharacterCreation />
       ) : (
         <>
-          {draft.step === 1 && <Step1_BasicInfo {...stepProps} />}
-          {draft.step === 2 && <Step2_Race {...stepProps} />}
-          {draft.step === 3 && <Step3_Class {...stepProps} />}
-          {draft.step === 4 && <Step4_AbilityScores {...stepProps} />}
-          {draft.step === 5 && <Step5_Background {...stepProps} />}
-          {draft.step === 6 && <Step6_StartingEquipment {...stepProps} />}
-          {draft.step === 7 && <Step7_StartingSpells {...stepProps} />}
+          {draft.step === 1 && (
+            <>
+              <PdfImportStepHints step={1} />
+              <Step1_BasicInfo {...stepProps} />
+            </>
+          )}
+          {draft.step === 2 && (
+            <>
+              <PdfImportStepHints step={2} />
+              <Step2_Race {...stepProps} />
+            </>
+          )}
+          {draft.step === 3 && (
+            <>
+              <PdfImportStepHints step={3} />
+              <Step3_Class {...stepProps} />
+            </>
+          )}
+          {draft.step === 4 && (
+            <>
+              <PdfImportStepHints step={4} />
+              <Step4_AbilityScores {...stepProps} />
+            </>
+          )}
+          {draft.step === 5 && (
+            <>
+              <PdfImportStepHints step={5} />
+              <Step5_Background {...stepProps} />
+            </>
+          )}
+          {draft.step === 6 && (
+            <>
+              <PdfImportStepHints step={6} />
+              <Step6_StartingEquipment {...stepProps} />
+            </>
+          )}
+          {draft.step === 7 && (
+            <>
+              <PdfImportStepHints step={7} />
+              <Step7_StartingSpells {...stepProps} />
+            </>
+          )}
           {lc > 0 && draft.step >= 8 && draft.step < review && (
             <CreationLevelUpStep {...stepProps} slotIndex={draft.step - 8} />
           )}

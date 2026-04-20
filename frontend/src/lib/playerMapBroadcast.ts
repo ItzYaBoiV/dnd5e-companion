@@ -53,13 +53,31 @@ export type BattleToken = {
   sightRadiusCells?: number;
 };
 
+export type SceneLightKind =
+  | "room"
+  | "torch"
+  | "token"
+  | "lantern"
+  | "magic"
+  | "fire"
+  | "cold"
+  | "necrotic"
+  | "divine"
+  | "fey"
+  | "lava"
+  | "wisp";
+
 export type SceneLight = {
   gx: number;
   gy: number;
   radiusCells: number;
   intensity?: number;
-  /** Room ambient vs wall torch vs creature — drives flicker strength in renderer. */
-  kind?: "room" | "torch" | "token";
+  /** Room ambient vs wall torch vs creature — drives flicker + tint in renderer. */
+  kind?: SceneLightKind;
+  /** Optional hex color override — supersedes kind-based color when set. */
+  color?: string;
+  /** When true, renderer applies extra intensity pulse each anim tick. */
+  flicker?: boolean;
 };
 
 export type PlayerMapBroadcast = {
@@ -79,6 +97,8 @@ export type PlayerMapBroadcast = {
   battleTokens?: BattleToken[];
   /** Radial dimming: darkness outside torch discs; combined with max brightness. */
   sceneLights?: SceneLight[];
+  /** DM-forge view mode mirrored to player TV when not flat. */
+  viewMode?: "flat" | "depth" | "iso";
 };
 
 const STORAGE_KEY = "dnd5e-player-map-state";

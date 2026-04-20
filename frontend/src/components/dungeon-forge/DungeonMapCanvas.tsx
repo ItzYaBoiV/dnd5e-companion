@@ -29,6 +29,11 @@ export type DungeonMapCanvasProps = {
   forgeDmHints?: NonNullable<RenderTileOpts["forgeDmHints"]>;
   dungeonLighting?: RenderTileOpts["dungeonLighting"];
   graveyardAmbience?: RenderTileOpts["graveyardAmbience"];
+  aoPass?: boolean;
+  depthPass?: boolean;
+  vignettePass?: boolean;
+  depthFog?: boolean;
+  tileDetailStyle?: RenderTileOpts["tileDetailStyle"];
   battleTokens?: BattleToken[] | null;
   /** When the `grid` prop is a cropped window, pass the top-left of that window in full-map coords. */
   worldOffset?: { x: number; y: number };
@@ -121,6 +126,11 @@ function DungeonMapCanvasInner({
   forgeDmHints,
   dungeonLighting,
   graveyardAmbience,
+  aoPass,
+  depthPass,
+  vignettePass,
+  depthFog,
+  tileDetailStyle,
   battleTokens,
   worldOffset,
   className,
@@ -189,6 +199,11 @@ function DungeonMapCanvasInner({
       forgeDmHints: forgeDmHints ?? null,
       dungeonLighting,
       graveyardAmbience,
+      aoPass: !!aoPass,
+      depthPass: !!depthPass,
+      vignettePass: !!vignettePass,
+      depthFog: !!depthFog,
+      tileDetailStyle: tileDetailStyle ?? null,
     });
   }, [
     grid,
@@ -209,6 +224,11 @@ function DungeonMapCanvasInner({
     forgeDmHints,
     dungeonLighting,
     graveyardAmbience,
+    aoPass,
+    depthPass,
+    vignettePass,
+    depthFog,
+    tileDetailStyle,
     battleTokens,
     tokenImagesVersion,
     entityTokenImagesVersion,

@@ -7,6 +7,8 @@ import {
   maxFogHopsForLocationType,
 } from "@/lib/dungeonForgeFog";
 import { DEFAULT_PLAYER_VISION_FOG_CELLS, PLAYER_SIGHT_RING_CELLS } from "@/lib/playerMapVision";
+import { buildLightMap, collectTorchFixtureLights } from "@/lib/dungeonLightOcclusion";
+import { renderIsometricToCanvas } from "@/lib/isometricTileRenderer";
 import { renderDungeonToCanvas } from "@/lib/dungeonTileRenderer";
 import { ENTITY_PALETTE, forgePaletteForDungeon } from "@/lib/dungeonTilePalettes";
 import type { PlayerMapBroadcast } from "@/lib/playerMapBroadcast";
@@ -275,22 +277,48 @@ export default function DungeonsPlayerPage() {
       gy: L.gy - minY,
     }));
 
-    renderDungeonToCanvas(c, sub, {
-      palette,
-      entities: ENTITY_PALETTE,
-      cellPx,
-      dpr,
-      fogCells: fogAdj,
-      doorOpen,
-      animPhase,
-      showEnts: false,
-      playerSanitize: true,
-      inkSaver: false,
-      battleTokens: battleTok.length ? battleTok : null,
-      tokenImages,
-      sceneLights: sceneLights.length ? sceneLights : null,
-      playerSightRingCells: PLAYER_SIGHT_RING_CELLS,
-    });
+    const vm = mapState?.viewMode;
+    if (vm === "iso") {
+      const merged = [...sceneLights, ...collectTorchFixtureLights(sub, bw, bh)];
+      const lightMap =
+        merged.length > 0
+          ? buildLightMap(sub, bw, bh, merged, doorOpen, null, animPhase)
+          : null;
+      renderIsometricToCanvas(c, {
+        grid: sub,
+        palette,
+        entities: ENTITY_PALETTE,
+        tileW: Math.max(16, cellPx * 2),
+        tileH: Math.max(8, cellPx),
+        wallH: Math.max(12, cellPx * 2),
+        animPhase,
+        showEnts: false,
+        fogCells: fogAdj,
+        lightMap,
+        cols: bw,
+        rows: bh,
+      });
+    } else {
+      renderDungeonToCanvas(c, sub, {
+        palette,
+        entities: ENTITY_PALETTE,
+        cellPx,
+        dpr,
+        fogCells: fogAdj,
+        doorOpen,
+        animPhase,
+        showEnts: false,
+        playerSanitize: true,
+        inkSaver: false,
+        battleTokens: battleTok.length ? battleTok : null,
+        tokenImages,
+        sceneLights: sceneLights.length ? sceneLights : null,
+        playerSightRingCells: PLAYER_SIGHT_RING_CELLS,
+        depthPass: vm === "depth",
+        vignettePass: vm === "depth",
+        depthFog: vm === "depth",
+      });
+    }
   }, [mapState, animPhase, tokenImagesVersion]);
 
   const laserVisible =

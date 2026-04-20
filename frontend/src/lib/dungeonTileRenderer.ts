@@ -4,8 +4,12 @@
  */
 
 import type { BattleToken, SceneLight } from "@/lib/playerMapBroadcast";
-import { collectTorchFixtureLights, computeOccludedLightDarkness } from "@/lib/dungeonLightOcclusion";
-import { monsterTokenSprite, publicAssetUrl } from "@/lib/tokenSprites";
+import {
+  cellBlocksLightPropagation,
+  collectTorchFixtureLights,
+  computeOccludedLightDarkness,
+} from "@/lib/dungeonLightOcclusion";
+import { monsterTokenSpriteWithFallback, publicAssetUrl } from "@/lib/tokenSprites";
 
 export type TilePalette = {
   void: string;
@@ -84,6 +88,7 @@ export type RenderTileOpts = {
     chaseSegments?: { x: number; y: number; ft: number }[];
     consecratedCells?: { x: number; y: number; k: "consecrated" | "desecrated" }[];
     fortifiedDmNote?: string;
+    townLayoutDmNote?: string;
     /** Road wilderness: PHB-style encounter frequency bands (DM overlay). */
     roadEncounterZones?: { x: number; y: number; w: number; h: number; tier: "safe" | "uncommon" | "danger"; note?: string }[];
   } | null;
@@ -91,6 +96,16 @@ export type RenderTileOpts = {
   graveyardAmbience?: { timeOfDay?: "day" | "dusk" | "night"; weather?: "clear" | "rain" | "heavy_rain" };
   /** Lit dungeons add sconce lights in the renderer; dark suppresses ambient. */
   dungeonLighting?: "lit" | "dim" | "dark";
+  /** Corner / wall-adjacent floor darkening (Phase 2-D). */
+  aoPass?: boolean;
+  /** Extruded wall “cubes” south/east (Phase 3-B). */
+  depthPass?: boolean;
+  /** Full-map vignette (Phase 3-C). */
+  vignettePass?: boolean;
+  /** Distance-based extra dimming (Phase 3-C). */
+  depthFog?: boolean;
+  /** Procedural floor/wall micro detail (Phase 3-A). */
+  tileDetailStyle?: "dungeon" | "cave" | "temple" | null;
   /** DM / player battle pips (drawn above terrain; respect fog when `fogCells` set). Token coords match the `grid` passed in (local if cropped). */
   battleTokens?: BattleToken[] | null;
   /** Loaded images for `BattleToken.portraitUrl` / `spriteUrl` (keyed by URL). */
@@ -197,6 +212,115 @@ function grayEntityPalette(e: EntityPalette): EntityPalette {
   return o as EntityPalette;
 }
 
+function isFloorLikeTile(t: number): boolean {
+  return (
+    t === T_FLOOR ||
+    t === T_CORRIDOR ||
+    t === T_ROAD ||
+    t === T_BRIDGE ||
+    t === T_ALLEY ||
+    t === T_STAIRS_UP ||
+    t === T_STAIRS_DOWN
+  );
+}
+
+function lightKindHex(kind: SceneLight["kind"] | undefined, custom?: string): string {
+  if (custom && typeof custom === "string" && custom.startsWith("#")) return custom;
+  switch (kind) {
+    case "lantern":
+      return "#ffe0a0";
+    case "magic":
+      return "#a060ff";
+    case "fire":
+      return "#ff4400";
+    case "cold":
+      return "#80c0ff";
+    case "necrotic":
+      return "#40ff80";
+    case "divine":
+      return "#ffffc0";
+    case "fey":
+      return "#40ffcc";
+    case "lava":
+      return "#ff2200";
+    case "wisp":
+      return "#c0ffff";
+    case "token":
+      return "#ffb060";
+    case "room":
+      return "#f0e8d8";
+    case "torch":
+    default:
+      return "#ff9040";
+  }
+}
+
+function dominantLightAtCell(
+  gx: number,
+  gy: number,
+  lights: SceneLight[],
+  doorOpen: Set<string> | null | undefined,
+  doorStates: Record<string, string> | null | undefined,
+  grid: RenderCell[][],
+): SceneLight | null {
+  if (!grid.length || !grid[0]?.length) return null;
+  let best: SceneLight | null = null;
+  let bestD = 1e9;
+  for (const L of lights) {
+    const lx = Math.floor(L.gx);
+    const ly = Math.floor(L.gy);
+    if (lx < 0 || ly < 0 || ly >= grid.length || lx >= grid[0].length) continue;
+    if (cellBlocksLightPropagation(grid[ly]![lx]!, lx, ly, doorOpen, doorStates)) continue;
+    const d = Math.hypot(gx - L.gx, gy - L.gy);
+    const r = Math.max(0.5, L.radiusCells || 4);
+    if (d <= r && d < bestD) {
+      best = L;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+function applyFloorWallMicroDetail(
+  ctx: CanvasRenderingContext2D,
+  cell: RenderCell,
+  px: number,
+  py: number,
+  s: number,
+  gx: number,
+  gy: number,
+  style: "dungeon" | "cave" | "temple" | null,
+): void {
+  if (!style) return;
+  const t = cell.tile;
+  if (t === T_FLOOR || t === T_CORRIDOR) {
+    if (style === "dungeon" && (gx + gy) % 4 === 0) {
+      ctx.fillStyle = "rgba(0,0,0,0.2)";
+      ctx.fillRect(px, py + s - 1, s, 1);
+      ctx.fillRect(px + s - 1, py, 1, s);
+    }
+    if (style === "cave") {
+      const seed = gx * 131 + gy * 173;
+      for (let i = 0; i < 4; i++) {
+        const ox = 1 + ((seed >> (i * 4)) % Math.max(1, s - 2));
+        const oy = 1 + ((seed >> (i * 4 + 2)) % Math.max(1, s - 2));
+        ctx.fillStyle = "rgba(0,0,0,0.28)";
+        ctx.fillRect(px + ox, py + oy, 1, 1);
+      }
+    }
+    if (style === "temple") {
+      const alt = (gx + gy) % 2 === 0;
+      ctx.fillStyle = alt ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)";
+      ctx.fillRect(px + Math.floor(s * 0.2), py + Math.floor(s * 0.2), Math.floor(s * 0.6), Math.floor(s * 0.6));
+    }
+  }
+  if (t === T_WALL && style === "dungeon") {
+    ctx.fillStyle = "rgba(0,0,0,0.22)";
+    const by = py + Math.floor(s * 0.42);
+    ctx.fillRect(px + 1, by, s - 2, 1);
+  }
+}
+
 /**
  * Draws the dungeon grid onto `canvas` using pixel-art tiles.
  */
@@ -260,43 +384,166 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
         })
       : null;
 
+  const tdStyle = opts.tileDetailStyle ?? null;
+  const aoPass = !!opts.aoPass;
+  const depthPass = !!opts.depthPass;
+  const vignettePass = !!opts.vignettePass;
+  const depthFog = !!opts.depthFog;
+  const ink = !!opts.inkSaver;
+  const doorOpenSet = opts.doorOpen ?? null;
+
+  const paintCell = (x: number, y: number): void => {
+    const px = x * cellPx;
+    const py = y * cellPx;
+    if (fog && !fog.has(`${x},${y}`)) {
+      ctx.fillStyle = palette.void;
+      ctx.fillRect(px, py, cellPx, cellPx);
+      return;
+    }
+    const cell = grid[y][x];
+    drawBaseTile(
+      ctx,
+      cell,
+      px,
+      py,
+      cellPx,
+      palette,
+      grid,
+      x,
+      y,
+      cols,
+      rows,
+      showEnts,
+      sanitize,
+      hideDeco,
+      doorOpenSet,
+      doorStates,
+      animPhase,
+    );
+    applyFloorWallMicroDetail(ctx, cell, px, py, cellPx, x, y, tdStyle);
+    if (hi && x >= hi.x && x < hi.x + hi.w && y >= hi.y && y < hi.y + hi.h) {
+      ctx.fillStyle = "rgba(255,220,50,0.18)";
+      ctx.fillRect(px, py, cellPx, cellPx);
+    }
+  };
+
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
-      const cell = grid[y][x];
+      paintCell(x, y);
+    }
+  }
+
+  if (aoPass && !ink) {
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        if (fog && !fog.has(`${x},${y}`)) continue;
+        const cell = grid[y][x];
+        const t = cell.tile;
+        if (!isFloorLikeTile(t)) continue;
+        let wallCount = 0;
+        let diagWall = 0;
+        const card = [
+          [0, -1],
+          [0, 1],
+          [-1, 0],
+          [1, 0],
+        ] as const;
+        for (const [dx, dy] of card) {
+          const nx = x + dx;
+          const ny = y + dy;
+          const nt = grid[ny]?.[nx]?.tile ?? T_VOID;
+          if (nt === T_WALL || nt === T_VOID || nt === T_PILLAR) wallCount++;
+        }
+        const diag = [
+          [-1, -1],
+          [1, -1],
+          [-1, 1],
+          [1, 1],
+        ] as const;
+        for (const [dx, dy] of diag) {
+          const nt = grid[y + dy]?.[x + dx]?.tile ?? T_VOID;
+          if (nt === T_WALL || nt === T_VOID || nt === T_PILLAR) diagWall++;
+        }
+        let ao = wallCount * 0.08 + diagWall * 0.04;
+        ao = Math.min(0.32, ao);
+        if (ao < 0.001) continue;
+        const px = x * cellPx;
+        const py = y * cellPx;
+        ctx.fillStyle = `rgba(0,0,0,${ao})`;
+        ctx.fillRect(px, py, cellPx, cellPx);
+      }
+    }
+  }
+
+  if (depthPass && !ink) {
+    const faceWall = 0.5;
+    const facePillar = 0.38;
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        if (fog && !fog.has(`${x},${y}`)) continue;
+        const t = grid[y][x].tile;
+        if (t !== T_WALL && t !== T_PILLAR) continue;
+        const s = cellPx;
+        const px = x * s;
+        const py = y * s;
+        const a = t === T_PILLAR ? facePillar : faceWall;
+        if (y + 1 < rows && isFloorLikeTile(grid[y + 1][x].tile)) {
+          const pyS = (y + 1) * s;
+          ctx.fillStyle = `rgba(0,0,0,${a})`;
+          ctx.fillRect(px, pyS, s, Math.max(3, Math.floor(s * 0.14)));
+        }
+        if (x + 1 < cols && isFloorLikeTile(grid[y][x + 1].tile)) {
+          const pxE = (x + 1) * s;
+          ctx.fillStyle = `rgba(0,0,0,${a * 0.88})`;
+          ctx.fillRect(pxE, py, Math.max(3, Math.floor(s * 0.11)), s);
+        }
+      }
+    }
+  }
+
+  if (!ink) {
+    let shadowMul = 1;
+    if (opts.dungeonLighting === "lit") shadowMul = 0.3;
+    else if (opts.dungeonLighting === "dim") shadowMul = 0.6;
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        if (fog && !fog.has(`${x},${y}`)) continue;
+        const t = grid[y][x].tile;
+        if (t !== T_WALL && t !== T_PILLAR && t !== T_DOOR) continue;
+        const s = cellPx;
+        const px = x * s;
+        const py = y * s;
+        if (y + 1 < rows) {
+          const st = grid[y + 1][x].tile;
+          if (isFloorLikeTile(st)) {
+            const pyS = (y + 1) * s;
+            ctx.fillStyle = `rgba(0,0,0,${0.45 * shadowMul})`;
+            ctx.fillRect(px, pyS + s - Math.max(2, Math.floor(s * 0.08)), s, Math.max(2, Math.floor(s * 0.08)));
+          }
+        }
+        if (x + 1 < cols) {
+          const et = grid[y][x + 1].tile;
+          if (isFloorLikeTile(et)) {
+            const pxE = (x + 1) * s;
+            ctx.fillStyle = `rgba(0,0,0,${0.35 * shadowMul})`;
+            ctx.fillRect(pxE, py, Math.max(2, Math.floor(s * 0.06)), s);
+          }
+        }
+        if (t === T_DOOR && y + 1 < rows && isFloorLikeTile(grid[y + 1][x].tile)) {
+          const pyS = (y + 1) * s;
+          ctx.fillStyle = `rgba(0,0,0,${0.22 * shadowMul})`;
+          ctx.fillRect(px, pyS + s - 2, s, 2);
+        }
+      }
+    }
+  }
+
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
       const px = x * cellPx;
       const py = y * cellPx;
-
-      if (fog && !fog.has(`${x},${y}`)) {
-        ctx.fillStyle = palette.void;
-        ctx.fillRect(px, py, cellPx, cellPx);
-        continue;
-      }
-
-      drawBaseTile(
-        ctx,
-        cell,
-        px,
-        py,
-        cellPx,
-        palette,
-        grid,
-        x,
-        y,
-        cols,
-        rows,
-        showEnts,
-        sanitize,
-        hideDeco,
-        opts.doorOpen,
-        doorStates,
-        animPhase,
-      );
-
-      if (hi && x >= hi.x && x < hi.x + hi.w && y >= hi.y && y < hi.y + hi.h) {
-        ctx.fillStyle = "rgba(255,220,50,0.18)";
-        ctx.fillRect(px, py, cellPx, cellPx);
-      }
-
+      if (fog && !fog.has(`${x},${y}`)) continue;
+      const cell = grid[y][x];
       drawOverlays(
         ctx,
         cell,
@@ -311,7 +558,45 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
         animPhase,
         opts.entityTokenImages ?? null,
       );
+    }
+  }
 
+  if (mergedLights.length > 0 && !ink) {
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        if (fog && !fog.has(`${x},${y}`)) continue;
+        const px = x * cellPx;
+        const py = y * cellPx;
+        const L = dominantLightAtCell(x, y, mergedLights, doorOpenSet, doorStates, grid);
+        if (!L) continue;
+        const flick =
+          L.flicker !== false && L.kind !== "divine" && L.kind !== "room"
+            ? 1 + 0.05 * Math.sin(animPhase * Math.PI + x + y)
+            : 1;
+        const hex = lightKindHex(L.kind, L.color);
+        const dark = lightDarkBuf ? lightDarkBuf[y * cols + x] ?? 0.5 : 0.25;
+        const lit = Math.max(0, 1 - Math.min(1, dark / 0.48));
+        const a = lit * 0.22 * flick;
+        if (a < 0.02) continue;
+        ctx.save();
+        ctx.globalCompositeOperation = "multiply";
+        ctx.fillStyle = hex;
+        ctx.globalAlpha = Math.min(0.55, a);
+        ctx.fillRect(px, py, cellPx, cellPx);
+        ctx.restore();
+      }
+    }
+  }
+
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const px = x * cellPx;
+      const py = y * cellPx;
+      if (fog && !fog.has(`${x},${y}`)) {
+        ctx.fillStyle = palette.void;
+        ctx.fillRect(px, py, cellPx, cellPx);
+        continue;
+      }
       if (lightDarkBuf) {
         let dark = lightDarkBuf[y * cols + x] ?? 0;
         if (opts.dungeonLighting === "dark") dark = Math.min(1, dark + 0.42);
@@ -471,6 +756,40 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
   const ringR = opts.playerSightRingCells;
   if (ringR != null && ringR > 0 && tokens?.length) {
     drawPlayerSightRings(ctx, tokens, ringR, cellPx, fog, cols, rows);
+  }
+
+  if (!ink) {
+    if (depthFog && mergedLights.length > 0) {
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          if (fog && !fog.has(`${x},${y}`)) continue;
+          let dMin = 1e9;
+          for (const L of mergedLights) {
+            dMin = Math.min(dMin, Math.hypot(x - L.gx, y - L.gy));
+          }
+          if (dMin < 8) continue;
+          const alpha = dMin >= 16 ? 0.6 : ((dMin - 8) / 8) * 0.6;
+          if (alpha < 0.02) continue;
+          const px = x * cellPx;
+          const py = y * cellPx;
+          ctx.fillStyle = `rgba(0,0,0,${alpha})`;
+          ctx.fillRect(px, py, cellPx, cellPx);
+        }
+      }
+    }
+    if (vignettePass) {
+      const cx = cssW / 2;
+      const cy = cssH / 2;
+      const r = Math.hypot(cssW, cssH) / 2;
+      const g = ctx.createRadialGradient(cx, cy, r * 0.12, cx, cy, r);
+      g.addColorStop(0, "rgba(0,0,0,0)");
+      g.addColorStop(1, "rgba(0,0,0,0.45)");
+      ctx.save();
+      ctx.globalCompositeOperation = "multiply";
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, cssW, cssH);
+      ctx.restore();
+    }
   }
 }
 
@@ -1160,7 +1479,7 @@ function drawOverlays(
     if (cell.eType === "monster" && entityTokenImages && cell.extra && typeof cell.extra === "object") {
       const slug = (cell.extra as { slug?: string }).slug;
       if (slug) {
-        const url = publicAssetUrl(monsterTokenSprite(String(slug)));
+        const url = publicAssetUrl(monsterTokenSpriteWithFallback(String(slug)));
         const img = entityTokenImages.get(url);
         if (img && img.complete && img.naturalWidth > 0) {
           ctx.globalAlpha = 0.35;

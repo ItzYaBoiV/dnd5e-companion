@@ -94,6 +94,8 @@ export type ForgeDmHints = {
   /** Chase mode: road cells with length in ft */
   chaseSegments?: { x: number; y: number; ft: number }[];
   fortifiedDmNote?: string;
+  /** Town layout flavor (generator hints for the table) */
+  townLayoutDmNote?: string;
 };
 
 function isFloor(t: number | undefined): boolean {
@@ -394,12 +396,46 @@ export function enrichTownFeatures(args: {
     townChaseMode?: boolean;
     townDistrictStyle?: string;
     townWaterfront?: string;
+    townArchitecture?: string;
   };
 }): ForgeDmHints {
-  const { grid, rooms, entities, rng, W, H, usedCells, cfg } = args;
+  const { grid, rooms, entities, decoOverlay, rng, W, H, usedCells, cfg } = args;
   const hints: ForgeDmHints = {};
 
   assignTownBuildingArchetypes(rooms, rng);
+
+  const arch = cfg.townArchitecture ?? "medieval";
+  if (arch === "ruined") {
+    hints.townLayoutDmNote =
+      "Collapsed curtain traces, breached shells, and rubble at street level — treat outer walls as partial cover (DM).";
+    const rubbleCh = "▒";
+    const want = rI(7, 16, rng);
+    let placed = 0;
+    for (let t = 0; t < 520 && placed < want; t++) {
+      const x = rI(2, W - 3, rng);
+      const y = rI(2, H - 3, rng);
+      const here = grid[y]?.[x];
+      if (here !== T.ROAD && here !== T.F && here !== T.ALLEY) continue;
+      const nearWall = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dy, dx]) => grid[y + dy]?.[x + dx] === T.W);
+      if (!nearWall) continue;
+      const k = `${x},${y}`;
+      if (usedCells.has(k)) continue;
+      usedCells.add(k);
+      decoOverlay.push({
+        x,
+        y,
+        ch: rubbleCh,
+        fg: "#777",
+        name: "Rubble",
+        decoKey: "rubble",
+        roomId: null,
+      });
+      placed++;
+    }
+  } else if (arch === "coastal") {
+    hints.townLayoutDmNote =
+      "Quay-adjacent lots and a tighter waterfront band — good for smugglers' runs, tide clocks, and wet-foot chases.";
+  }
 
   if (cfg.townFortified) {
     applyFortifiedTownPerimeter(grid, W, H, rng);
@@ -548,6 +584,14 @@ export function enrichTownFeatures(args: {
       x: Math.floor(W / 2),
       y: Math.floor(H / 2),
       text: "Canal ward",
+      rot: 0,
+    });
+  }
+  if (arch === "coastal" && cfg.townWaterfront && cfg.townWaterfront !== "none") {
+    hints.streetLabels.push({
+      x: rI(Math.floor(W / 4), Math.floor((3 * W) / 4), rng),
+      y: rI(Math.floor(H / 4), Math.floor((3 * H) / 4), rng),
+      text: "Harbor front",
       rot: 0,
     });
   }

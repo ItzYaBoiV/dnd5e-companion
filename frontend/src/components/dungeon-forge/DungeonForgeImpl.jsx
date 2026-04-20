@@ -1,10 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/exhaustive-deps */
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo, lazy, Suspense } from "react";
 import { computeCellSize } from "@/lib/computeCellSize";
 import { buildAsciiMapLegend } from "@/lib/dungeonAsciiMap";
 import { renderDungeonToCanvas } from "@/lib/dungeonTileRenderer";
 import { ENTITY_PALETTE, forgePaletteForDungeon } from "@/lib/dungeonTilePalettes";
 import { DungeonMapCanvas } from "@/components/dungeon-forge/DungeonMapCanvas";
+import { IsometricMapCanvas } from "@/components/dungeon-forge/IsometricMapCanvas";
+
+const DungeonForge3D = lazy(() => import("@/components/dungeon-forge/DungeonForge3D"));
 import { DungeonLegend } from "@/components/dungeon-forge/DungeonLegend";
 import { openForgePrintPacket } from "@/lib/forgePrintPacket";
 import { MonsterStatCard } from "@/components/dungeon-forge/MonsterStatCard";
@@ -41,9 +44,8 @@ import {
   postProcessFeyForest,
 } from "@/lib/dungeonForgeBiomeFeatures";
 import {
+  collectBiomeLights,
   collectCaveBiolumSceneLights,
-  collectFeyForestWispLights,
-  collectVolcanicLavaGlowLights,
 } from "@/lib/forgeWallLights";
 import { generateBuildingInteriorSnapshot } from "@/lib/townBuildingInterior";
 
@@ -212,7 +214,7 @@ const LOCATION_GLYPHS={
 
 const LOCATION_DESCRIPTIONS={
   dungeon:"Classic stone halls — chambers, crypts, traps",
-  town:"Road grid, scattered lots with multiple buildings per block",
+  town:"Road grid, lots with buildings — larger plazas by default (toggle Plazas)",
   castle:"Thick walls, towers, keep, battlements",
   graveyard:"Open yard, mausoleums, catacombs, gate",
   swamp:"Waterlogged islands connected by bridges",
@@ -744,13 +746,70 @@ function rectsOverlapPad(a,b,gap){
   return !(a.x+a.w+gap<=b.x||b.x+b.w+gap<=a.x||a.y+a.h+gap<=b.y||b.y+b.h+gap<=a.y);
 }
 
-/** 1–3 non-overlapping building footprints inside a town lot (leaves yard = open floor). */
-function layoutTownBuildingsInLot(lot,n,rng,grid){
+/** Prefer building edges facing away from water (coastal / canal lots). */
+function pickTownLotEdgeAwayFromWater(grid,lot,rng){
   const {rx,ry,rw,rh}=lot;
-  const rects=[];
+  let n=0,s=0,w=0,e=0;
+  for(let y=ry;y<ry+rh;y++){
+    for(let x=rx;x<rx+rw;x++){
+      if(grid[y]?.[x]!==T.WA) continue;
+      n+=1/(1+(y-ry));
+      s+=1/(1+(ry+rh-1-y));
+      w+=1/(1+(x-rx));
+      e+=1/(1+(rx+rw-1-x));
+    }
+  }
+  const sides=[
+    ["north",n],["south",s],["west",w],["east",e],
+  ].sort((a,b)=>a[1]-b[1]);
+  if(sides[0][1]===0&&sides[3][1]===0) return pick(["north","south","west","east","center"],rng);
+  return rng()<0.78?sides[0][0]:sides[1][0];
+}
+
+/** Two disjoint rectangles with a 1-tile yard gap that still read as one L-shaped holding. */
+function tryLayoutTownLFootprint(lot,rng,grid){
+  const {rx,ry,rw,rh}=lot;
+  if(rw<15||rh<12) return null;
   const gap=1;
+  for(let att=0;att<60;att++){
+    const wv=rI(4,Math.min(7,Math.floor(rw/2)-2),rng);
+    const hv=rI(4,Math.min(9,rh-5),rng);
+    const wh=rI(5,Math.min(11,rw-wv-gap-2),rng);
+    const hh=rI(3,Math.min(6,rh-3),rng);
+    const x0=rI(rx+1,rx+rw-wv-wh-gap-1,rng);
+    const y0=rI(ry+1,ry+rh-hv-1,rng);
+    const vert={x:x0,y:y0,w:wv,h:hv};
+    const horiz={x:x0+wv+gap,y:y0+hv-hh,w:wh,h:hh};
+    if(horiz.x+horiz.w>rx+rw-2||horiz.y+horiz.h>ry+rh-2) continue;
+    let watery=false;
+    for(const r of [vert,horiz]){
+      for(let y=r.y;y<r.y+r.h&&!watery;y++){
+        for(let x=r.x;x<r.x+r.w;x++){
+          if(grid[y]?.[x]===T.WA||grid[y]?.[x]===T.LAVA){watery=true;break;}
+        }
+      }
+    }
+    if(watery) continue;
+    if(rectsOverlapPad(vert,horiz,gap)) continue;
+    return [vert,horiz];
+  }
+  return null;
+}
+
+/** 1–3 non-overlapping building footprints inside a town lot (leaves yard = open floor). */
+function layoutTownBuildingsInLot(lot,n,rng,grid,opts){
+  const {rx,ry,rw,rh}=lot;
+  const architecture=opts?.architecture??"medieval";
+  const waterfront=opts?.waterfront??"none";
+  const coastalLike=architecture==="coastal"||waterfront!=="none";
+  const rects=[];
+  const gap=2;
   const cap=rw>=20&&rh>=14?4:rw>=12&&rh>=10?3:rw>=9&&rh>=8?2:1;
   const target=Math.min(n,cap,rI(1,Math.min(cap,n),rng));
+  if(target>=2&&rw>=14&&rh>=12&&rng()<0.3){
+    const L=tryLayoutTownLFootprint(lot,rng,grid);
+    if(L&&L.length===2) return L;
+  }
   let tries=0;
   while(rects.length<target&&tries<target*140){
     tries++;
@@ -763,8 +822,14 @@ function layoutTownBuildingsInLot(lot,n,rng,grid){
     const byMin=ry+1;
     const byMax=ry+rh-brh-2;
     if(bxMax<bxMin||byMax<byMin) break;
-    const bx=rI(bxMin,bxMax,rng);
-    const by=rI(byMin,byMax,rng);
+    let edgeMode=rng()<0.72?pick(["north","south","west","east"],rng):"center";
+    if(coastalLike&&rng()<0.62) edgeMode=pickTownLotEdgeAwayFromWater(grid,lot,rng);
+    let bx=rI(bxMin,bxMax,rng);
+    let by=rI(byMin,byMax,rng);
+    if(edgeMode==="north") by=byMin;
+    else if(edgeMode==="south") by=byMax;
+    else if(edgeMode==="west") bx=bxMin;
+    else if(edgeMode==="east") bx=bxMax;
     const cand={x:bx,y:by,w:brw,h:brh};
     // Do not place buildings over waterfront/canal water.
     let watery=false;
@@ -802,34 +867,106 @@ function placeTownDoorOnBuilding(grid,rx,ry,rw,rh,W,H,rng){
       if(ny>=0&&ny<H&&nx>=0&&nx<W&&grid[ny][nx]===T.ROAD){ cands.push({x:wx,y:wy}); return; }
     }
   };
-  for(let x=rx;x<rx+rw;x++){ tryWall(x,ry-1); tryWall(x,ry+rh); }
-  for(let y=ry;y<ry+rh;y++){ tryWall(rx-1,y); tryWall(rx+rw,y); }
+  for(let x=rx;x<rx+rw;x++){ tryWall(x,ry); tryWall(x,ry+rh-1); }
+  for(let y=ry;y<ry+rh;y++){ tryWall(rx,y); tryWall(rx+rw-1,y); }
   if(cands.length){
     const p=pick(cands,rng);
     grid[p.y][p.x]=T.D;
     return;
   }
   const mx=rx+Math.floor(rw/2), my=ry+Math.floor(rh/2);
-  if(grid[ry+rh]?.[mx]===T.W) grid[ry+rh][mx]=T.D;
-  else if(grid[ry-1]?.[mx]===T.W) grid[ry-1][mx]=T.D;
-  else if(grid[my]?.[rx+rw]===T.W) grid[my][rx+rw]=T.D;
-  else if(grid[my]?.[rx-1]===T.W) grid[my][rx-1]=T.D;
+  if(grid[ry+rh-1]?.[mx]===T.W) grid[ry+rh-1][mx]=T.D;
+  else if(grid[ry]?.[mx]===T.W) grid[ry][mx]=T.D;
+  else if(grid[my]?.[rx+rw-1]===T.W) grid[my][rx+rw-1]=T.D;
+  else if(grid[my]?.[rx]===T.W) grid[my][rx]=T.D;
 }
 
 function stampTownBuilding(grid,rect,W,H,rng){
   const rx=rect.x, ry=rect.y, rw=rect.w, rh=rect.h;
+  // Draw explicit shell + interior. This avoids "building inside building" artifacts from lot-wide wall flood fills.
   for(let y=ry;y<ry+rh;y++) for(let x=rx;x<rx+rw;x++){
-    if(y>=0&&y<H&&x>=0&&x<W) grid[y][x]=T.F;
-  }
-  for(let y=ry-1;y<=ry+rh;y++){
-    for(let x=rx-1;x<=rx+rw;x++){
-      if(y>=0&&y<H&&x>=0&&x<W && grid[y][x]===T.F) grid[y][x]=T.W;
-    }
-  }
-  for(let y=ry;y<ry+rh;y++) for(let x=rx;x<rx+rw;x++){
-    if(y>=0&&y<H&&x>=0&&x<W) grid[y][x]=T.F;
+    if(y<0||y>=H||x<0||x>=W) continue;
+    const border=(x===rx||x===rx+rw-1||y===ry||y===ry+rh-1);
+    grid[y][x]=border?T.W:T.F;
   }
   placeTownDoorOnBuilding(grid,rx,ry,rw,rh,W,H,rng);
+}
+
+/** Breached shell + same door pass — reads as ruined / half-collapsed masonry. */
+function stampRuinedTownBuilding(grid,rect,W,H,rng){
+  stampTownBuilding(grid,rect,W,H,rng);
+  const {x:rx,y:ry,w:rw,h:rh}=rect;
+  const gaps=rI(1,3,rng);
+  for(let g=0;g<gaps;g++){
+    let tries=0;
+    while(tries++<28){
+      const side=pick(["n","s","e","w"],rng);
+      let wx,wy;
+      if(side==="n"){wx=rI(rx+1,rx+rw-2,rng);wy=ry;}
+      else if(side==="s"){wx=rI(rx+1,rx+rw-2,rng);wy=ry+rh-1;}
+      else if(side==="w"){wx=rx;wy=rI(ry+1,ry+rh-2,rng);}
+      else{wx=rx+rw-1;wy=rI(ry+1,ry+rh-2,rng);}
+      if(grid[wy]?.[wx]!==T.W) continue;
+      if(grid[wy]?.[wx]===T.D) continue;
+      grid[wy][wx]=T.F;
+      break;
+    }
+  }
+}
+
+function scatterNaturalTreeClusters(args){
+  const {grid,decoOverlay,usedCells,rng,W,H,rooms,locationType,cfg}=args;
+  const TREE_VARIANTS=[
+    {ch:"♣",fg:"#3a6a34",name:"Oak tree",decoKey:"tree_oak"},
+    {ch:"♠",fg:"#2f5f2b",name:"Pine tree",decoKey:"tree_pine"},
+    {ch:"♤",fg:"#4c7a44",name:"Birch tree",decoKey:"tree_birch"},
+    {ch:"♧",fg:"#55784a",name:"Willow tree",decoKey:"tree_willow"},
+  ];
+  const inRoom=(x,y)=>rooms.some((r)=>x>=r.x&&x<r.x+r.w&&y>=r.y&&y<r.y+r.h);
+  const addTree=(x,y)=>{
+    if(x<1||y<1||x>=W-1||y>=H-1) return false;
+    const t=grid[y]?.[x];
+    if(t!==T.F&&t!==T.ALLEY) return false;
+    if(usedCells.has(`${x},${y}`)) return false;
+    if(locationType==="town"&&inRoom(x,y)) return false;
+    const tv=pick(TREE_VARIANTS,rng);
+    usedCells.add(`${x},${y}`);
+    decoOverlay.push({x,y,ch:tv.ch,fg:tv.fg,name:tv.name,roomId:null,decoKey:tv.decoKey});
+    return true;
+  };
+
+  const treesWanted=(()=>{
+    if(locationType==="fey_forest") return rI(18,34,rng);
+    if(locationType==="swamp") return rI(10,20,rng);
+    if(locationType==="road") return rI(8,16,rng);
+    if(locationType==="town"){
+      const d=cfg?.townDensity??"normal";
+      return d==="dense"?rI(8,14,rng):d==="sparse"?rI(2,6,rng):rI(4,10,rng);
+    }
+    return 0;
+  })();
+  if(treesWanted<=0) return;
+
+  let planted=0;
+  let attempts=0;
+  while(planted<treesWanted&&attempts<treesWanted*30){
+    attempts++;
+    let cx=rI(2,W-3,rng), cy=rI(2,H-3,rng);
+    if(locationType==="town"){
+      const edgeBias=rng()<0.68;
+      if(edgeBias){
+        if(rng()<0.5){cx=rng()<0.5?rI(2,Math.max(2,Math.floor(W*0.2)),rng):rI(Math.floor(W*0.8),W-3,rng);}
+        else{cy=rng()<0.5?rI(2,Math.max(2,Math.floor(H*0.2)),rng):rI(Math.floor(H*0.8),H-3,rng);}
+      }
+    }
+    const clusterSize=locationType==="town"?rI(2,5,rng):rI(3,8,rng);
+    const radius=locationType==="town"?rI(1,2,rng):rI(1,3,rng);
+    for(let i=0;i<clusterSize&&planted<treesWanted;i++){
+      const x=clamp(cx+rI(-radius,radius,rng),1,W-2);
+      const y=clamp(cy+rI(-radius,radius,rng),1,H-2);
+      if(addTree(x,y)) planted++;
+    }
+  }
 }
 
 function pickWeightedTownType(entries,rng){
@@ -919,14 +1056,190 @@ function chooseTownBuildingType(districtStyle,distN,rng){
   return pickWeightedTownType(balanced,rng);
 }
 
+/** One-tile boardwalk / quay: direct-shore floor cells become road (harbor / canal lip). */
+function applyTownCoastalQuayBand(grid,W,H,rng,waterfront,architecture){
+  if(waterfront==="none"&&architecture!=="coastal") return;
+  const p=architecture==="coastal"?0.52:0.34;
+  for(let y=1;y<H-1;y++){
+    for(let x=1;x<W-1;x++){
+      if(grid[y][x]!==T.F) continue;
+      let waN=0;
+      for(const [dy,dx] of [[0,1],[0,-1],[1,0],[-1,0]]){
+        if(grid[y+dy]?.[x+dx]===T.WA) waN++;
+      }
+      if(waN!==1) continue;
+      if(rng()>p) continue;
+      grid[y][x]=T.ROAD;
+    }
+  }
+}
+
+/** Wobble the outer ring of yards into extra road nibs (reads closer to a battlemap ring street). */
+function applyTownCurvedPerimeterRoad(grid,W,H,rng){
+  const k=2.1+rng()*3.8;
+  const ph=rng()*6.283;
+  const margin=6;
+  for(let y=margin;y<H-margin;y++){
+    for(let x=margin;x<W-margin;x++){
+      if(grid[y][x]!==T.F) continue;
+      const ed=Math.min(x,y,W-1-x,H-1-y);
+      if(ed>5) continue;
+      const wave=0.5+0.5*Math.sin((ed*0.85+x/W+y/H)*Math.PI*k+ph);
+      if(wave<0.4) continue;
+      const nRoad=[[1,0],[-1,0],[0,1],[0,-1]].some(([dy,dx])=>{
+        const t=grid[y+dy]?.[x+dx];
+        return t===T.ROAD||t===T.BRIDGE;
+      });
+      if(nRoad) grid[y][x]=T.ROAD;
+    }
+  }
+}
+
+function pickTownDistrictSeedKeys(blocks,district,rng){
+  const keys=new Set();
+  const viable=blocks.filter((b)=>b.rw>=10&&b.rh>=9);
+  if(!viable.length) return keys;
+  const first=viable[0];
+  const k1=`${first.rx},${first.ry}`;
+  if(district==="market_hub"||district==="temple_ward"||district==="noble_ring"){
+    if(rng()<0.94) keys.add(k1);
+  }else if(district==="balanced"){
+    if(rng()<0.52) keys.add(k1);
+  }else if(district==="poor_sprawl"){
+    if(rng()<0.36) keys.add(k1);
+  }
+  if(keys.size===0) return keys;
+  if(district==="market_hub"||district==="noble_ring"){
+    const rest=viable.slice(1,5).filter((b)=>Math.abs(b.cx-first.cx)+Math.abs(b.cy-first.cy)>6);
+    if(rest.length&&rng()<0.82) keys.add(`${rest[0].rx},${rest[0].ry}`);
+  }else if(district==="temple_ward"&&viable[1]&&rng()<0.62){
+    const k2=`${viable[1].rx},${viable[1].ry}`;
+    if(!keys.has(k2)) keys.add(k2);
+  }else if(district==="balanced"&&viable[1]&&rng()<0.38){
+    const k2=`${viable[1].rx},${viable[1].ry}`;
+    if(!keys.has(k2)) keys.add(k2);
+  }
+  return keys;
+}
+
+function carveTownDistrictSeed(grid,b,district,rng,plazaMode){
+  const openPlaza=plazaMode==="open";
+  const {rx,ry,rw,rh,cx,cy}=b;
+  if(rw>=11&&rh>=10){
+    if(district==="market_hub"||district==="noble_ring"||(district==="balanced"&&rng()<0.68)){
+      for(let x=rx;x<rx+rw;x++) if(grid[cy]?.[x]===T.F) grid[cy][x]=T.ROAD;
+      for(let y=ry;y<ry+rh;y++) if(grid[y]?.[cx]===T.F) grid[y][cx]=T.ROAD;
+      if(grid[cy]?.[cx]===T.ROAD) grid[cy][cx]=T.P;
+      if(district==="market_hub"&&rng()<0.72){
+        for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1]]){
+          const px=cx+dx, py=cy+dy;
+          if(grid[py]?.[px]===T.F) grid[py][px]=T.P;
+        }
+      }
+      if(openPlaza&&rng()<0.55){
+        for(const [dx,dy] of [[-2,0],[2,0],[0,-2],[0,2],[1,1],[-1,-1],[1,-1],[-1,1]]){
+          const px=cx+dx, py=cy+dy;
+          if(grid[py]?.[px]===T.F) grid[py][px]=T.P;
+        }
+      }
+    }else if(district==="temple_ward"){
+      for(let x=rx;x<rx+rw;x++) if(grid[cy]?.[x]===T.F) grid[cy][x]=T.ROAD;
+      for(let y=ry;y<ry+rh;y++) if(grid[y]?.[cx]===T.F) grid[y][cx]=T.ROAD;
+      if(grid[cy]?.[cx]===T.ROAD) grid[cy][cx]=T.P;
+      const pFill=openPlaza?0.72:0.48;
+      for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+        if(!dx&&!dy) continue;
+        const px=cx+dx, py=cy+dy;
+        if(grid[py]?.[px]===T.F&&rng()<pFill) grid[py][px]=T.P;
+      }
+      if(openPlaza){
+        for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
+          if(Math.abs(dx)+Math.abs(dy)<3) continue;
+          const px=cx+dx, py=cy+dy;
+          if(grid[py]?.[px]===T.F&&rng()<0.35) grid[py][px]=T.P;
+        }
+      }
+    }else if(district==="poor_sprawl"){
+      if(grid[cy]?.[cx]===T.F) grid[cy][cx]=T.P;
+      if(openPlaza){
+        for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1]]){
+          const px=cx+dx, py=cy+dy;
+          if(grid[py]?.[px]===T.F&&rng()<0.65) grid[py][px]=T.P;
+        }
+      }
+    }
+  }else if(grid[cy]?.[cx]===T.F){
+    grid[cy][cx]=T.P;
+  }
+}
+
+/** Elliptical plaza stamp: yard (and optional internal lot roads) → open cobble `P`. */
+function stampTownPlazaFootprint(grid,b,plazaMode,rng){
+  if(plazaMode==="none") return;
+  const {rx,ry,rw,rh,cx,cy}=b;
+  const den=
+    plazaMode==="open"?0.48:
+    plazaMode==="many"?0.36:
+    0.26;
+  const ax=Math.max(2.1,Math.floor(rw*den));
+  const ay=Math.max(2.1,Math.floor(rh*den));
+  const meltRoad=plazaMode==="open"||plazaMode==="many";
+  for(let y=ry;y<ry+rh;y++){
+    for(let x=rx;x<rx+rw;x++){
+      const t=grid[y]?.[x];
+      if(t!==T.F&&!(meltRoad&&t===T.ROAD)) continue;
+      const nx=(x-cx)/ax, ny=(y-cy)/ay;
+      if(nx*nx+ny*ny>1.08) continue;
+      if(t===T.WA||t===T.BRIDGE) continue;
+      grid[y][x]=T.P;
+    }
+  }
+  if(plazaMode==="open"&&rw>=12&&rh>=11&&rng()<0.45){
+    const ax2=ax*0.55, ay2=ay*0.55;
+    const ox=rI(-1,1,rng), oy=rI(-1,1,rng);
+    for(let y=ry;y<ry+rh;y++){
+      for(let x=rx;x<rx+rw;x++){
+        const t=grid[y]?.[x];
+        if(t!==T.F) continue;
+        const nx=(x-(cx+ox))/ax2, ny=(y-(cy+oy))/ay2;
+        if(nx*nx+ny*ny<=1.05) grid[y][x]=T.P;
+      }
+    }
+  }
+}
+
+function carveTownBlockIrregularity(grid,block,rng){
+  const {rx,ry,rw,rh}=block;
+  const bites=rI(0,2,rng);
+  for(let i=0;i<bites;i++){
+    const side=pick(["n","s","e","w"],rng);
+    const depth=side==="n"||side==="s"?rI(1,Math.max(1,Math.floor(rh/4)),rng):rI(1,Math.max(1,Math.floor(rw/4)),rng);
+    const span=side==="n"||side==="s"?rI(3,Math.max(3,Math.floor(rw*0.45)),rng):rI(3,Math.max(3,Math.floor(rh*0.45)),rng);
+    if(side==="n"){
+      const x0=rI(rx,rx+Math.max(0,rw-span),rng);
+      for(let y=ry;y<Math.min(ry+depth,ry+rh);y++)for(let x=x0;x<x0+span&&x<rx+rw;x++) if(grid[y]?.[x]===T.F) grid[y][x]=T.ROAD;
+    }else if(side==="s"){
+      const x0=rI(rx,rx+Math.max(0,rw-span),rng);
+      for(let y=Math.max(ry,ry+rh-depth);y<ry+rh;y++)for(let x=x0;x<x0+span&&x<rx+rw;x++) if(grid[y]?.[x]===T.F) grid[y][x]=T.ROAD;
+    }else if(side==="w"){
+      const y0=rI(ry,ry+Math.max(0,rh-span),rng);
+      for(let y=y0;y<y0+span&&y<ry+rh;y++)for(let x=rx;x<Math.min(rx+depth,rx+rw);x++) if(grid[y]?.[x]===T.F) grid[y][x]=T.ROAD;
+    }else{
+      const y0=rI(ry,ry+Math.max(0,rh-span),rng);
+      for(let y=y0;y<y0+span&&y<ry+rh;y++)for(let x=Math.max(rx,rx+rw-depth);x<rx+rw;x++) if(grid[y]?.[x]===T.F) grid[y][x]=T.ROAD;
+    }
+  }
+}
+
 function generateTownLayout(cfg,rng){
   const {width:W,height:H,roomCount}=cfg;
   const grid=Array.from({length:H},()=>Array(W).fill(T.V));
   const rooms=[];
   const districtStyle=cfg.townDistrictStyle??"balanced";
   const streetStyle=cfg.townStreetStyle??"organic";
+  const architecture=cfg.townArchitecture??"medieval";
   const density=cfg.townDensity??"normal";
-  const plazaMode=cfg.townPlazas??"some";
+  const plazaMode=cfg.townPlazas??"open";
   const waterfront=cfg.townWaterfront??"none";
   const densityFactor=density==="sparse"?0.72:density==="dense"?1.34:1;
   const ROAD_W=streetStyle==="grid"?(rng()<0.7?3:2):rng()<0.45?3:2;
@@ -1026,14 +1339,35 @@ function generateTownLayout(cfg,rng){
     for(let y=b.ry;y<b.ry+b.rh;y++)for(let x=b.rx;x<b.rx+b.rw;x++){
       if(y>=0&&y<H&&x>=0&&x<W&&grid[y][x]===T.V) grid[y][x]=T.F;
     }
+    if(streetStyle==="organic"&&rng()<0.45) carveTownBlockIrregularity(grid,b,rng);
   }
+
+  applyTownCoastalQuayBand(grid,W,H,rng,waterfront,architecture);
+  applyTownCurvedPerimeterRoad(grid,W,H,rng);
 
   // Reserve 1-2 central plazas to break perfect repetition.
   const plazaKeys=new Set();
-  const plazaTarget=plazaMode==="none"?0:plazaMode==="many"?3:1;
-  for(const b of blocks.slice(0,6)){
+  const districtSeedKeys=pickTownDistrictSeedKeys(blocks,districtStyle,rng);
+  for(const b of blocks){
+    const sk=`${b.rx},${b.ry}`;
+    if(districtSeedKeys.has(sk)){
+      carveTownDistrictSeed(grid,b,districtStyle,rng,plazaMode);
+      plazaKeys.add(sk);
+    }
+  }
+  const plazaTargetRaw=
+    plazaMode==="none"?0:
+    plazaMode==="open"?Math.min(7,2+Math.floor(blocks.length/6)):
+    plazaMode==="many"?4:
+    2;
+  const plazaTarget=Math.min(plazaTargetRaw,Math.max(0,blocks.length-2));
+  const plazaScanN=plazaMode==="open"?14:plazaMode==="many"?10:8;
+  const plazaMinW=plazaMode==="open"?8:9;
+  const plazaMinH=plazaMode==="open"?8:9;
+  const plazaPickP=plazaMode==="open"?0.92:plazaMode==="many"?0.88:0.82;
+  for(const b of blocks.slice(0,plazaScanN)){
     if(plazaKeys.size>=plazaTarget) break;
-    if(b.rw>=10&&b.rh>=9&&rng()<0.85) plazaKeys.add(`${b.rx},${b.ry}`);
+    if(b.rw>=plazaMinW&&b.rh>=plazaMinH&&rng()<plazaPickP) plazaKeys.add(`${b.rx},${b.ry}`);
   }
 
   const blocksShuffled=[...blocks].sort((a,b)=>(a.dist-b.dist)+(rng()-0.5));
@@ -1045,8 +1379,15 @@ function generateTownLayout(cfg,rng){
     if(rooms.length>=targetBuildings) break;
     const k=`${b.rx},${b.ry}`;
     if(plazaKeys.has(k)){
-      const px=b.cx, py=b.cy;
-      if(grid[py]?.[px]===T.F) grid[py][px]=T.P;
+      stampTownPlazaFootprint(grid,b,plazaMode,rng);
+      continue;
+    }
+    // Architecture-driven lot skips create believable commons/gardens/ruins gaps.
+    if(
+      (architecture==="ruined"&&rng()<0.26)||
+      (architecture==="hamlet"&&rng()<0.16)||
+      (architecture==="coastal"&&waterfront!=="none"&&rng()<0.12)
+    ){
       continue;
     }
     // Add occasional alley inside larger lots to mimic real town cuts.
@@ -1062,12 +1403,17 @@ function generateTownLayout(cfg,rng){
     const remaining=targetBuildings-rooms.length;
     const want=Math.min(
       remaining,
-      b.rw>=18&&b.rh>=12 ? rI(2,4,rng) : b.rw>=11&&b.rh>=9 ? rI(1,3,rng) : 1,
+      b.rw>=18&&b.rh>=12
+        ? (architecture==="hamlet"?rI(1,3,rng):architecture==="ruined"?rI(1,3,rng):rI(2,4,rng))
+        : b.rw>=11&&b.rh>=9
+          ? (architecture==="hamlet"?rI(1,2,rng):rI(1,3,rng))
+          : 1,
     );
-    const sub=layoutTownBuildingsInLot(b,want,rng,grid);
+    const sub=layoutTownBuildingsInLot(b,want,rng,grid,{architecture,waterfront});
     for(const rect of sub){
       if(rooms.length>=targetBuildings) break;
-      stampTownBuilding(grid,rect,W,H,rng);
+      if(architecture==="ruined"&&rng()<0.58) stampRuinedTownBuilding(grid,rect,W,H,rng);
+      else stampTownBuilding(grid,rect,W,H,rng);
       const distN=b.dist/maxDist;
       let roomType;
       // Seed a few anchors early so every town has key service buildings.
@@ -1793,6 +2139,10 @@ function generateMap(cfg) {
       if(locationType==="temple")decoPool=[...decoPool,"bones","coffin","statue","blood_sm","altar"];
       if(locationType==="fey_forest")decoPool=[...decoPool,"mushroom","vine","pool","log","bush","tree","web","fountain","campfire"];
       if(locationType==="road")decoPool=[...decoPool,"cart","sign_post","bench","well","splatter","deadbody","barrel_row"];
+      if(locationType==="town"){
+        // Avoid dense interior "nested structure" look; prefer small street-furniture props.
+        decoPool=["bench","barrel","crate","barrel_row","bush","sign_post","well","cart","stall","torch_w","fountain"];
+      }
       const numDecos=rI(1,Math.min(5,Math.floor((room.w*room.h)/14)+2),rng);
       const chosen=[];for(let i=0;i<numDecos;i++) chosen.push(pick(decoPool,rng));
 
@@ -2020,9 +2370,16 @@ function generateMap(cfg) {
   if(locationType==="graveyard"){
     forgeDmHints={...(forgeDmHints||{}),...enrichGraveyardFeatures({grid,rooms,entities,decoOverlay,riddles,rng,W,H,usedCells})};
   }else if(locationType==="town"){
-    forgeDmHints={...(forgeDmHints||{}),...enrichTownFeatures({grid,rooms,entities,decoOverlay,rng,W,H,usedCells,cfg:{townMarketDay:!!cfg.townMarketDay,townFortified:!!cfg.townFortified,townChaseMode:!!cfg.townChaseMode,townDistrictStyle:cfg.townDistrictStyle,townWaterfront:cfg.townWaterfront}})};
+    forgeDmHints={...(forgeDmHints||{}),...enrichTownFeatures({grid,rooms,entities,decoOverlay,rng,W,H,usedCells,cfg:{townMarketDay:!!cfg.townMarketDay,townFortified:!!cfg.townFortified,townChaseMode:!!cfg.townChaseMode,townDistrictStyle:cfg.townDistrictStyle,townWaterfront:cfg.townWaterfront,townArchitecture:cfg.townArchitecture}})};
   }else if(locationType==="castle"){
     forgeDmHints={...(forgeDmHints||{}),...enrichCastleFeatures({grid,rooms,entities,decoOverlay,rng,W,H,usedCells})};
+  }
+
+  if(cfg.showDecos!==false){
+    // Keep tree clusters from overlapping existing entities/decorations.
+    for(const e of entities) usedCells.add(`${e.x},${e.y}`);
+    for(const d of decoOverlay) if(typeof d?.x==="number"&&typeof d?.y==="number") usedCells.add(`${d.x},${d.y}`);
+    scatterNaturalTreeClusters({grid,decoOverlay,usedCells,rng,W,H,rooms,locationType,cfg});
   }
 
   let forgeBiome=null;
@@ -2075,7 +2432,6 @@ function forgeRoomsToDungeonMapRooms(dg){
     monsters:dg.entities.filter((e)=>e.roomId===r.id&&e.type==="monster").map((e)=>({monsterSlug:e.slug||"",count:e.count||1,notes:String(e.name)})),
     treasures:{gold:0,items:dg.entities.filter((e)=>e.roomId===r.id&&e.type==="item").map((e)=>String(e.name))},
     features:{layoutMeta:{themeTag:r.theme,depth:r.depth,namedRoom:r.namedRoom||null}},
-    themeTag:r.theme,
     depth:r.depth,
     namedRoom:r.namedRoom,
   }));
@@ -2440,7 +2796,7 @@ export default function DungeonForge(){
   /** Locked display behavior — no sidebar toggles (tiny cells, fill viewport, 2× PNG, scenery). */
   const FIXED_FORGE_DISPLAY={showDecos:true,showThemes:false};
   const [cfg,setCfg]=useState(()=>{
-    const base={roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:FORGE_STYLE,seed:Math.floor(Math.random()*999999),locationType:"dungeon",dungeonLighting:"lit",dungeonWanderMin:10,graveyardTime:"day",graveyardWeather:"clear",townMarketDay:false,townFortified:false,townChaseMode:false,townDistrictStyle:"balanced",townStreetStyle:"organic",townDensity:"normal",townPlazas:"some",townWaterfront:"none",roadVariant:"dirt_trail",wildernessWeather:"clear",volcanicActivity:"dormant",eruptionRounds:15,feyShiftingPaths:false,feyPlayerDisorient:false,feyBioluminescent:true,caveVariant:"auto",caveBioluminescentMode:"auto",templeDeity:"auto",templeCondition:"auto",...FIXED_FORGE_DISPLAY,cellPx:18,exportCellPx:32,autoSync:false};
+    const base={roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:FORGE_STYLE,seed:Math.floor(Math.random()*999999),locationType:"dungeon",dungeonLighting:"lit",dungeonWanderMin:10,graveyardTime:"day",graveyardWeather:"clear",townMarketDay:false,townFortified:false,townChaseMode:false,townDistrictStyle:"balanced",townStreetStyle:"organic",townArchitecture:"medieval",townDensity:"normal",townPlazas:"open",townWaterfront:"none",roadVariant:"dirt_trail",wildernessWeather:"clear",volcanicActivity:"dormant",eruptionRounds:15,feyShiftingPaths:false,feyPlayerDisorient:false,feyBioluminescent:true,caveVariant:"auto",caveBioluminescentMode:"auto",templeDeity:"auto",templeCondition:"auto",...FIXED_FORGE_DISPLAY,cellPx:18,exportCellPx:32,autoSync:false};
     try{
       const raw=localStorage.getItem(FORGE_CFG_KEY);
       if(raw){
@@ -2461,7 +2817,7 @@ export default function DungeonForge(){
   const [statCard,setStatCard]=useState(null);
   const [forgeInspect,setForgeInspect]=useState(null);
   const cfgSaveTimer=useRef(null);
-  const mapViewportRef=useRef(null);const mapPanRef=useRef(null);
+  const mapViewportRef=useRef(null);const mapPanRef=useRef(null);const isoCanvasRef=useRef(null);
   const draggingRef=useRef(null);
   const hoverRafRef=useRef(0);
   const pendingHoverRef=useRef(null);
@@ -2478,6 +2834,12 @@ export default function DungeonForge(){
   const [sendMsg,setSendMsg]=useState(null);
   const [doorOpen,setDoorOpen]=useState(()=>new Set());
   const [animPhase,setAnimPhase]=useState(0);
+  const [forgeViewMode,setForgeViewMode]=useState(()=>{ try{ const v=localStorage.getItem("dungeon-forge-view-mode"); if(v==="flat"||v==="depth"||v==="iso"||v==="3d")return v; }catch(_){} return "flat"; });
+  const [fxWallDepth,setFxWallDepth]=useState(false);
+  const [fxAo,setFxAo]=useState(false);
+  const [fxVignette,setFxVignette]=useState(false);
+  const [fxVisualOpen,setFxVisualOpen]=useState(false);
+  useEffect(()=>{ try{ localStorage.setItem("dungeon-forge-view-mode",forgeViewMode);}catch(_){} },[forgeViewMode]);
   const wanderTimerRef=useRef(Date.now());
   const [wanderDue,setWanderDue]=useState(false);
   const [trapTriggeredKeys,setTrapTriggeredKeys]=useState(()=>new Set());
@@ -2682,6 +3044,13 @@ export default function DungeonForge(){
   },[vpSize.w,vpSize.h,Wm,Hm,cfg.cellPx]);
   const rooms=dg?dg.rooms:[];const ents=dg?dg.entities:[];const decos=dg?dg.decoOverlay:[];
   const effectiveLocType=dg?.locationType??cfg.locationType;
+  const mapTileDetailStyle=useMemo(()=>{
+    const loc=effectiveLocType||"dungeon";
+    if(loc==="cave")return"cave";
+    if(loc==="temple")return"temple";
+    if(["dungeon","castle","sewer","graveyard","swamp","volcanic_lair","road","town"].includes(loc))return"dungeon";
+    return null;
+  },[effectiveLocType]);
   const fogOpenFloor=useMemo(()=>isOpenFloorLocation(effectiveLocType),[effectiveLocType]);
   const mapFogCells=useMemo(()=>{
     if(!isP||!dg||!revealed)return null;
@@ -2707,15 +3076,17 @@ export default function DungeonForge(){
   },[dg?.seed,cfg.seed,cfg.level]);
   const forgeSceneLights=useMemo(()=>{
     if(!dg?.grid)return null;
-    const rng=seededRNG(cfg.seed+777);
+    const mapName=dg.mapName??cfg.mapName??"forge";
+    const mapSeed=String(mapName).split("").reduce((a,c)=>(Math.imul(a,31)+c.charCodeAt(0))>>>0,0);
     const loc=cfg.locationType;
-    if(loc==="cave"&&dg.forgeLocationMeta?.caveBioluminescent)
-      return collectCaveBiolumSceneLights(dg.decoOverlay??[],48);
-    if(loc==="fey_forest"&&cfg.feyBioluminescent!==false)
-      return collectFeyForestWispLights(dg.grid,rng,8);
-    if(loc==="volcanic_lair") return collectVolcanicLavaGlowLights(dg.grid,14);
-    return null;
-  },[dg,cfg.locationType,cfg.feyBioluminescent,cfg.seed]);
+    let lights=collectBiomeLights(dg.grid,dg.rooms??[],loc,mapSeed,{
+      feyBioluminescent:cfg.feyBioluminescent!==false,
+    });
+    if(loc==="cave"&&dg.forgeLocationMeta?.caveBioluminescent){
+      lights=[...lights,...collectCaveBiolumSceneLights(dg.decoOverlay??[],48)];
+    }
+    return lights.length?lights.slice(0,24):null;
+  },[dg,cfg.locationType,cfg.feyBioluminescent,cfg.seed,cfg.mapName]);
   const revealableDoors=useMemo(()=>{
     if(!isP||!dg||!mapFogCells)return[];
     const result=[];
@@ -2967,6 +3338,7 @@ export default function DungeonForge(){
       graveyardInteriorRevealed,
     })];
     const state={
+      ...(forgeViewMode==="depth"||forgeViewMode==="iso"?{viewMode:forgeViewMode}:{}),
       dungeonData:{
         grid:dg.grid,
         rooms:dg.rooms,
@@ -2989,7 +3361,7 @@ export default function DungeonForge(){
       fogColor:overrides.fogColor??"#1f1a15",
     };
     broadcastPlayerMapState(state);
-  },[dg,revealed,doorOpen,selRoom,cfg.locationType,graveyardInteriorRevealed]);
+  },[dg,revealed,doorOpen,selRoom,cfg.locationType,graveyardInteriorRevealed,forgeViewMode]);
   useEffect(()=>{
     if(cfg.autoSync&&dg)pushToPlayerScreen();
   },[cfg.autoSync,dg,pushToPlayerScreen]);
@@ -3199,6 +3571,13 @@ export default function DungeonForge(){
                 <option value="organic">Organic (irregular + connectors)</option>
                 <option value="grid">Planned grid (straighter blocks)</option>
               </select>
+              <div style={{fontSize:10,color:S.dimText,lineHeight:1.35,marginBottom:2}}>Architecture style</div>
+              <select value={cfg.townArchitecture??"medieval"} onChange={e=>u("townArchitecture",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
+                <option value="medieval">Medieval mixed</option>
+                <option value="hamlet">Hamlet / village</option>
+                <option value="ruined">Ruined district</option>
+                <option value="coastal">Coastal trade town</option>
+              </select>
               <div style={{fontSize:10,color:S.dimText,lineHeight:1.35,marginBottom:2}}>Building density</div>
               <select value={cfg.townDensity??"normal"} onChange={e=>u("townDensity",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
                 <option value="sparse">Sparse</option>
@@ -3206,10 +3585,11 @@ export default function DungeonForge(){
                 <option value="dense">Dense</option>
               </select>
               <div style={{fontSize:10,color:S.dimText,lineHeight:1.35,marginBottom:2}}>Plazas</div>
-              <select value={cfg.townPlazas??"some"} onChange={e=>u("townPlazas",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
+              <select value={cfg.townPlazas??"open"} onChange={e=>u("townPlazas",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
                 <option value="none">None</option>
                 <option value="some">Some</option>
                 <option value="many">Many</option>
+                <option value="open">Open (large)</option>
               </select>
               <div style={{fontSize:10,color:S.dimText,lineHeight:1.35,marginBottom:2}}>Waterfront</div>
               <select value={cfg.townWaterfront??"none"} onChange={e=>u("townWaterfront",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%",marginBottom:4}}>
@@ -3386,12 +3766,14 @@ export default function DungeonForge(){
                       position:"absolute",
                       left:0,
                       top:0,
-                      transform:`translate(${pan.x}px,${pan.y}px) scale(${zoom})`,
+                      transform:forgeViewMode==="iso"||forgeViewMode==="3d"
+                        ?"translate(0px,0px) scale(1)"
+                        :`translate(${pan.x}px,${pan.y}px) scale(${zoom})`,
                       transformOrigin:"0 0",
-                      willChange:"transform",
+                      willChange:forgeViewMode==="iso"||forgeViewMode==="3d"?"auto":"transform",
                     }}
                   >
-                    <div style={{position:"relative",display:"inline-block",verticalAlign:"top",filter:cfg.locationType==="fey_forest"&&cfg.feyBioluminescent!==false?"saturate(1.1) brightness(1.04)":undefined}}>
+                    <div style={{position:"relative",display:"inline-block",verticalAlign:"top",filter:cfg.locationType==="fey_forest"&&cfg.feyBioluminescent!==false?"saturate(1.1) brightness(1.04)":undefined,transition:"opacity 0.2s ease",opacity:forgeViewMode==="iso"||forgeViewMode==="3d"?0.98:1}}>
                       {cfg.locationType==="road"&&(cfg.wildernessWeather==="rain"||cfg.wildernessWeather==="storm")&&(
                         <div
                           style={{
@@ -3406,6 +3788,46 @@ export default function DungeonForge(){
                         />
                       )}
                       <div style={{display:"inline-block",transform:isP&&cfg.feyPlayerDisorient&&cfg.locationType==="fey_forest"?"rotate(90deg)":undefined,transformOrigin:"center center"}}>
+                      {forgeViewMode==="3d"&&!isP?(
+                        <div style={{width:"100%",height:vpSize.h>48?vpSize.h:"min(62vh,720px)",minHeight:240,position:"relative"}}>
+                          <Suspense fallback={<div style={{padding:20,color:S.dimText,fontSize:13}}>Loading 3D…</div>}>
+                            <DungeonForge3D
+                              grid={rg}
+                              palette={forgePaletteForDungeon(dg)}
+                              entities={ENTITY_PALETTE}
+                              fogCells={mapFogCells}
+                              doorOpen={doorOpen}
+                              animPhase={animPhase}
+                              sceneLights={forgeSceneLights}
+                              forgeDmHints={dg.forgeDmHints??undefined}
+                              dungeonLighting={(cfg.locationType==="dungeon"||dg.locationType==="dungeon")?(cfg.dungeonLighting??dg.dungeonLighting??"lit"):undefined}
+                              graveyardAmbience={(cfg.locationType==="graveyard"||dg.locationType==="graveyard")?{timeOfDay:cfg.graveyardTime??dg.graveyardTime??"day",weather:cfg.graveyardWeather??dg.graveyardWeather??"clear"}:undefined}
+                            />
+                          </Suspense>
+                        </div>
+                      ):forgeViewMode==="iso"&&!isP?(
+                        <div style={{width:"100%",height:vpSize.h>48?vpSize.h:"min(62vh,720px)",minHeight:240,position:"relative"}}>
+                        <IsometricMapCanvas
+                          ref={isoCanvasRef}
+                          grid={rg}
+                          palette={forgePaletteForDungeon(dg)}
+                          entities={ENTITY_PALETTE}
+                          fogCells={mapFogCells}
+                          doorOpen={doorOpen}
+                          showEnts={false}
+                          playerSanitize={false}
+                          highlightRoom={highlightRoom}
+                          animPhase={animPhase}
+                          sceneLights={forgeSceneLights}
+                          forgeDmHints={dg.forgeDmHints??undefined}
+                          dungeonLighting={(cfg.locationType==="dungeon"||dg.locationType==="dungeon")?(cfg.dungeonLighting??dg.dungeonLighting??"lit"):undefined}
+                          graveyardAmbience={(cfg.locationType==="graveyard"||dg.locationType==="graveyard")?{timeOfDay:cfg.graveyardTime??dg.graveyardTime??"day",weather:cfg.graveyardWeather??dg.graveyardWeather??"clear"}:undefined}
+                          tileW={Math.min(72,Math.max(28,Math.floor(cs*3.2)))}
+                          tileH={Math.min(40,Math.max(14,Math.floor(cs*1.6)))}
+                          wallH={Math.min(36,Math.max(14,Math.floor(cs*1.8)))}
+                        />
+                        </div>
+                      ):(
                       <DungeonMapCanvas
                         grid={rg}
                         cellPx={cs}
@@ -3421,8 +3843,14 @@ export default function DungeonForge(){
                         forgeDmHints={!isP?dg.forgeDmHints??undefined:undefined}
                         dungeonLighting={!isP&&(cfg.locationType==="dungeon"||dg.locationType==="dungeon")?(cfg.dungeonLighting??dg.dungeonLighting??"lit"):undefined}
                         graveyardAmbience={!isP&&(cfg.locationType==="graveyard"||dg.locationType==="graveyard")?{timeOfDay:cfg.graveyardTime??dg.graveyardTime??"day",weather:cfg.graveyardWeather??dg.graveyardWeather??"clear"}:undefined}
+                        depthPass={!isP&&(forgeViewMode==="depth"||fxWallDepth)}
+                        vignettePass={!isP&&(forgeViewMode==="depth"||fxVignette)}
+                        depthFog={!isP&&forgeViewMode==="depth"}
+                        aoPass={!isP&&fxAo}
+                        tileDetailStyle={!isP?mapTileDetailStyle:undefined}
                         onCellClick={handleMapCellClick}
                       />
+                      )}
                       {isP&&revealableDoors.map(({x,y})=>(
                         <div
                           key={`rd-${x}-${y}`}
@@ -3478,7 +3906,7 @@ export default function DungeonForge(){
                     pointerEvents:"auto",
                   }}
                 >
-                  <div style={{display:"flex",gap:4,justifyContent:"flex-end"}}>
+                  <div style={{display:"flex",gap:4,justifyContent:"flex-end",flexWrap:"wrap"}}>
                     {["+","-"].map((l,i)=>(
                       <button
                         key={l}
@@ -3499,6 +3927,78 @@ export default function DungeonForge(){
                       </button>
                     ))}
                   </div>
+                  {!isP&&(
+                    <div style={{display:"flex",flexDirection:"column",gap:3,alignItems:"stretch"}}>
+                      <div style={{fontSize:10,color:S.dimText,letterSpacing:1}}>VIEW</div>
+                      <div style={{display:"flex",gap:3,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                        {[
+                          {k:"flat",label:"Flat"},
+                          {k:"depth",label:"Depth"},
+                          {k:"iso",label:"Iso"},
+                          {k:"3d",label:"3D"},
+                        ].map(({k,label})=>(
+                          <button
+                            key={k}
+                            type="button"
+                            onClick={()=>setForgeViewMode(k)}
+                            style={{
+                              padding:"3px 8px",
+                              fontSize:11,
+                              fontFamily:"'Crimson Text',Georgia,serif",
+                              background:forgeViewMode===k?"rgba(255,255,255,0.12)":S.inputBg,
+                              color:forgeViewMode===k?S.accent:S.dimText,
+                              border:`1px solid ${forgeViewMode===k?S.accent:S.inputBorder}`,
+                              borderRadius:2,
+                              cursor:"pointer",
+                            }}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      {forgeViewMode==="iso"&&(
+                        <button
+                          type="button"
+                          onClick={()=>isoCanvasRef.current?.resetCamera?.()}
+                          style={{
+                            padding:"3px 8px",
+                            fontSize:10,
+                            fontFamily:"'Crimson Text',Georgia,serif",
+                            background:S.inputBg,
+                            color:S.dimText,
+                            border:`1px solid ${S.inputBorder}`,
+                            borderRadius:2,
+                            cursor:"pointer",
+                          }}
+                        >
+                          Reset iso view
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={()=>setFxVisualOpen((o)=>!o)}
+                        style={{padding:"2px 6px",fontSize:10,color:S.dimText,background:"transparent",border:`1px dashed ${S.panelBorder}`,borderRadius:2,cursor:"pointer"}}
+                      >
+                        {fxVisualOpen?"[-]":"[+]" } VISUAL FX
+                      </button>
+                      {fxVisualOpen&&(
+                        <div style={{display:"flex",flexDirection:"column",gap:2,fontSize:10,color:S.textColor}}>
+                          <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer"}}>
+                            <input type="checkbox" checked={fxWallDepth} onChange={(e)=>setFxWallDepth(e.target.checked)} />
+                            Wall depth
+                          </label>
+                          <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer"}}>
+                            <input type="checkbox" checked={fxAo} onChange={(e)=>setFxAo(e.target.checked)} />
+                            Ambient occlusion
+                          </label>
+                          <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer"}}>
+                            <input type="checkbox" checked={fxVignette} onChange={(e)=>setFxVignette(e.target.checked)} />
+                            Vignette
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {!isP&&cfg.locationType==="dungeon"&&wanderDue&&(
                     <div
                       style={{

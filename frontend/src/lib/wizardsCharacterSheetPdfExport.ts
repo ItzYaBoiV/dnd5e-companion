@@ -1,7 +1,8 @@
 /**
  * Fills WoTC’s official 2016 fillable character sheet PDF for personal / table use (same license as the blank sheet).
  */
-import { PDFDocument, PDFCheckBox, PDFTextField, StandardFonts } from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
+import { isPdfCheckBox, isPdfTextField } from "@/lib/pdfLibFormFieldGuards";
 import type { Character } from "@/types/dnd";
 import { ALIGNMENT_LABELS, ABILITY_NAMES, SKILL_NAMES, type AbilityName } from "@/types/dnd";
 import type { WeaponAttackSummary } from "@/types/dnd";
@@ -138,7 +139,7 @@ function weaponDamageLine(w: WeaponAttackSummary): string {
 function trySetText(form: ReturnType<PDFDocument["getForm"]>, name: string, value: string): void {
   try {
     const field = form.getField(name);
-    if (field instanceof PDFTextField) field.setText(value);
+    if (isPdfTextField(field)) field.setText(value);
   } catch {
     /* missing or wrong widget type */
   }
@@ -148,7 +149,7 @@ function trySetTextFirst(form: ReturnType<PDFDocument["getForm"]>, names: string
   for (const name of names) {
     try {
       const field = form.getField(name);
-      if (field instanceof PDFTextField) {
+      if (isPdfTextField(field)) {
         field.setText(value);
         return;
       }
@@ -161,7 +162,7 @@ function trySetTextFirst(form: ReturnType<PDFDocument["getForm"]>, names: string
 function trySetCheck(form: ReturnType<PDFDocument["getForm"]>, name: string, on: boolean): void {
   try {
     const field = form.getField(name);
-    if (field instanceof PDFCheckBox) {
+    if (isPdfCheckBox(field)) {
       if (on) field.check();
       else field.uncheck();
     }
@@ -178,7 +179,7 @@ function fillTextByPatterns(
   const done = new Set<string>();
   for (const { pattern, value } of rules) {
     for (const field of form.getFields()) {
-      if (!(field instanceof PDFTextField)) continue;
+      if (!isPdfTextField(field)) continue;
       const n = field.getName();
       if (done.has(n)) continue;
       if (pattern.test(n)) {
@@ -194,7 +195,7 @@ function fillTextByPatterns(
 function collectSpellRowTextFieldNames(form: ReturnType<PDFDocument["getForm"]>): string[] {
   const names: string[] = [];
   for (const field of form.getFields()) {
-    if (!(field instanceof PDFTextField)) continue;
+    if (!isPdfTextField(field)) continue;
     const n = field.getName();
     const lower = n.toLowerCase();
     if (lower.includes("spell save") || lower.includes("spell attack")) continue;
@@ -215,7 +216,7 @@ function collectSpellRowTextFieldNames(form: ReturnType<PDFDocument["getForm"]>)
 function collectPreparedWidgets(form: ReturnType<PDFDocument["getForm"]>): string[] {
   const out: string[] = [];
   for (const field of form.getFields()) {
-    if (!(field instanceof PDFCheckBox)) continue;
+    if (!isPdfCheckBox(field)) continue;
     const n = field.getName();
     if (/repared|prepared/i.test(n)) out.push(n);
   }
@@ -260,7 +261,7 @@ function fillSpellSlotTotalsBestEffort(
     let filledTotal = false;
     let filledExp = false;
     for (const field of form.getFields()) {
-      if (!(field instanceof PDFTextField)) continue;
+      if (!isPdfTextField(field)) continue;
       const n = field.getName();
       const low = n.toLowerCase();
       if (!low.includes("slot")) continue;
