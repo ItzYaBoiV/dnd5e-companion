@@ -34,6 +34,12 @@ export type DungeonMapCanvasProps = {
   vignettePass?: boolean;
   depthFog?: boolean;
   tileDetailStyle?: RenderTileOpts["tileDetailStyle"];
+  /** Town / road outdoor time of day — scales volumetric darkness (caves omit). */
+  mapOutdoorTime?: RenderTileOpts["mapOutdoorTime"];
+  /** Player fog: match TV fog color / motion / frontier (see `RenderTileOpts`). */
+  fogUnexploredColor?: string;
+  fogAmbientAnim?: boolean;
+  fogFrontierHighlight?: boolean;
   battleTokens?: BattleToken[] | null;
   /** When the `grid` prop is a cropped window, pass the top-left of that window in full-map coords. */
   worldOffset?: { x: number; y: number };
@@ -131,6 +137,10 @@ function DungeonMapCanvasInner({
   vignettePass,
   depthFog,
   tileDetailStyle,
+  mapOutdoorTime,
+  fogUnexploredColor,
+  fogAmbientAnim,
+  fogFrontierHighlight,
   battleTokens,
   worldOffset,
   className,
@@ -204,6 +214,10 @@ function DungeonMapCanvasInner({
       vignettePass: !!vignettePass,
       depthFog: !!depthFog,
       tileDetailStyle: tileDetailStyle ?? null,
+      mapOutdoorTime,
+      fogUnexploredColor,
+      fogAmbientAnim,
+      fogFrontierHighlight,
     });
   }, [
     grid,
@@ -229,6 +243,10 @@ function DungeonMapCanvasInner({
     vignettePass,
     depthFog,
     tileDetailStyle,
+    mapOutdoorTime,
+    fogUnexploredColor,
+    fogAmbientAnim,
+    fogFrontierHighlight,
     battleTokens,
     tokenImagesVersion,
     entityTokenImagesVersion,

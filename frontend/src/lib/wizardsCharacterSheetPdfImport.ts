@@ -60,13 +60,18 @@ const SKILL_PROF_CHECKBOXES = [
   "Check Box 40",
 ] as const;
 
-const ABILITY_SCORE_FIELD_NAMES: Record<AbilityName, string[]> = {
-  strength: ["STRmod"],
-  dexterity: ["DEXmod ", "DEXmod"],
-  constitution: ["CONmod"],
-  intelligence: ["INTmod"],
-  wisdom: ["WISmod"],
-  charisma: ["CHamod", "CHAmod"],
+/**
+ * Official 2016 Wizards PDF uses confusing names: `STRmod` holds the **ability score** (digits),
+ * `STR` holds the **modifier** (+/-) when filled by our export — see `wizardsCharacterSheetPdfExport.ts`.
+ * Many PDF tools put the modifier in the score box; `parseIntSafe("+3")` became `3`, which looked like STR 3.
+ */
+const ABILITY_PAIR_FIELD_NAMES: Record<AbilityName, { scoreBox: string[]; modCircle: string[] }> = {
+  strength: { scoreBox: ["STRmod"], modCircle: ["STR"] },
+  dexterity: { scoreBox: ["DEXmod ", "DEXmod"], modCircle: ["DEX"] },
+  constitution: { scoreBox: ["CONmod"], modCircle: ["CON"] },
+  intelligence: { scoreBox: ["INTmod"], modCircle: ["INT"] },
+  wisdom: { scoreBox: ["WISmod"], modCircle: ["WIS"] },
+  charisma: { scoreBox: ["CHamod", "CHAmod"], modCircle: ["CHA"] },
 };
 
 function norm(s: string): string {
@@ -111,6 +116,86 @@ function parseIntSafe(raw: string): number | null {
 
 function clampScore(n: number): number {
   return Math.min(30, Math.max(1, n));
+}
+
+/** Plain digits only (no +/−) — distinguishes "16" from "+3". */
+function parsePlainDigitsScore(raw: string): number | null {
+  const t = raw.trim();
+  if (!/^\d{1,2}$/.test(t)) return null;
+  const n = parseInt(t, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Signed modifier text like "+3", "-1", "−2" (unicode minus). */
+function parseSignedModifier(raw: string): number | null {
+  const t = raw.replace(/\u2212/g, "-").trim();
+  if (!t) return null;
+  const m = t.match(/^([+\-]?)(\d+)$/);
+  if (!m) return null;
+  const sign = m[1] === "-" ? -1 : 1;
+  const n = parseInt(m[2], 10);
+  if (!Number.isFinite(n)) return null;
+  return sign * n;
+}
+
+/**
+ * Derive ability score from the score box + modifier circle. Handles modifiers mistaken for scores.
+ * @public exported for tests
+ */
+export function inferAbilityScoreFromWizardsFields(
+  scoreBoxRaw: string,
+  modCircleRaw: string,
+): { score: number; usedModifierHeuristic: boolean } | null {
+  const sb = scoreBoxRaw.trim();
+  const mc = modCircleRaw.trim();
+
+  const plain = parsePlainDigitsScore(sb);
+  if (plain != null && plain >= 8 && plain <= 20) {
+    return { score: clampScore(plain), usedModifierHeuristic: false };
+  }
+
+  const signedInBox = parseSignedModifier(sb);
+  if (signedInBox != null && signedInBox >= -5 && signedInBox <= 5) {
+    return { score: clampScore(2 * signedInBox + 10), usedModifierHeuristic: true };
+  }
+
+  const modCircle = parseSignedModifier(mc);
+  const digitsLow = parsePlainDigitsScore(sb);
+  if (
+    digitsLow != null &&
+    digitsLow >= 1 &&
+    digitsLow <= 6 &&
+    modCircle != null &&
+    modCircle >= -5 &&
+    modCircle <= 5 &&
+    (digitsLow === Math.abs(modCircle) || digitsLow === modCircle)
+  ) {
+    return { score: clampScore(2 * modCircle + 10), usedModifierHeuristic: true };
+  }
+
+  const scoreMaybeInCircle = parsePlainDigitsScore(mc);
+  if (scoreMaybeInCircle != null && scoreMaybeInCircle >= 8 && scoreMaybeInCircle <= 20) {
+    const sbEmpty = !sb;
+    const sbSmall = parseIntSafe(sb);
+    if (sbEmpty || (sbSmall != null && sbSmall < 8)) {
+      return { score: clampScore(scoreMaybeInCircle), usedModifierHeuristic: true };
+    }
+  }
+
+  const fallback = parseIntSafe(sb);
+  if (fallback != null) {
+    if (fallback >= 8 && fallback <= 30) return { score: clampScore(fallback), usedModifierHeuristic: false };
+    if (fallback >= -5 && fallback <= 5) {
+      return { score: clampScore(2 * fallback + 10), usedModifierHeuristic: true };
+    }
+    return { score: clampScore(fallback), usedModifierHeuristic: false };
+  }
+
+  if (modCircle != null && modCircle >= -5 && modCircle <= 5 && !sb) {
+    return { score: clampScore(2 * modCircle + 10), usedModifierHeuristic: true };
+  }
+
+  return null;
 }
 
 /** Split "Fighter 5 / Wizard 2" or "Champion Fighter 5" into label + level segments (best-effort). */
@@ -309,6 +394,8 @@ export type ParsedWizardsCharacterSheet = {
   electrum: number;
   gold: number;
   platinum: number;
+  /** Ability keys where we inferred score from modifier text (PDF had mod in score box). */
+  abilityScoreModifierHeuristicUsed?: AbilityName[];
 };
 
 export function isLikelyWizards2016CharacterPdf(form: ReturnType<PDFDocument["getForm"]>): boolean {
@@ -334,10 +421,16 @@ export async function parseWizardsCharacterSheetPdf(bytes: Uint8Array): Promise<
   }
 
   const abilityFinal: Partial<AbilityScores> = {};
+  const abilityScoreModifierHeuristicUsed: AbilityName[] = [];
   for (const a of ABILITY_NAMES) {
-    const raw = tryGetTextFirst(form, ABILITY_SCORE_FIELD_NAMES[a]);
-    const n = parseIntSafe(raw);
-    if (n != null) abilityFinal[a] = clampScore(n);
+    const names = ABILITY_PAIR_FIELD_NAMES[a];
+    const rawScore = tryGetTextFirst(form, names.scoreBox);
+    const rawMod = tryGetTextFirst(form, names.modCircle);
+    const inf = inferAbilityScoreFromWizardsFields(rawScore, rawMod);
+    if (inf) {
+      abilityFinal[a] = inf.score;
+      if (inf.usedModifierHeuristic) abilityScoreModifierHeuristicUsed.push(a);
+    }
   }
 
   const savingThrowProfFromSheet: AbilityName[] = [];
@@ -398,6 +491,8 @@ export async function parseWizardsCharacterSheetPdf(bytes: Uint8Array): Promise<
     electrum: parseIntSafe(tryGetTextField(form, "EP")) ?? 0,
     gold: parseIntSafe(tryGetTextField(form, "GP")) ?? 0,
     platinum: parseIntSafe(tryGetTextField(form, "PP")) ?? 0,
+    abilityScoreModifierHeuristicUsed:
+      abilityScoreModifierHeuristicUsed.length > 0 ? abilityScoreModifierHeuristicUsed : undefined,
   };
 }
 
@@ -556,6 +651,13 @@ export function wizardsPdfParsedToDraftPatch(
     add(
       S.abilityScores,
       `Some ability scores were missing (${missingAbilities.join(", ")}) — set real scores on this step.`,
+    );
+  }
+
+  if (parsed.abilityScoreModifierHeuristicUsed?.length) {
+    add(
+      S.abilityScores,
+      `Some PDF fields looked like modifiers in the score boxes (${parsed.abilityScoreModifierHeuristicUsed.join(", ")}) — scores were estimated (ability ≈ 10 + 2×modifier). Confirm on this step.`,
     );
   }
 

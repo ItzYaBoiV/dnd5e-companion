@@ -556,6 +556,14 @@ model Session {
   updatedAt DateTime           @updatedAt
 }
 
+model PlayerDisplay {
+  tvId      String   @id
+  label     String   @default("")
+  mapState  String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
 model SessionCharacter {
   id          String  @id @default(cuid())
   sessionId   String

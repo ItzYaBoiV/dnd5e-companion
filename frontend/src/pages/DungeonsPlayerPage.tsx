@@ -1,16 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import { buildRenderGrid } from "@/lib/dungeonForgeRenderGrid";
-import {
-  computeVisibleCellsForPlayer,
-  expandFogWithPlayerTokenVision,
-  isOpenFloorLocation,
-  maxFogHopsForLocationType,
-} from "@/lib/dungeonForgeFog";
-import { DEFAULT_PLAYER_VISION_FOG_CELLS, PLAYER_SIGHT_RING_CELLS } from "@/lib/playerMapVision";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { buildLightMap, collectTorchFixtureLights } from "@/lib/dungeonLightOcclusion";
 import { renderIsometricToCanvas } from "@/lib/isometricTileRenderer";
 import { renderDungeonToCanvas } from "@/lib/dungeonTileRenderer";
-import { ENTITY_PALETTE, forgePaletteForDungeon } from "@/lib/dungeonTilePalettes";
+import { ENTITY_PALETTE } from "@/lib/dungeonTilePalettes";
+import { buildPlayerTvMapFrame } from "@/lib/playerTvMapFrame";
 import type { PlayerMapBroadcast } from "@/lib/playerMapBroadcast";
 import {
   PLAYER_LASER_CHANNEL,
@@ -19,42 +12,7 @@ import {
 } from "@/lib/playerMapLaser";
 import { useBattleTokenImages } from "@/lib/useBattleTokenImages";
 
-function gridDims(dg: NonNullable<PlayerMapBroadcast["dungeonData"]>): { gw: number; gh: number } {
-  const gh = Array.isArray(dg.grid) ? dg.grid.length : 0;
-  const gw = gh > 0 && Array.isArray(dg.grid[0]) ? dg.grid[0]!.length : 0;
-  return {
-    gw: gw > 0 ? gw : Math.max(1, Number(dg.width) || 1),
-    gh: gh > 0 ? gh : Math.max(1, Number(dg.height) || 1),
-  };
-}
-
-/** Bounding box of cell keys, clamped to grid; empty if no valid keys. */
-function cellKeysBBox(
-  keys: Iterable<string>,
-  gw: number,
-  gh: number,
-): { minX: number; minY: number; maxX: number; maxY: number } | null {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const k of keys) {
-    const parts = k.split(",");
-    if (parts.length !== 2) continue;
-    const x = Number(parts[0]);
-    const y = Number(parts[1]);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-    const fx = Math.floor(x);
-    const fy = Math.floor(y);
-    if (fx < 0 || fy < 0 || fx >= gw || fy >= gh) continue;
-    minX = Math.min(minX, fx);
-    minY = Math.min(minY, fy);
-    maxX = Math.max(maxX, fx);
-    maxY = Math.max(maxY, fy);
-  }
-  if (minX === Infinity) return null;
-  return { minX, minY, maxX, maxY };
-}
+const DungeonForge3D = lazy(() => import("@/components/dungeon-forge/DungeonForge3D"));
 
 export default function DungeonsPlayerPage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -110,24 +68,92 @@ export default function DungeonsPlayerPage() {
   }, []);
 
   useEffect(() => {
-    const pull = () => {
+    const params = new URLSearchParams(window.location.search);
+    const tvId = params.get("tv");
+
+    let es: EventSource | null = null;
+    let pollTimer: number | null = null;
+    let closed = false;
+
+    const applyRaw = (raw: unknown) => {
+      if (closed || !raw) return;
+      setMapState(raw as PlayerMapBroadcast);
+    };
+
+    const loadFromServer = async () => {
+      if (!tvId) return false;
+      try {
+        const res = await fetch(`/api/tv/${encodeURIComponent(tvId)}/player-map`);
+        if (!res.ok) return false;
+        applyRaw(await res.json());
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const openStream = () => {
+      if (!tvId) return;
+      if (typeof window.EventSource !== "function") {
+        pollTimer = window.setInterval(() => {
+          void loadFromServer();
+        }, 2000);
+        return;
+      }
+      try {
+        es = new EventSource(`/api/tv/${encodeURIComponent(tvId)}/player-map/stream`);
+        es.addEventListener("snapshot", (ev) => {
+          try {
+            applyRaw(JSON.parse((ev as MessageEvent).data));
+          } catch {
+            /* ignore */
+          }
+        });
+        es.addEventListener("state", (ev) => {
+          try {
+            applyRaw(JSON.parse((ev as MessageEvent).data));
+          } catch {
+            /* ignore */
+          }
+        });
+        es.onerror = () => {
+          if (pollTimer == null) {
+            pollTimer = window.setInterval(() => {
+              void loadFromServer();
+            }, 4000);
+          }
+        };
+      } catch {
+        pollTimer = window.setInterval(() => {
+          void loadFromServer();
+        }, 2000);
+      }
+    };
+
+    const pullLocal = () => {
       try {
         const raw = localStorage.getItem("dnd5e-player-map-state");
         if (!raw) return;
-        setMapState(JSON.parse(raw) as PlayerMapBroadcast);
+        applyRaw(JSON.parse(raw));
       } catch {
         /* ignore */
       }
     };
-    pull();
-    const interval = window.setInterval(pull, 800);
     let bc: BroadcastChannel | null = null;
     try {
       bc = new BroadcastChannel("dnd5e-player-map");
-      bc.onmessage = (ev) => setMapState(ev.data as PlayerMapBroadcast);
+      bc.onmessage = (ev) => applyRaw(ev.data);
     } catch {
       /* ignore */
     }
+
+    if (tvId) {
+      void loadFromServer().then(() => openStream());
+    } else {
+      pullLocal();
+      pollTimer = window.setInterval(pullLocal, 800);
+    }
+
     const onResize = () => {
       const st = mapStateRef.current;
       if (st) setMapState({ ...st });
@@ -138,128 +164,61 @@ export default function DungeonsPlayerPage() {
     } catch {
       /* ignore */
     }
+
     return () => {
-      window.clearInterval(interval);
+      closed = true;
+      if (pollTimer != null) window.clearInterval(pollTimer);
+      if (es) {
+        try {
+          es.close();
+        } catch {
+          /* ignore */
+        }
+      }
+      if (bc) {
+        try {
+          bc.close();
+        } catch {
+          /* ignore */
+        }
+      }
       window.removeEventListener("resize", onResize);
       try {
         visualViewport?.removeEventListener("resize", onResize);
       } catch {
         /* ignore */
       }
-      if (bc) bc.close();
     };
   }, []);
 
+  const tvFrame = useMemo(() => buildPlayerTvMapFrame(mapState), [mapState]);
+
+  useEffect(() => {
+    setViewWindow(tvFrame?.viewWindow ?? null);
+  }, [tvFrame]);
+
   useEffect(() => {
     const c = canvasRef.current;
-    const raw = mapState?.dungeonData;
-    if (!c || !raw?.grid || !raw.rooms?.length) {
-      setViewWindow(null);
-      return;
-    }
+    if (!tvFrame || tvFrame.viewMode === "3d") return;
+    if (!c) return;
 
-    const dg = {
-      ...raw,
-      entities: raw.entities ?? [],
-      decoOverlay: raw.decoOverlay ?? [],
-      width: raw.width ?? raw.grid[0]?.length ?? 1,
-      height: raw.height ?? raw.grid.length ?? 1,
-    };
-
-    const { gw, gh } = gridDims(dg);
-    if (gw < 1 || gh < 1) {
-      setViewWindow(null);
-      return;
-    }
-
-    const revealed = new Set(mapState?.revealed ?? []);
-    const doorOpen =
-      mapState?.doorOpen === undefined || mapState.doorOpen === null ? null : new Set(mapState.doorOpen);
-    const locType = dg.locationType ?? "dungeon";
-    const fogCells = computeVisibleCellsForPlayer(revealed, dg, doorOpen, null, {
-      openFloor: isOpenFloorLocation(locType),
-      maxFogHops: maxFogHopsForLocationType(locType),
-      locationType: locType,
-    });
-    expandFogWithPlayerTokenVision(
-      fogCells,
-      dg.grid as number[][],
-      mapState?.battleTokens ?? [],
-      DEFAULT_PLAYER_VISION_FOG_CELLS,
-      locType,
-    );
-
-    const palette = forgePaletteForDungeon(dg);
-    const rg = buildRenderGrid(dg, { showThemes: false });
-
-    const vc = mapState?.viewCrop;
-    let minX = 0;
-    let minY = 0;
-    let maxX = gw - 1;
-    let maxY = gh - 1;
-    const pad = 2;
-
-    if (
-      vc &&
-      Number.isFinite(vc.minX) &&
-      Number.isFinite(vc.minY) &&
-      Number.isFinite(vc.maxX) &&
-      Number.isFinite(vc.maxY) &&
-      vc.maxX >= vc.minX &&
-      vc.maxY >= vc.minY
-    ) {
-      minX = Math.max(0, Math.floor(vc.minX));
-      minY = Math.max(0, Math.floor(vc.minY));
-      maxX = Math.min(gw - 1, Math.floor(vc.maxX));
-      maxY = Math.min(gh - 1, Math.floor(vc.maxY));
-    } else {
-      const bbox = cellKeysBBox(fogCells, gw, gh);
-      const useFull = bbox === null || fogCells.size === 0;
-      if (bbox && !useFull) {
-        minX = Math.max(0, bbox.minX - pad);
-        minY = Math.max(0, bbox.minY - pad);
-        maxX = Math.min(gw - 1, bbox.maxX + pad);
-        maxY = Math.min(gh - 1, bbox.maxY + pad);
-      }
-    }
-
-    const bw = maxX - minX + 1;
-    const bh = maxY - minY + 1;
-
-    setViewWindow({ minX, minY, maxX, maxY, bw, bh });
-
-    const sub: typeof rg = [];
-    for (let y = minY; y <= maxY; y++) {
-      const row = [];
-      for (let x = minX; x <= maxX; x++) {
-        row.push(rg[y]![x]!);
-      }
-      sub.push(row);
-    }
+    const { sub, fogAdj, doorOpen, sceneLights, palette, viewWindow } = tvFrame;
+    const { bw, bh } = viewWindow;
+    const vm = tvFrame.viewMode;
 
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     const w = window.innerWidth;
-    const h = window.innerHeight;
 
-    const cellPx = Math.max(
-      2,
-      Math.min(Math.floor(w / Math.max(1, bw)), Math.floor(h / Math.max(1, bh))),
-    );
+    /** Fill viewport width (widescreen TVs); vertical overflow is centered + clipped — letterbars match `fogColor`. */
+    const cellPx = Math.max(2, Math.floor(w / Math.max(1, bw)));
 
     c.width = Math.ceil(bw * cellPx * dpr);
     c.height = Math.ceil(bh * cellPx * dpr);
     c.style.width = `${bw * cellPx}px`;
     c.style.height = `${bh * cellPx}px`;
 
-    const fogAdj = new Set<string>();
-    for (const k of fogCells) {
-      const parts = k.split(",");
-      if (parts.length !== 2) continue;
-      const gx = Number(parts[0]);
-      const gy = Number(parts[1]);
-      if (!Number.isFinite(gx) || !Number.isFinite(gy)) continue;
-      fogAdj.add(`${gx - minX},${gy - minY}`);
-    }
+    const minX = tvFrame.viewWindow.minX;
+    const minY = tvFrame.viewWindow.minY;
 
     const battleTok = (mapState?.battleTokens ?? [])
       .map((t) => ({
@@ -269,15 +228,6 @@ export default function DungeonsPlayerPage() {
       }))
       .filter((t) => t.gx >= 0 && t.gy >= 0 && t.gx < bw && t.gy < bh);
 
-    const sceneLights = (mapState?.sceneLights ?? [])
-      .filter((L) => L.kind !== "token")
-      .map((L) => ({
-      ...L,
-      gx: L.gx - minX,
-      gy: L.gy - minY,
-    }));
-
-    const vm = mapState?.viewMode;
     if (vm === "iso") {
       const merged = [...sceneLights, ...collectTorchFixtureLights(sub, bw, bh)];
       const lightMap =
@@ -313,13 +263,16 @@ export default function DungeonsPlayerPage() {
         battleTokens: battleTok.length ? battleTok : null,
         tokenImages,
         sceneLights: sceneLights.length ? sceneLights : null,
-        playerSightRingCells: PLAYER_SIGHT_RING_CELLS,
+        playerSightRingCells: null,
         depthPass: vm === "depth",
         vignettePass: vm === "depth",
         depthFog: vm === "depth",
+        fogUnexploredColor: mapState?.fogColor,
+        fogAmbientAnim: true,
+        fogFrontierHighlight: true,
       });
     }
-  }, [mapState, animPhase, tokenImagesVersion]);
+  }, [tvFrame, animPhase, tokenImagesVersion, mapState?.battleTokens, mapState?.fogColor]);
 
   const laserVisible =
     laser &&
@@ -334,15 +287,50 @@ export default function DungeonsPlayerPage() {
   const laserTopPct =
     laserVisible && viewWindow ? ((laser!.gy - viewWindow.minY + 0.5) / viewWindow.bh) * 100 : 0;
 
+  const tvParam = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tv") : null;
+
+  const showTv3d = tvFrame?.viewMode === "3d" && tvFrame.sub.length > 0;
+
+  const fogBackdrop = mapState?.fogColor ?? "#1f1a15";
+
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-black">
-      <div className="relative inline-block max-h-[100dvh] max-w-[100dvw]">
-        <canvas
-          ref={canvasRef}
-          className="max-h-[100dvh] max-w-[100dvw]"
-          style={{ imageRendering: "pixelated" }}
-          aria-label="Player dungeon map"
-        />
+    <div
+      className="fixed inset-0 flex items-center justify-center overflow-hidden"
+      style={{ backgroundColor: fogBackdrop }}
+    >
+      <div className="relative inline-block max-h-[100dvh] max-w-[100dvw] overflow-hidden">
+        {showTv3d ? (
+          <Suspense
+            fallback={
+              <div className="flex h-[100dvh] w-[100dvw] items-center justify-center bg-black text-sm text-zinc-400">
+                Loading 3D…
+              </div>
+            }
+          >
+            <div className="h-[100dvh] w-[100dvw] max-h-[100dvh] max-w-[100dvw]">
+              <DungeonForge3D
+                grid={tvFrame!.sub}
+                palette={tvFrame!.palette}
+                entities={ENTITY_PALETTE}
+                fogCells={tvFrame!.fogAdj}
+                doorOpen={tvFrame!.doorOpen}
+                sceneLights={tvFrame!.sceneLights.length ? tvFrame!.sceneLights : null}
+                animPhase={animPhase}
+                dungeonLighting={tvFrame!.dungeonLighting}
+                mapOutdoorTime={tvFrame!.mapOutdoorTime}
+                playerSanitize
+                showEnts={false}
+              />
+            </div>
+          </Suspense>
+        ) : (
+          <canvas
+            ref={canvasRef}
+            className="max-h-[100dvh] max-w-[100dvw]"
+            style={{ imageRendering: "pixelated" }}
+            aria-label="Player dungeon map"
+          />
+        )}
         {laserVisible && (
           <div
             className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full motion-safe:animate-pulse"
@@ -357,6 +345,14 @@ export default function DungeonsPlayerPage() {
           />
         )}
       </div>
+      {!mapState?.dungeonData && (
+        <div className="absolute text-center font-mono text-neutral-500">
+          <div className="mb-2 text-2xl text-neutral-300">
+            TV {tvParam ?? "(local)"}
+          </div>
+          <div className="text-sm">Waiting for the DM to push a map…</div>
+        </div>
+      )}
     </div>
   );
 }

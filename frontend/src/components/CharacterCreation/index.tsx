@@ -16,6 +16,28 @@ import PdfCharacterSheetImport from "./PdfCharacterSheetImport";
 import PdfImportReviewBanner from "./PdfImportReviewBanner";
 import PdfImportStepHints from "./PdfImportStepHints";
 import { ChevronLeft } from "lucide-react";
+import { clsx } from "clsx";
+
+function PdfImportPreviewAside({ url }: { url: string }) {
+  return (
+    <aside className="hidden min-w-0 flex-col gap-2 border border-stone-700 bg-stone-950/85 shadow-lg lg:sticky lg:top-4 lg:flex lg:max-h-[min(88vh,920px)] lg:w-full lg:rounded-lg lg:overflow-hidden">
+      <p className="shrink-0 px-3 pt-3 font-display text-[11px] text-stone-500">Imported PDF (reference)</p>
+      <iframe
+        title="Imported character sheet PDF"
+        src={`${url}#view=FitH`}
+        className="min-h-[min(480px,50vh)] w-full flex-1 border-0 bg-stone-900 lg:min-h-[520px]"
+      />
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        className="shrink-0 px-3 pb-3 text-xs text-dnd-gold hover:underline"
+      >
+        Open in new tab
+      </a>
+    </aside>
+  );
+}
 
 const BASE_STEPS = [
   { num: 1, label: "Basic Info" },
@@ -73,7 +95,15 @@ export default function CharacterCreation() {
   const stepProps = { draft, updateDraft, onNext: goNext };
 
   return (
-    <div className="min-h-full max-w-3xl mx-auto px-3 pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-4 sm:pt-4 sm:pb-6">
+    <div
+      className={clsx(
+        "min-h-full mx-auto px-3 pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-4 sm:pt-4 sm:pb-6",
+        draft.pdfImportPreviewUrl
+          ? "max-w-7xl lg:grid lg:grid-cols-[minmax(0,1fr)_min(38%,420px)] lg:items-start lg:gap-6"
+          : "max-w-3xl",
+      )}
+    >
+      <div className="min-w-0">
       <div className="flex items-center gap-2 sm:gap-3 mb-4 sm:mb-6">
         <button
           type="button"
@@ -131,6 +161,18 @@ export default function CharacterCreation() {
       {mode === "full" ? (
         <>
           <PdfCharacterSheetImport />
+          {draft.pdfImportPreviewUrl && (
+            <p className="mb-4 lg:hidden">
+              <a
+                href={draft.pdfImportPreviewUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-dnd-gold underline"
+              >
+                Open imported PDF in a new tab
+              </a>
+            </p>
+          )}
           <PdfImportReviewBanner />
           <p className="text-xs text-stone-600 mb-6 leading-relaxed">
             Rules follow the D&amp;D 5e SRD (Open5e). Starting above 1st level runs guided steps for each level (HP,
@@ -197,6 +239,10 @@ export default function CharacterCreation() {
             <Step8_Review draft={draft} onBack={goPrev} onSubmit={handleSubmit} />
           )}
         </>
+      )}
+      </div>
+      {mode === "full" && draft.pdfImportPreviewUrl && (
+        <PdfImportPreviewAside url={draft.pdfImportPreviewUrl} />
       )}
     </div>
   );

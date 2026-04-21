@@ -591,6 +591,8 @@ export interface CharacterDraft {
 
   /** After PDF import: builder steps to revisit (with jump links in the UI). Omitted after reset. */
   pdfImportReviewIssues?: PdfImportReviewIssue[];
+  /** Blob URL for the last imported Wizards PDF — shown beside the builder; revoked on reset/submit. */
+  pdfImportPreviewUrl?: string;
 }
 
 export const DEFAULT_DRAFT: CharacterDraft = {

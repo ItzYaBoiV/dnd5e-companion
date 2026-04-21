@@ -56,6 +56,24 @@ const THEME_GLYPH: Record<string, string> = {
   THIEVES_DEN: "⚔",
 };
 
+/** Use when `width`/`height` metadata can lag behind the real `grid` (e.g. after layout fixes). */
+export function effectiveDungeonGridDims(dg: {
+  grid?: number[][];
+  width?: number;
+  height?: number;
+}): { w: number; h: number } {
+  const grid = dg.grid;
+  if (!grid?.length) {
+    return { w: typeof dg.width === "number" ? dg.width : 1, h: typeof dg.height === "number" ? dg.height : 1 };
+  }
+  const gh = grid.length;
+  const gw = grid.reduce((m, row) => Math.max(m, Array.isArray(row) ? row.length : 0), 0);
+  return {
+    w: Math.max(typeof dg.width === "number" ? dg.width : 0, gw),
+    h: Math.max(typeof dg.height === "number" ? dg.height : 0, gh),
+  };
+}
+
 type ForgeGridDungeon = {
   grid: number[][];
   rooms?: Array<{ id: number; x: number; y: number; w: number; h: number; cx: number; cy: number; theme?: string }>;
@@ -63,6 +81,8 @@ type ForgeGridDungeon = {
   decoOverlay?: Array<{ x: number; y: number; ch: string; fg?: string; name?: string; roomId?: number; [k: string]: unknown }>;
   width: number;
   height: number;
+  /** When set, town maps skip per-building ID tiles (they read as ugly boxes on the canvas). */
+  locationType?: string;
   glyphs?: Record<string, string>;
   /** Stream arrows, slippery hints, etc. from forgeLocationUpgrades */
   forgeRenderOverlay?: {
@@ -82,12 +102,20 @@ export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: b
   const rooms = dg.rooms ?? [];
   const entities = dg.entities ?? [];
   const decoOverlay = dg.decoOverlay ?? [];
-  const W = dg.width;
-  const H = dg.height;
   const rawG = dg.glyphs ?? {};
-  if (!grid || !Array.isArray(grid) || grid.length === 0 || typeof W !== "number" || typeof H !== "number") {
-    throw new Error("buildRenderGrid: missing grid, width, or height");
+  if (!grid || !Array.isArray(grid) || grid.length === 0) {
+    throw new Error("buildRenderGrid: missing grid");
   }
+  /** Actual tile array size (grid can be wider/taller than stored width/height after edits). */
+  const gridH = grid.length;
+  const gridW = grid.reduce((m, row) => Math.max(m, Array.isArray(row) ? row.length : 0), 0);
+  if (gridW === 0) {
+    throw new Error("buildRenderGrid: empty grid rows");
+  }
+  const Wmeta = typeof dg.width === "number" ? dg.width : gridW;
+  const Hmeta = typeof dg.height === "number" ? dg.height : gridH;
+  const W = Math.max(Wmeta, gridW);
+  const H = Math.max(Hmeta, gridH);
   const G = {
     floor: ".",
     wall: "#",
@@ -112,9 +140,12 @@ export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: b
     dMap[`${d.x},${d.y}`] = d;
   });
   const labelMap: Record<string, (typeof rooms)[0]> = {};
-  rooms.forEach((r) => {
-    labelMap[`${r.cx},${r.cy}`] = r;
-  });
+  const skipRoomCenterLabels = dg.locationType === "town";
+  if (!skipRoomCenterLabels) {
+    rooms.forEach((r) => {
+      labelMap[`${r.cx},${r.cy}`] = r;
+    });
+  }
   const themeMap: Record<string, string> = {};
   if (showThemes) {
     for (const r of rooms) {
@@ -134,7 +165,9 @@ export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: b
       const deco =
         decoRaw && playerView && (decoRaw as { playerHide?: boolean }).playerHide ? undefined : decoRaw;
       const label = labelMap[k];
-      const tile = grid[y][x];
+      const gridRow = grid[y];
+      const tile =
+        gridRow != null && x < gridRow.length && typeof gridRow[x] === "number" ? gridRow[x]! : T.V;
       let ch: string;
       let eType: string | null = null;
       let fg: string | null = null;

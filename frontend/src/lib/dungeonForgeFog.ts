@@ -1,4 +1,5 @@
 import { DUNGEON_T as T } from "@/lib/dungeonForgeConstants";
+import { effectiveDungeonGridDims } from "@/lib/dungeonForgeRenderGrid";
 import type { BattleToken } from "@/lib/playerMapBroadcast";
 
 export type FogDungeonGrid = {
@@ -70,11 +71,13 @@ export function computeVisibleCellsForPlayer(
   doorOpen: Set<string> | null | undefined,
   doorStates?: Record<string, string> | null,
   fogOpts?: ComputeVisibleFogOpts,
+  /** Extra BFS seeds (e.g. DM paintbrush) — fog still respects doors/walls via the same rules. */
+  extraSeedKeys?: Iterable<string> | null,
 ): Set<string> {
   const rev = revealed instanceof Set ? revealed : new Set(revealed);
   const cells = new Set<string>();
-  const W = dg.width;
-  const H = dg.height;
+  /** Metadata width/height can lag the real `grid` (ragged rows, post-layout fixes). */
+  const { w: W, h: H } = effectiveDungeonGridDims(dg);
   const g = dg.grid;
   if (!g?.length) return cells;
 
@@ -88,6 +91,22 @@ export function computeVisibleCellsForPlayer(
       for (let x = rm.x; x < rm.x + rm.w; x++) {
         if (y < 0 || x < 0 || y >= H || x >= W) continue;
         const k = `${x},${y}`;
+        cells.add(k);
+        seeds.push(k);
+      }
+    }
+  }
+
+  if (extraSeedKeys) {
+    for (const raw of extraSeedKeys) {
+      const parts = String(raw).split(",");
+      if (parts.length !== 2) continue;
+      const x = Number(parts[0]);
+      const y = Number(parts[1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (y < 0 || x < 0 || y >= H || x >= W) continue;
+      const k = `${x},${y}`;
+      if (!cells.has(k)) {
         cells.add(k);
         seeds.push(k);
       }
@@ -282,7 +301,7 @@ export function expandFogWithPlayerTokenVision(
 ): void {
   if (!tokens?.length) return;
   const H = grid.length;
-  const W = H > 0 ? grid[0]?.length ?? 0 : 0;
+  const W = grid.reduce((m, row) => Math.max(m, Array.isArray(row) ? row.length : 0), 0);
   if (W < 1 || H < 1) return;
   for (const t of tokens) {
     if (t.kind !== "player") continue;
@@ -314,7 +333,8 @@ export function expandFogWithPlayerTokenVision(
  * Pick a plausible entry room: perimeter/void-adjacent door, stairs up, map edge touch, then favor south (common outdoor gate).
  */
 export function inferStartingRoomId(dg: FogDungeonGrid): number | null {
-  const { rooms, grid, width: W, height: H } = dg;
+  const { rooms, grid } = dg;
+  const { w: W, h: H } = effectiveDungeonGridDims(dg);
   if (!rooms.length) return null;
 
   function roomTouchesMapEdge(r: (typeof rooms)[0]): boolean {

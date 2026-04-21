@@ -337,9 +337,20 @@ export const useCharacterStore = create<CharacterStore>((set, get) => ({
 
   // ── Draft ─────────────────────────────────────────────────────
   updateDraft: (patch) =>
-    set((state) => ({ draft: { ...state.draft, ...patch } })),
+    set((state) => {
+      const prevUrl = state.draft.pdfImportPreviewUrl;
+      const next = { ...state.draft, ...patch };
+      if (patch.pdfImportPreviewUrl !== undefined && patch.pdfImportPreviewUrl !== prevUrl && prevUrl) {
+        URL.revokeObjectURL(prevUrl);
+      }
+      return { draft: next };
+    }),
 
-  resetDraft: () => set({ draft: { ...DEFAULT_DRAFT } }),
+  resetDraft: () => {
+    const prev = get().draft.pdfImportPreviewUrl;
+    if (prev) URL.revokeObjectURL(prev);
+    set({ draft: { ...DEFAULT_DRAFT } });
+  },
 
   submitDraft: async () => {
     const draft = get().draft;

@@ -6,6 +6,7 @@ import { monsterRouter }   from "./monsters";
 import { dungeonRouter }   from "./dungeons";
 import { encounterRouter } from "./encounters";
 import { sessionRouter }   from "./sessions";
+import { displayRouter }   from "./displays";
 import { workerRouter }    from "./workers";
 
 export const router = Router();
@@ -17,6 +18,7 @@ router.use("/monsters",   monsterRouter);
 router.use("/generate",   dungeonRouter);
 router.use("/encounters", encounterRouter);
 router.use("/sessions",   sessionRouter);
+router.use("/tv",         displayRouter);
 router.use("/workers",    workerRouter);   // AI worker registration — no SSH needed
 
 router.use((_req, res) => {

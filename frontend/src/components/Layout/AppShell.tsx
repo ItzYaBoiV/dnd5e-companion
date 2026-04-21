@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Outlet, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { BookOpen, Users, Menu, X, Shield, Swords, Map, Skull } from "lucide-react";
+import DmPlayTvNavCompact from "@/components/Layout/DmPlayTvNavCompact";
 import { useUIStore } from "@/store/uiStore";
 import { clsx } from "clsx";
 
@@ -36,7 +37,7 @@ export default function AppShell() {
       <aside
         className={clsx(
           "hidden md:flex flex-col bg-dnd-dark border-r border-dnd-border/60 transition-all duration-200 flex-shrink-0 z-40",
-          sidebarOpen ? "w-52" : "w-14"
+          sidebarOpen ? "w-52" : "w-14",
         )}
       >
         <div className="flex items-center gap-3 px-3 py-4 border-b border-gray-800">
@@ -60,29 +61,36 @@ export default function AppShell() {
           )}
         </div>
 
-        <nav className="flex flex-col gap-1 p-2 flex-1">
-          {NAV.map(({ to, icon: Icon, label, description }) => (
-            <NavLink
-              key={to}
-              to={to}
-              title={description}
-              className={() =>
-                clsx(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-md transition-colors",
-                  routeIsActive(pathname, to)
-                    ? "bg-dnd-red text-white"
-                    : "text-gray-400 hover:text-white hover:bg-gray-800"
-                )
-              }
-            >
-              <Icon size={17} className="flex-shrink-0" />
-              {sidebarOpen && <span className="font-display text-sm font-semibold tracking-wide">{label}</span>}
-            </NavLink>
-          ))}
-        </nav>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
+            {NAV.map(({ to, icon: Icon, label, description }) => (
+              <NavLink
+                key={to}
+                to={to}
+                title={description}
+                className={() =>
+                  clsx(
+                    "flex items-center gap-3 px-3 py-2.5 rounded-md transition-colors",
+                    routeIsActive(pathname, to)
+                      ? "bg-dnd-red text-white"
+                      : "text-gray-400 hover:text-white hover:bg-gray-800",
+                  )
+                }
+              >
+                <Icon size={17} className="flex-shrink-0" />
+                {sidebarOpen && <span className="font-display text-sm font-semibold tracking-wide">{label}</span>}
+              </NavLink>
+            ))}
+          </nav>
+          {sidebarOpen && routeIsActive(pathname, "/play") && (
+            <div className="shrink-0 border-t border-gray-800 px-2 py-2">
+              <DmPlayTvNavCompact />
+            </div>
+          )}
+        </div>
 
         {sidebarOpen && (
-          <div className="p-3 border-t border-gray-800">
+          <div className="shrink-0 border-t border-gray-800 p-3">
             <p className="text-xs text-gray-600 font-display">d20madjd.quest</p>
             <p className="text-xs text-gray-700">D&amp;D 5e Companion</p>
           </div>
@@ -109,7 +117,7 @@ export default function AppShell() {
               title={description}
               className={clsx(
                 "flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg py-1.5 transition-colors touch-manipulation",
-                active ? "bg-dnd-red text-parchment" : "text-stone-400 active:bg-dnd-panel"
+                active ? "bg-dnd-red text-parchment" : "text-stone-400 active:bg-dnd-panel",
               )}
             >
               <Icon size={20} className="flex-shrink-0" strokeWidth={active ? 2.25 : 2} />

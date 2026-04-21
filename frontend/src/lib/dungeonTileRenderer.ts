@@ -104,8 +104,8 @@ export type RenderTileOpts = {
   vignettePass?: boolean;
   /** Distance-based extra dimming (Phase 3-C). */
   depthFog?: boolean;
-  /** Procedural floor/wall micro detail (Phase 3-A). */
-  tileDetailStyle?: "dungeon" | "cave" | "temple" | null;
+  /** Procedural floor/wall micro detail (Phase 3-A). `town` = softer yards + buildings (no dungeon creases). */
+  tileDetailStyle?: "dungeon" | "cave" | "temple" | "town" | null;
   /** DM / player battle pips (drawn above terrain; respect fog when `fogCells` set). Token coords match the `grid` passed in (local if cropped). */
   battleTokens?: BattleToken[] | null;
   /** Loaded images for `BattleToken.portraitUrl` / `spriteUrl` (keyed by URL). */
@@ -117,6 +117,20 @@ export type RenderTileOpts = {
    * Used on DM + player TV for performance.
    */
   playerSightRingCells?: number | null;
+  /**
+   * Outdoor maps (town / road): scales down volumetric darkness so day & dusk stay readable.
+   * Caves / dungeons: omit (undefined).
+   */
+  mapOutdoorTime?: "day" | "dusk" | "night";
+  /**
+   * When `fogCells` is set, fill **unexplored** cells with this color (e.g. DM `fogColor`) instead of `palette.void`
+   * so letterboxing and fog read as one surface on the player TV.
+   */
+  fogUnexploredColor?: string;
+  /** Subtle shimmer on unexplored tiles (uses `animPhase`). */
+  fogAmbientAnim?: boolean;
+  /** Highlight explored↔unexplored edges (player / TV). Default on with `playerSanitize` + fog. */
+  fogFrontierHighlight?: boolean;
 };
 
 export type RenderCell = {
@@ -150,17 +164,29 @@ const T_MURDER_HOLE = 18;
 const T_CELL_BARS = 19;
 const T_ALLEY = 20;
 
-/** Wall sconce lights along corridors for lit dungeons (~30 ft / 6 tiles). */
+/** Wall sconce lights along corridors for lit dungeons — favors junctions and door-adjacent tiles, ~every 3rd cell along runs. */
 function collectDungeonLitSconces(grid: RenderCell[][], cols: number, rows: number): SceneLight[] {
   const out: SceneLight[] = [];
   for (let y = 1; y < rows - 1; y++) {
     for (let x = 1; x < cols - 1; x++) {
       const c = grid[y]![x]!;
       if (c.tile !== T_CORRIDOR) continue;
-      if ((x + y) % 6 !== 0) continue;
       const n = [grid[y - 1]?.[x]?.tile, grid[y + 1]?.[x]?.tile, grid[y]?.[x - 1]?.tile, grid[y]?.[x + 1]?.tile];
-      if (!n.some((t) => t === T_WALL || t === T_DOOR || t === T_SECRET_DOOR || t === T_GATE || t === T_DRAWBRIDGE))
-        continue;
+      const wallOrDoor = (t: number | undefined) =>
+        t === T_WALL || t === T_DOOR || t === T_SECRET_DOOR || t === T_GATE || t === T_DRAWBRIDGE;
+      if (!n.some(wallOrDoor)) continue;
+      let corrN = 0;
+      for (const t of n) {
+        if (t === T_CORRIDOR) corrN++;
+      }
+      let doorN = 0;
+      for (const t of n) {
+        if (t === T_DOOR || t === T_SECRET_DOOR || t === T_GATE || t === T_DRAWBRIDGE) doorN++;
+      }
+      const junction = corrN >= 3;
+      const nearDoor = doorN > 0;
+      const alongRun = (x + y) % 3 === 0;
+      if (!junction && !nearDoor && !alongRun) continue;
       out.push({ gx: x, gy: y, radiusCells: 5, intensity: 0.14, kind: "torch" });
     }
   }
@@ -289,9 +315,9 @@ function applyFloorWallMicroDetail(
   s: number,
   gx: number,
   gy: number,
-  style: "dungeon" | "cave" | "temple" | null,
+  style: "dungeon" | "cave" | "temple" | "town" | null,
 ): void {
-  if (!style) return;
+  if (!style || style === "town") return;
   const t = cell.tile;
   if (t === T_FLOOR || t === T_CORRIDOR) {
     if (style === "dungeon" && (gx + gy) % 4 === 0) {
@@ -319,6 +345,73 @@ function applyFloorWallMicroDetail(
     const by = py + Math.floor(s * 0.42);
     ctx.fillRect(px + 1, by, s - 2, 1);
   }
+}
+
+function fillUnexploredFogTile(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  cellPx: number,
+  baseColor: string,
+  animPhase: number,
+  ambientAnim: boolean,
+): void {
+  ctx.fillStyle = baseColor;
+  ctx.fillRect(px, py, cellPx, cellPx);
+  if (ambientAnim) {
+    const ph = animPhase % 1;
+    const a = 0.02 + 0.022 * Math.sin(ph * Math.PI * 2);
+    ctx.fillStyle = `rgba(235, 215, 190, ${a})`;
+    ctx.fillRect(px, py, cellPx, cellPx);
+  }
+}
+
+function drawFogExplorationFrontier(
+  ctx: CanvasRenderingContext2D,
+  fog: Set<string>,
+  cols: number,
+  rows: number,
+  cellPx: number,
+): void {
+  const lw = Math.max(1, Math.floor(cellPx / 18));
+  ctx.save();
+  ctx.strokeStyle = "rgba(255, 210, 140, 0.5)";
+  ctx.lineWidth = lw;
+  ctx.globalAlpha = 0.7;
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      if (!fog.has(`${x},${y}`)) continue;
+      const px = x * cellPx;
+      const py = y * cellPx;
+      const s = cellPx;
+      const inset = lw * 0.45;
+      if (y > 0 && !fog.has(`${x},${y - 1}`)) {
+        ctx.beginPath();
+        ctx.moveTo(px, py + inset);
+        ctx.lineTo(px + s, py + inset);
+        ctx.stroke();
+      }
+      if (y + 1 < rows && !fog.has(`${x},${y + 1}`)) {
+        ctx.beginPath();
+        ctx.moveTo(px, py + s - inset);
+        ctx.lineTo(px + s, py + s - inset);
+        ctx.stroke();
+      }
+      if (x > 0 && !fog.has(`${x - 1},${y}`)) {
+        ctx.beginPath();
+        ctx.moveTo(px + inset, py);
+        ctx.lineTo(px + inset, py + s);
+        ctx.stroke();
+      }
+      if (x + 1 < cols && !fog.has(`${x + 1},${y}`)) {
+        ctx.beginPath();
+        ctx.moveTo(px + s - inset, py);
+        ctx.lineTo(px + s - inset, py + s);
+        ctx.stroke();
+      }
+    }
+  }
+  ctx.restore();
 }
 
 /**
@@ -352,12 +445,16 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingEnabled = false;
 
-  ctx.fillStyle = palette.void;
-  ctx.fillRect(0, 0, cssW, cssH);
-
   const showEnts = opts.showEnts !== false;
   const fog = opts.fogCells;
   const sanitize = !!opts.playerSanitize;
+  const fogHiddenPaint = fog && opts.fogUnexploredColor ? opts.fogUnexploredColor : palette.void;
+  const fogAmbientOn = !!(fog && opts.fogAmbientAnim);
+  const showFogFrontier = !!(fog && sanitize && opts.fogFrontierHighlight !== false);
+
+  ctx.fillStyle = fog ? fogHiddenPaint : palette.void;
+  ctx.fillRect(0, 0, cssW, cssH);
+
   const hideDeco = opts.hideDecoKeys ?? new Set<string>();
   const hi = opts.highlightRoom;
   const animPhase = opts.animPhase ?? 0;
@@ -375,7 +472,7 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
       ? collectDungeonLitSconces(grid, cols, rows)
       : [];
   const mergedLights: SceneLight[] = [...sceneLights, ...fixtureTorchLights, ...litSconces];
-  const lightDarkBuf =
+  const lightDarkBufRaw =
     mergedLights.length > 0
       ? computeOccludedLightDarkness(grid, cols, rows, mergedLights, {
           doorOpen: opts.doorOpen ?? null,
@@ -384,7 +481,29 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
         })
       : null;
 
+  const outdoorDarkMul =
+    opts.mapOutdoorTime === "day"
+      ? 0.22
+      : opts.mapOutdoorTime === "dusk"
+        ? 0.46
+        : opts.mapOutdoorTime === "night"
+          ? 0.78
+          : 1;
+
+  const lightDarkBuf =
+    lightDarkBufRaw && outdoorDarkMul < 1 && opts.mapOutdoorTime
+      ? (() => {
+          const copy = new Float32Array(lightDarkBufRaw.length);
+          for (let i = 0; i < lightDarkBufRaw.length; i++) {
+            copy[i] = lightDarkBufRaw[i]! * outdoorDarkMul;
+          }
+          return copy;
+        })()
+      : lightDarkBufRaw;
+
   const tdStyle = opts.tileDetailStyle ?? null;
+  /** Town maps: skip AO, extruded depth, and wall→floor drop shadows (they exaggerate “boxed” lots). */
+  const townReadableMap = tdStyle === "town";
   const aoPass = !!opts.aoPass;
   const depthPass = !!opts.depthPass;
   const vignettePass = !!opts.vignettePass;
@@ -396,8 +515,7 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
     const px = x * cellPx;
     const py = y * cellPx;
     if (fog && !fog.has(`${x},${y}`)) {
-      ctx.fillStyle = palette.void;
-      ctx.fillRect(px, py, cellPx, cellPx);
+      fillUnexploredFogTile(ctx, px, py, cellPx, fogHiddenPaint, animPhase, fogAmbientOn);
       return;
     }
     const cell = grid[y][x];
@@ -419,6 +537,7 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
       doorOpenSet,
       doorStates,
       animPhase,
+      tdStyle,
     );
     applyFloorWallMicroDetail(ctx, cell, px, py, cellPx, x, y, tdStyle);
     if (hi && x >= hi.x && x < hi.x + hi.w && y >= hi.y && y < hi.y + hi.h) {
@@ -433,7 +552,7 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
     }
   }
 
-  if (aoPass && !ink) {
+  if (aoPass && !ink && !townReadableMap) {
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < cols; x++) {
         if (fog && !fog.has(`${x},${y}`)) continue;
@@ -475,7 +594,7 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
     }
   }
 
-  if (depthPass && !ink) {
+  if (depthPass && !ink && !townReadableMap) {
     const faceWall = 0.5;
     const facePillar = 0.38;
     for (let y = 0; y < rows; y++) {
@@ -501,7 +620,7 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
     }
   }
 
-  if (!ink) {
+  if (!ink && !townReadableMap) {
     let shadowMul = 1;
     if (opts.dungeonLighting === "lit") shadowMul = 0.3;
     else if (opts.dungeonLighting === "dim") shadowMul = 0.6;
@@ -593,20 +712,23 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
       const px = x * cellPx;
       const py = y * cellPx;
       if (fog && !fog.has(`${x},${y}`)) {
-        ctx.fillStyle = palette.void;
-        ctx.fillRect(px, py, cellPx, cellPx);
+        fillUnexploredFogTile(ctx, px, py, cellPx, fogHiddenPaint, animPhase, fogAmbientOn);
         continue;
       }
       if (lightDarkBuf) {
-        let dark = lightDarkBuf[y * cols + x] ?? 0;
-        if (opts.dungeonLighting === "dark") dark = Math.min(1, dark + 0.42);
-        else if (opts.dungeonLighting === "dim") dark = Math.min(1, dark + 0.18);
+        let dark = (lightDarkBuf[y * cols + x] ?? 0) * 0.9;
+        if (opts.dungeonLighting === "dark") dark = Math.min(1, dark + 0.3);
+        else if (opts.dungeonLighting === "dim") dark = Math.min(1, dark + 0.1);
         if (dark > 0.001) {
           ctx.fillStyle = `rgba(0,0,0,${dark})`;
           ctx.fillRect(px, py, cellPx, cellPx);
         }
       }
     }
+  }
+
+  if (showFogFrontier && fog) {
+    drawFogExplorationFrontier(ctx, fog, cols, rows, cellPx);
   }
 
   const dmHints = opts.forgeDmHints;
@@ -654,9 +776,16 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
       ctx.save();
       ctx.translate(sl.x * s + s / 2, sl.y * s + s / 2);
       ctx.rotate(sl.rot ?? 0);
-      ctx.font = `${Math.max(7, s * 0.18)}px system-ui,sans-serif`;
-      ctx.fillStyle = "rgba(200, 190, 170, 0.85)";
+      const fontPx = Math.max(7, s * 0.17);
+      ctx.font = `${fontPx}px system-ui,sans-serif`;
       ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.lineJoin = "round";
+      ctx.miterLimit = 2;
+      ctx.lineWidth = Math.max(2.5, fontPx * 0.28);
+      ctx.strokeStyle = "rgba(12, 10, 8, 0.88)";
+      ctx.fillStyle = "rgba(235, 226, 208, 0.96)";
+      ctx.strokeText(sl.text, 0, 0);
       ctx.fillText(sl.text, 0, 0);
       ctx.restore();
     }
@@ -725,10 +854,10 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
     const Wpx = cols * cellPx;
     const Hpx = rows * cellPx;
     if (amb.timeOfDay === "dusk") {
-      ctx.fillStyle = "rgba(25, 20, 55, 0.22)";
+      ctx.fillStyle = "rgba(25, 20, 55, 0.16)";
       ctx.fillRect(0, 0, Wpx, Hpx);
     } else if (amb.timeOfDay === "night") {
-      ctx.fillStyle = "rgba(5, 5, 25, 0.52)";
+      ctx.fillStyle = "rgba(5, 5, 25, 0.38)";
       ctx.fillRect(0, 0, Wpx, Hpx);
     }
     if (amb.weather === "rain" || amb.weather === "heavy_rain") {
@@ -768,7 +897,7 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
             dMin = Math.min(dMin, Math.hypot(x - L.gx, y - L.gy));
           }
           if (dMin < 8) continue;
-          const alpha = dMin >= 16 ? 0.6 : ((dMin - 8) / 8) * 0.6;
+          const alpha = dMin >= 16 ? 0.42 : ((dMin - 8) / 8) * 0.42;
           if (alpha < 0.02) continue;
           const px = x * cellPx;
           const py = y * cellPx;
@@ -783,7 +912,7 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
       const r = Math.hypot(cssW, cssH) / 2;
       const g = ctx.createRadialGradient(cx, cy, r * 0.12, cx, cy, r);
       g.addColorStop(0, "rgba(0,0,0,0)");
-      g.addColorStop(1, "rgba(0,0,0,0.45)");
+      g.addColorStop(1, "rgba(0,0,0,0.3)");
       ctx.save();
       ctx.globalCompositeOperation = "multiply";
       ctx.fillStyle = g;
@@ -943,10 +1072,11 @@ function drawBaseTile(
   doorOpen?: Set<string> | null,
   doorStates?: Record<string, string> | null,
   animPhase = 0,
+  detailStyle: RenderTileOpts["tileDetailStyle"] = null,
 ): void {
   const t = cell.tile;
   if (sanitize && t === T_SECRET_DOOR) {
-    drawTileByKind(ctx, T_WALL, px, py, s, p, true, doorOpen, doorStates, gx, gy, animPhase);
+    drawTileByKind(ctx, T_WALL, px, py, s, p, true, doorOpen, doorStates, gx, gy, animPhase, detailStyle);
     return;
   }
 
@@ -968,11 +1098,11 @@ function drawBaseTile(
     hideDeco.has(String((cell.extra as { decoKey?: string }).decoKey));
 
   if (hideEntityOverlay || hideLabel || hideDecoCell) {
-    drawTileByKind(ctx, t, px, py, s, p, true, doorOpen, doorStates, gx, gy, animPhase);
+    drawTileByKind(ctx, t, px, py, s, p, true, doorOpen, doorStates, gx, gy, animPhase, detailStyle);
     return;
   }
 
-  drawTileByKind(ctx, t, px, py, s, p, false, doorOpen, doorStates, gx, gy, animPhase);
+  drawTileByKind(ctx, t, px, py, s, p, false, doorOpen, doorStates, gx, gy, animPhase, detailStyle);
 }
 
 function drawTileByKind(
@@ -988,6 +1118,7 @@ function drawTileByKind(
   gx?: number,
   gy?: number,
   animPhase = 0,
+  detailStyle: RenderTileOpts["tileDetailStyle"] = null,
 ): void {
   if (t === T_VOID) {
     ctx.fillStyle = p.void;
@@ -996,6 +1127,21 @@ function drawTileByKind(
   }
 
   if (t === T_WALL) {
+    if (detailStyle === "town") {
+      ctx.fillStyle = p.wallBg;
+      ctx.fillRect(px, py, s, s);
+      ctx.fillStyle = p.wallFg;
+      ctx.globalAlpha = 0.55;
+      ctx.fillRect(px, py, s, Math.max(1, Math.floor(s * 0.1)));
+      ctx.fillRect(px, py, Math.max(1, Math.floor(s * 0.07)), s);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = p.wallShadow;
+      const sh = Math.max(1, Math.floor(s * 0.12));
+      ctx.fillRect(px, py + s - sh, s, sh);
+      const sw = Math.max(1, Math.floor(s * 0.08));
+      ctx.fillRect(px + s - sw, py, sw, s);
+      return;
+    }
     ctx.fillStyle = p.wallBg;
     ctx.fillRect(px, py, s, s);
     ctx.fillStyle = p.wallFg;
@@ -1038,7 +1184,22 @@ function drawTileByKind(
     ctx.fillRect(px, py, s, s);
     const dotThreshold = isCorr ? 8 : 12;
     const dotAlpha = mutedFloor ? 0.2 : isCorr ? 0.25 : 0.22;
-    if (s >= dotThreshold) {
+    const townYard = detailStyle === "town" && t === T_FLOOR;
+    if (townYard && s >= 10) {
+      ctx.fillStyle = detail;
+      ctx.globalAlpha = mutedFloor ? 0.06 : 0.08;
+      const sp = Math.floor(s / 5);
+      for (let dotX = sp; dotX < s; dotX += sp) {
+        for (let dotY = sp; dotY < s; dotY += sp) {
+          if (((gx ?? 0) + (gy ?? 0) + dotX + dotY) % 2 === 0) continue;
+          const r = Math.max(0.35, s * 0.025);
+          ctx.beginPath();
+          ctx.arc(px + dotX, py + dotY, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
+    } else if (s >= dotThreshold && !townYard) {
       ctx.fillStyle = detail;
       ctx.globalAlpha = dotAlpha;
       const spacing = Math.floor(s / 4);
@@ -1323,7 +1484,7 @@ function drawTileByKind(
   if (t === T_ROAD) {
     ctx.fillStyle = p.roadBg;
     ctx.fillRect(px, py, s, s);
-    if (s >= 8) {
+    if (s >= 8 && detailStyle !== "town") {
       ctx.strokeStyle = p.roadLine;
       ctx.lineWidth = Math.max(0.5, s * 0.04);
       ctx.globalAlpha = 0.4;
@@ -1338,6 +1499,16 @@ function drawTileByKind(
         ctx.lineTo(px + s, py + gv);
         ctx.stroke();
       }
+      ctx.globalAlpha = 1;
+    } else if (s >= 10 && detailStyle === "town") {
+      ctx.strokeStyle = p.roadLine;
+      ctx.lineWidth = Math.max(0.4, s * 0.03);
+      ctx.globalAlpha = 0.14;
+      const mid = Math.floor(s / 2);
+      ctx.beginPath();
+      ctx.moveTo(px + mid, py + 1);
+      ctx.lineTo(px + mid, py + s - 1);
+      ctx.stroke();
       ctx.globalAlpha = 1;
     }
     return;
@@ -1395,6 +1566,55 @@ function drawWallTorchDeco(
   ctx.fillStyle = accent;
   ctx.beginPath();
   ctx.arc(cx, cy, s * 0.34 * flick, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+/** Narrow façade bracket — wall sconces use this so flames do not dominate the masonry cell. */
+function drawWallTorchDecoSmall(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  s: number,
+  animPhase: number,
+  accent: string,
+): void {
+  const sc = 0.58;
+  const flick = 0.82 + Math.sin(animPhase * Math.PI * 2 * 4.6) * 0.09;
+  const bob = Math.sin(animPhase * Math.PI * 2 * 2.8) * s * 0.015;
+  const bx = px + Math.floor(s * 0.38);
+  const by = py + Math.floor(s * 0.18) + bob;
+  const w = Math.max(1, Math.floor(s * 0.14 * sc * flick));
+  const h = Math.max(2, Math.floor(s * 0.26 * sc * flick));
+
+  ctx.fillStyle = "#2c2824";
+  ctx.fillRect(bx - 1, Math.floor(py + s * 0.48), Math.max(2, Math.floor(s * 0.14)), Math.floor(s * 0.34));
+
+  ctx.fillStyle = "#cc4400";
+  ctx.fillRect(bx, by, w, h);
+  ctx.fillStyle = "#ff7a1a";
+  ctx.fillRect(
+    bx + Math.floor(w * 0.12),
+    by + Math.floor(h * 0.1),
+    Math.max(1, Math.floor(w * 0.6)),
+    Math.max(1, Math.floor(h * 0.45)),
+  );
+  ctx.fillStyle = "#ffe8a0";
+  ctx.globalAlpha = 0.9;
+  ctx.fillRect(
+    bx + Math.floor(w * 0.3),
+    by + Math.floor(h * 0.06),
+    Math.max(1, Math.floor(w * 0.35)),
+    Math.max(1, Math.floor(h * 0.22)),
+  );
+  ctx.globalAlpha = 1;
+
+  const cx = bx + w / 2;
+  const cy = by + h * 0.32;
+  ctx.globalAlpha = 0.1 + flick * 0.06;
+  ctx.fillStyle = accent;
+  ctx.beginPath();
+  ctx.arc(cx, cy, s * 0.2 * flick, 0, Math.PI * 2);
   ctx.fill();
   ctx.globalAlpha = 1;
 }
@@ -1547,7 +1767,10 @@ function drawOverlays(
         ? String((cell.extra as { decoKey?: string }).decoKey ?? "")
         : "";
     if (decoKey === "torch_w" && s >= 6) {
-      drawWallTorchDeco(ctx, px, py, s, animPhase, fg);
+      const sconce =
+        cell.extra && typeof cell.extra === "object" && (cell.extra as { townWallSconce?: boolean }).townWallSconce;
+      if (sconce) drawWallTorchDecoSmall(ctx, px, py, s, animPhase, fg);
+      else drawWallTorchDeco(ctx, px, py, s, animPhase, fg);
       return;
     }
     ctx.fillStyle = fg;

@@ -40,6 +40,84 @@ const TOWN_HOOKS = [
   "Knows every rumor on Market Lane.",
 ];
 const STREET_NAMES = ["Mill Road", "King's Way", "Market Lane", "Temple Row", "Riverside Walk", "Coppergate"];
+
+function isRoadishTile(tile: number | undefined): boolean {
+  if (tile == null) return false;
+  return tile === T.ROAD || tile === T.BRIDGE || tile === T.ALLEY;
+}
+
+function roadIntersectionCandidates(grid: number[][], W: number, H: number): { x: number; y: number }[] {
+  const out: { x: number; y: number }[] = [];
+  for (let y = 2; y < H - 2; y++) {
+    for (let x = 2; x < W - 2; x++) {
+      const t = grid[y]![x];
+      if (!isRoadishTile(t)) continue;
+      let n = 0;
+      for (const [dx, dy] of [
+        [0, 1],
+        [0, -1],
+        [1, 0],
+        [-1, 0],
+      ] as const) {
+        if (isRoadishTile(grid[y + dy]?.[x + dx])) n++;
+      }
+      if (n >= 2) out.push({ x, y });
+    }
+  }
+  return out;
+}
+
+function allRoadCells(grid: number[][], W: number, H: number): { x: number; y: number }[] {
+  const out: { x: number; y: number }[] = [];
+  for (let y = 2; y < H - 2; y++) {
+    for (let x = 2; x < W - 2; x++) {
+      if (isRoadishTile(grid[y]?.[x])) out.push({ x, y });
+    }
+  }
+  return out;
+}
+
+/** Keep names on intersections / road centers so they do not paint over yards or buildings. */
+function anchorTownStreetLabelsOnRoads(
+  grid: number[][],
+  W: number,
+  H: number,
+  items: { text: string; rot?: number }[],
+  rng: Rng,
+): { x: number; y: number; text: string; rot?: number }[] {
+  let candidates = roadIntersectionCandidates(grid, W, H);
+  if (candidates.length < Math.max(4, items.length)) {
+    candidates = allRoadCells(grid, W, H);
+  }
+  for (let i = candidates.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const a = candidates[i]!;
+    candidates[i] = candidates[j]!;
+    candidates[j] = a;
+  }
+  const minD = Math.max(5, Math.min(12, Math.floor(Math.min(W, H) / 7)));
+  const placed: { x: number; y: number; text: string; rot?: number }[] = [];
+  const used: { x: number; y: number }[] = [];
+  for (const item of items) {
+    let found: { x: number; y: number } | null = null;
+    outer: for (let idx = 0; idx < candidates.length; idx++) {
+      const p = candidates[idx]!;
+      if (used.every((u) => Math.max(Math.abs(p.x - u.x), Math.abs(p.y - u.y)) >= minD)) {
+        found = p;
+        candidates.splice(idx, 1);
+        break outer;
+      }
+    }
+    if (!found && candidates.length) {
+      found = candidates.shift()!;
+    }
+    if (found) {
+      used.push(found);
+      placed.push({ x: found.x, y: found.y, text: item.text, rot: item.rot });
+    }
+  }
+  return placed;
+}
 const HERALD = [
   { color: "Crimson", charge: "a white tower" },
   { color: "Azure", charge: "a golden lion" },
@@ -546,17 +624,6 @@ export function enrichTownFeatures(args: {
   }
   hints.patrolPaths = patrols;
 
-  // Street name overlays (3–5)
-  hints.streetLabels = [];
-  const nNames = rI(3, 5, rng);
-  for (let i = 0; i < nNames; i++) {
-    hints.streetLabels.push({
-      x: rI(Math.floor(W / 4), Math.floor((3 * W) / 4), rng),
-      y: rI(Math.floor(H / 4), Math.floor((3 * H) / 4), rng),
-      text: pick(STREET_NAMES, rng),
-      rot: rng() < 0.5 ? 0 : -Math.PI / 2,
-    });
-  }
   const districtLabel: Record<string, string> = {
     balanced: "Mixed district",
     market_hub: "Market quarter",
@@ -564,37 +631,26 @@ export function enrichTownFeatures(args: {
     noble_ring: "Noble quarter",
     poor_sprawl: "Workers' sprawl",
   };
-  if (cfg.townDistrictStyle && districtLabel[cfg.townDistrictStyle]) {
-    hints.streetLabels.push({
-      x: rI(Math.floor(W / 3), Math.floor((2 * W) / 3), rng),
-      y: rI(Math.floor(H / 3), Math.floor((2 * H) / 3), rng),
-      text: districtLabel[cfg.townDistrictStyle],
-      rot: 0,
+  const rawStreetItems: { text: string; rot?: number }[] = [];
+  const nNames = rI(2, 4, rng);
+  for (let i = 0; i < nNames; i++) {
+    rawStreetItems.push({
+      text: pick(STREET_NAMES, rng),
+      rot: rng() < 0.65 ? 0 : -Math.PI / 2,
     });
+  }
+  if (cfg.townDistrictStyle && districtLabel[cfg.townDistrictStyle]) {
+    rawStreetItems.push({ text: districtLabel[cfg.townDistrictStyle], rot: 0 });
   }
   if (cfg.townWaterfront === "edge_river") {
-    hints.streetLabels.push({
-      x: rI(Math.floor(W / 6), Math.floor((5 * W) / 6), rng),
-      y: rI(2, Math.max(2, Math.floor(H / 5)), rng),
-      text: "Riverfront",
-      rot: 0,
-    });
+    rawStreetItems.push({ text: "Riverfront", rot: 0 });
   } else if (cfg.townWaterfront === "canals") {
-    hints.streetLabels.push({
-      x: Math.floor(W / 2),
-      y: Math.floor(H / 2),
-      text: "Canal ward",
-      rot: 0,
-    });
+    rawStreetItems.push({ text: "Canal ward", rot: 0 });
   }
   if (arch === "coastal" && cfg.townWaterfront && cfg.townWaterfront !== "none") {
-    hints.streetLabels.push({
-      x: rI(Math.floor(W / 4), Math.floor((3 * W) / 4), rng),
-      y: rI(Math.floor(H / 4), Math.floor((3 * H) / 4), rng),
-      text: "Harbor front",
-      rot: 0,
-    });
+    rawStreetItems.push({ text: "Harbor front", rot: 0 });
   }
+  hints.streetLabels = anchorTownStreetLabelsOnRoads(grid, W, H, rawStreetItems, rng);
 
   // Narrow alleys: darken 1-tile ROAD spurs between blocks
   for (let y = 3; y < H - 3; y += 5) {
@@ -649,6 +705,43 @@ export function enrichTownFeatures(args: {
       }
     }
     hints.chaseSegments = seg.slice(0, 40);
+  }
+
+  // Façade sconces (visual); street lamp SceneLights are computed in collectTownStreetLights.
+  let sconceN = 0;
+  const maxSconces = 44;
+  for (let y = 2; y < H - 2 && sconceN < maxSconces; y++) {
+    for (let x = 2; x < W - 2 && sconceN < maxSconces; x++) {
+      if (grid[y]?.[x] !== T.W) continue;
+      let facesRoad = false;
+      for (const [dx, dy] of [
+        [0, 1],
+        [0, -1],
+        [1, 0],
+        [-1, 0],
+      ] as const) {
+        const t = grid[y + dy]?.[x + dx];
+        if (t === T.ROAD || t === T.BRIDGE || t === T.ALLEY) {
+          facesRoad = true;
+          break;
+        }
+      }
+      if (!facesRoad || rng() > 0.24) continue;
+      const k = `${x},${y}`;
+      if (usedCells.has(k)) continue;
+      usedCells.add(k);
+      decoOverlay.push({
+        x,
+        y,
+        ch: "*",
+        fg: "#fa0",
+        name: "Wall sconce",
+        decoKey: "torch_w",
+        roomId: null,
+        townWallSconce: true,
+      });
+      sconceN++;
+    }
   }
 
   return hints;

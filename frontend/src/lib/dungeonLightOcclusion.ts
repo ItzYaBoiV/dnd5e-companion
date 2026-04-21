@@ -99,6 +99,7 @@ export function collectTorchFixtureLights(grid: RenderCell[][], cols: number, ro
       if (c.eType !== "deco" || !c.extra || typeof c.extra !== "object") continue;
       const dk = String((c.extra as { decoKey?: string }).decoKey ?? "");
       if (dk !== "torch_w") continue;
+      if ((c.extra as { townWallSconce?: boolean }).townWallSconce) continue;
       out.push({
         gx: x,
         gy: y,
@@ -116,6 +117,11 @@ function idx(cols: number, x: number, y: number): number {
 }
 
 /** Integer line cells from (x0,y0) to (x1,y1), inclusive start, Bresenham. */
+/** Max black overlay alpha from light occlusion (lower = brighter overall maps). */
+const LIGHT_DARKNESS_ALPHA_SCALE = 0.34;
+/** Every cell gets at least this much “fill” light so distant corners are not pitch black. */
+const AMBIENT_BRIGHT_FLOOR = 0.11;
+
 function bresenhamLine(x0: number, y0: number, x1: number, y1: number): { x: number; y: number }[] {
   const out: { x: number; y: number }[] = [];
   let x = x0;
@@ -210,8 +216,9 @@ export function computeFloodFillLightDarkness(
   const dark = new Float32Array(cols * rows);
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
-      const b = bright[idx(cols, x, y)];
-      dark[idx(cols, x, y)] = (1 - b) * 0.48;
+      const i = idx(cols, x, y);
+      const b = Math.min(1, Math.max(bright[i], AMBIENT_BRIGHT_FLOOR));
+      dark[i] = (1 - b) * LIGHT_DARKNESS_ALPHA_SCALE;
     }
   }
   return dark;
@@ -296,15 +303,16 @@ function computeRaycastLightDarkness(
   const dark = new Float32Array(cols * rows);
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
-      const b = bright[idx(cols, x, y)];
-      dark[idx(cols, x, y)] = (1 - b) * 0.48;
+      const i = idx(cols, x, y);
+      const b = Math.min(1, Math.max(bright[i], AMBIENT_BRIGHT_FLOOR));
+      dark[i] = (1 - b) * LIGHT_DARKNESS_ALPHA_SCALE;
     }
   }
   return dark;
 }
 
 /**
- * Per-cell darkness alpha in [0, ~0.5] matching `rgba(0,0,0,alpha)` overlay (higher = darker).
+ * Per-cell darkness alpha matching `rgba(0,0,0,alpha)` overlay (higher = darker).
  */
 export function computeOccludedLightDarkness(
   grid: RenderCell[][],

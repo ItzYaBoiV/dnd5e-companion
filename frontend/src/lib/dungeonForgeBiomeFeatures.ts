@@ -80,7 +80,8 @@ function roadCarvePath(
   let y = a.cy;
   const goH = rng() < 0.5;
   const tileType = T.ROAD;
-  const canCarve = (t: number | undefined) => t === T.V || t === T.W;
+  /** Wilderness: carve through grass/floor/void — do not paint dungeon wall halos. */
+  const canCarve = (t: number | undefined) => t === T.V || t === T.W || t === T.F;
   const carve = (cx: number, cy: number) => {
     if (cy >= 0 && cy < H && cx >= 0 && cx < W) {
       if (canCarve(grid[cy][cx])) grid[cy][cx] = tileType;
@@ -88,12 +89,6 @@ function roadCarvePath(
         if (cy + d >= 0 && cy + d < H && canCarve(grid[cy + d][cx])) grid[cy + d][cx] = tileType;
         if (cx + d >= 0 && cx + d < W && canCarve(grid[cy][cx + d])) grid[cy][cx + d] = tileType;
       }
-      for (let dy = -1; dy <= 1; dy++)
-        for (let dx = -1; dx <= 1; dx++) {
-          const ny = cy + dy;
-          const nx = cx + dx;
-          if (ny >= 0 && ny < H && nx >= 0 && nx < W && grid[ny][nx] === T.V) grid[ny][nx] = T.W;
-        }
     }
   };
   if (goH) {
@@ -129,7 +124,8 @@ export function generateRoadVariantLayout(
   const W = cfg.width;
   const H = cfg.height;
   const variant: RoadVariant = cfg.roadVariant ?? "dirt_trail";
-  const grid = Array.from({ length: H }, () => Array<number>(W).fill(T.V));
+  /** Open wilderness turf — not dungeon void; avoids auto-walls reading as “indoors”. */
+  const grid = Array.from({ length: H }, () => Array<number>(W).fill(T.F));
   const mid = Math.floor(H / 2);
   const rooms: RoadHubRoom[] = [];
 
@@ -191,11 +187,7 @@ export function generateRoadVariantLayout(
       }
     }
     if (bad) continue;
-    for (let y = ry; y < ry + rh; y++) for (let x = rx; x < rx + rw; x++) grid[y][x] = T.F;
-    for (let y = ry - 1; y <= ry + rh; y++)
-      for (let x = rx - 1; x <= rx + rw; x++) {
-        if (y >= 0 && y < H && x >= 0 && x < W && grid[y][x] === T.V) grid[y][x] = T.W;
-      }
+    /** Roadside clearing / yard — floor only; no perimeter walls (reads as outdoor camp, not a room). */
     for (let y = ry; y < ry + rh; y++) for (let x = rx; x < rx + rw; x++) grid[y][x] = T.F;
     const roomType = pick(hubRooms, rng);
     const rm = {
@@ -224,9 +216,6 @@ export function generateRoadVariantLayout(
     const rx = Math.floor((W - rw) / 2);
     const ry = spineY - rh - 4;
     for (let y = ry; y < ry + rh; y++) for (let x = rx; x < rx + rw; x++) if (y > 1 && y < H - 2 && x > 1 && x < W - 2) grid[y][x] = T.F;
-    for (let y = ry - 1; y <= ry + rh; y++)
-      for (let x = rx - 1; x <= rx + rw; x++) if (y >= 0 && y < H && x >= 0 && x < W && grid[y][x] === T.V) grid[y][x] = T.W;
-    for (let y = ry; y < ry + rh; y++) for (let x = rx; x < rx + rw; x++) grid[y][x] = T.F;
     const r0 = {
       id: 1,
       x: rx,
@@ -240,24 +229,6 @@ export function generateRoadVariantLayout(
     };
     rooms.push(r0);
     roadCarvePath(grid, r0, { cx: r0.cx, cy: clamp(spineY + roadWide, 2, H - 3) }, W, H, rng);
-  }
-
-  for (let y = 1; y < H - 1; y++) {
-    for (let x = 1; x < W - 1; x++) {
-      if (grid[y][x] !== T.V) continue;
-      for (const [dy, dx] of [
-        [-1, 0],
-        [1, 0],
-        [0, -1],
-        [0, 1],
-      ] as const) {
-        const t = grid[y + dy]?.[x + dx];
-        if (t === T.F || t === T.ROAD || t === T.WA) {
-          grid[y][x] = T.W;
-          break;
-        }
-      }
-    }
   }
 
   return { grid, rooms };
@@ -310,6 +281,7 @@ export function postProcessRoadWilderness(
   const chokepoints: { x: number; y: number }[] = [];
   for (const c of roadCells) {
     let wallN = 0;
+    let roadN = 0;
     for (const [dy, dx] of [
       [-1, 0],
       [1, 0],
@@ -318,8 +290,12 @@ export function postProcessRoadWilderness(
     ] as const) {
       const t = grid[c.y + dy]?.[c.x + dx];
       if (t === T.W) wallN++;
+      if (t === T.ROAD) roadN++;
     }
-    if (wallN >= 2) chokepoints.push(c);
+    /** Cliffs / rock pinch, junctions, bends, or dead-end stubs — ambush-prone (open fields use graph shape, not wall boxes). */
+    const pinch = wallN >= 2 || (variant === "mountain_pass" && wallN >= 1);
+    const graphAmbush = roadN !== 2 && roadN > 0;
+    if (pinch || graphAmbush) chokepoints.push(c);
   }
   const sh = [...chokepoints].sort(() => rng() - 0.5);
   for (let i = 0; i < Math.min(3, sh.length); i++) {
@@ -489,12 +465,13 @@ export function postProcessRoadWilderness(
     for (let s = 1; s <= rI(6, 8, rng); s++) {
       const bx = clamp(branch.x - s, 2, W - 3);
       const by = clamp(branch.y + (rng() < 0.5 ? -1 : 1), 2, H - 3);
-      if (grid[by][bx] === T.V || grid[by][bx] === T.W) grid[by][bx] = T.C;
+      const t0 = grid[by][bx];
+      if (t0 === T.F || t0 === T.V || t0 === T.W) grid[by][bx] = T.ROAD;
     }
     const clearX = clamp(branch.x - 4, 3, W - 6);
     const clearY = clamp(branch.y, 3, H - 6);
     for (let yy = clearY; yy < clearY + 4; yy++)
-      for (let xx = clearX; xx < clearX + 3; xx++) if (grid[yy]?.[xx] === T.C || grid[yy]?.[xx] === T.F) grid[yy][xx] = T.F;
+      for (let xx = clearX; xx < clearX + 3; xx++) if (grid[yy]?.[xx] === T.ROAD || grid[yy]?.[xx] === T.F) grid[yy][xx] = T.F;
     decoOverlay.push({
       x: clearX + 1,
       y: clearY + 1,

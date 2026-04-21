@@ -85,7 +85,8 @@ export type PlayerMapBroadcast = {
   revealed?: number[];
   /** Precomputed visible cell keys for tools; optional if client recomputes from revealed. */
   revealedCells?: string[];
-  doorOpen?: string[];
+  /** `null` = legacy “all doors open” for fog/rendering; `[]` = all closed; otherwise explicit open door keys. */
+  doorOpen?: string[] | null;
   fogColor?: string;
   selectedRoomId?: number | null;
   /**
@@ -97,8 +98,15 @@ export type PlayerMapBroadcast = {
   battleTokens?: BattleToken[];
   /** Radial dimming: darkness outside torch discs; combined with max brightness. */
   sceneLights?: SceneLight[];
-  /** DM-forge view mode mirrored to player TV when not flat. */
-  viewMode?: "flat" | "depth" | "iso";
+  /** DM Play / Forge view mode mirrored to player TV when not flat. */
+  viewMode?: "flat" | "depth" | "iso" | "3d";
+  /** ISO timestamp when the DM last pushed to a TV (Forge). */
+  pushedAt?: string;
+  /**
+   * DM-only extra fog seeds (`"x,y"` keys). Floods with the same door/wall rules as normal fog.
+   * Stored so the projector TV receives the same visibility after POST.
+   */
+  dmManualRevealCells?: string[];
 };
 
 const STORAGE_KEY = "dnd5e-player-map-state";

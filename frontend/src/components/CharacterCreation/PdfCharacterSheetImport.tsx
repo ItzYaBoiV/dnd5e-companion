@@ -26,6 +26,7 @@ export default function PdfCharacterSheetImport() {
     if (!file) return;
     setBusy(true);
     setError(null);
+    const previewUrl = URL.createObjectURL(file);
     try {
       await Promise.all([loadRaces(), loadClasses(), loadBackgrounds()]);
       const items = await referenceApi.items({});
@@ -60,8 +61,10 @@ export default function PdfCharacterSheetImport() {
         startingInventoryDraft: equipRows,
         pdfImportReviewIssues: allIssues.length > 0 ? allIssues : undefined,
         step: firstReviewStep,
+        pdfImportPreviewUrl: previewUrl,
       });
     } catch (e) {
+      URL.revokeObjectURL(previewUrl);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);

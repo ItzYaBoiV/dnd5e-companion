@@ -2,7 +2,7 @@
  * Lightweight isometric (2:1 diamond) preview renderer for dungeon grids.
  */
 
-import type { EntityPalette, RenderCell, TilePalette } from "@/lib/dungeonTileRenderer";
+import type { EntityPalette, RenderCell, RenderTileOpts, TilePalette } from "@/lib/dungeonTileRenderer";
 
 const T_VOID = 0;
 const T_WALL = 2;
@@ -32,6 +32,8 @@ export type IsometricRenderOpts = {
   cameraPanY?: number;
   /** When `viewportCss` is set, draw RTS-style minimap (default true). */
   showMinimap?: boolean;
+  /** Town / road: scales volumetric darkness (match flat map). */
+  mapOutdoorTime?: RenderTileOpts["mapOutdoorTime"];
 };
 
 export function getIsometricMapSpan(
@@ -223,7 +225,16 @@ export function renderIsometricToCanvas(canvas: HTMLCanvasElement, opts: Isometr
     cameraPanX = 0,
     cameraPanY = 0,
     showMinimap = true,
+    mapOutdoorTime,
   } = opts;
+  const outdoorDarkMul =
+    mapOutdoorTime === "day"
+      ? 0.22
+      : mapOutdoorTime === "dusk"
+        ? 0.46
+        : mapOutdoorTime === "night"
+          ? 0.78
+          : 1;
   const tileW = twIn || 64;
   const tileH = thIn || 32;
   const wallH = whIn || 30;
@@ -291,9 +302,10 @@ export function renderIsometricToCanvas(canvas: HTMLCanvasElement, opts: Isometr
       }
 
       if (lightMap) {
-        const dark = lightMap[gy * cols + gx] ?? 0;
+        let dark = (lightMap[gy * cols + gx] ?? 0) * 0.9;
+        if (mapOutdoorTime && outdoorDarkMul < 1) dark *= outdoorDarkMul;
         if (dark > 0.02) {
-          ctx.fillStyle = `rgba(0,0,0,${Math.min(0.55, dark)})`;
+          ctx.fillStyle = `rgba(0,0,0,${Math.min(0.4, dark * 0.82)})`;
           ctx.beginPath();
           ctx.moveTo(sx, sy - tileH / 2);
           ctx.lineTo(sx + tileW / 2, sy);

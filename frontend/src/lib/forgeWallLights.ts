@@ -1,5 +1,6 @@
 import type { SceneLight } from "@/lib/playerMapBroadcast";
 import { DUNGEON_T as T } from "@/lib/dungeonForgeConstants";
+import { isDungeonGridWalkable } from "@/lib/dungeonForgeFog";
 
 /** Deterministic RNG for stable torch placement per room. */
 export function makeSeededRng(seed: number): () => number {
@@ -118,7 +119,9 @@ export function collectCaveBiolumSceneLights(decoOverlay: DecoLite[] | null | un
   return out;
 }
 
-const MAX_BIOME_LIGHTS = 20;
+const MAX_BIOME_LIGHTS = 48;
+/** Streets + yards need many warm points; room-based cap is too low for towns. */
+const MAX_TOWN_STREET_LIGHTS = 64;
 
 /**
  * Biome-aware fixture lights for Dungeon Forge maps (deterministic from `seed`).
@@ -127,6 +130,156 @@ export type CollectBiomeLightsOpts = {
   /** When false, fey forest uses dim torches instead of wisps. */
   feyBioluminescent?: boolean;
 };
+
+/**
+ * Warm lights along roads / lots that face building walls (street lamps / façade pools).
+ * Positions are always on walkable tiles (roads & yards); lights are not placed on wall cells
+ * so occlusion does not zero them out.
+ */
+export function collectTownStreetLights(grid: number[][], seed: number, max = MAX_TOWN_STREET_LIGHTS): SceneLight[] {
+  const rng = makeSeededRng(seed >>> 0);
+  const H = grid.length;
+  const W = grid[0]?.length ?? 0;
+  const roadish = (t: number | undefined) =>
+    t === T.ROAD || t === T.BRIDGE || t === T.ALLEY;
+  const yardish = (t: number | undefined) => t === T.F || t === T.P;
+
+  const touchesWall = (x: number, y: number) => {
+    for (const [dx, dy] of [
+      [0, 1],
+      [0, -1],
+      [1, 0],
+      [-1, 0],
+    ] as const) {
+      if (grid[y + dy]?.[x + dx] === T.W) return true;
+    }
+    return false;
+  };
+
+  const candidates: { gx: number; gy: number; pri: number }[] = [];
+  for (let y = 2; y < H - 2; y++) {
+    for (let x = 2; x < W - 2; x++) {
+      const t = grid[y][x];
+      if (!roadish(t) && !yardish(t)) continue;
+      if (!touchesWall(x, y)) continue;
+      let roadArms = 0;
+      for (const [dx, dy] of [
+        [0, 1],
+        [0, -1],
+        [1, 0],
+        [-1, 0],
+      ] as const) {
+        if (roadish(grid[y + dy]?.[x + dx])) roadArms++;
+      }
+      const pri = roadish(t) ? roadArms * 4 + 2 : roadArms;
+      candidates.push({ gx: x, gy: y, pri });
+    }
+  }
+
+  candidates.sort((a, b) => b.pri - a.pri);
+  for (let i = candidates.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const a = candidates[i]!;
+    candidates[i] = candidates[j]!;
+    candidates[j] = a;
+  }
+
+  const out: SceneLight[] = [];
+  const used: { x: number; y: number }[] = [];
+  const minCheb = 3;
+
+  for (const c of candidates) {
+    if (out.length >= max) break;
+    if (used.some((u) => Math.max(Math.abs(c.gx - u.x), Math.abs(c.gy - u.y)) < minCheb)) continue;
+    used.push({ x: c.gx, y: c.gy });
+    out.push({
+      gx: c.gx,
+      gy: c.gy,
+      radiusCells: 4.2 + rng() * 2.4,
+      intensity: 0.22 + rng() * 0.14,
+      kind: "torch",
+      flicker: true,
+    });
+  }
+  return out;
+}
+
+/**
+ * Corridor / junction / door-adjacent torches so dungeons are not stuck with 1–2 random room picks.
+ * Prioritizes T-junctions, corners beside doors, and long corridor runs (deterministic spacing).
+ */
+export function collectDungeonCorridorTorchPlacements(
+  grid: number[][],
+  seed: number,
+  max: number,
+  locationType: string,
+): SceneLight[] {
+  const rng = makeSeededRng((seed ^ 0xbadcafe) >>> 0);
+  const H = grid.length;
+  const W = grid[0]?.length ?? 0;
+  if (W < 3 || H < 3 || max < 1) return [];
+
+  type Cand = { gx: number; gy: number; score: number };
+  const candidates: Cand[] = [];
+
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const t = grid[y]![x]!;
+      if (t !== T.C && t !== T.F) continue;
+      if (!isDungeonGridWalkable(t, locationType)) continue;
+
+      let corrArms = 0;
+      let doorAdj = 0;
+      let wallAdj = 0;
+      for (const [dx, dy] of [
+        [0, 1],
+        [0, -1],
+        [1, 0],
+        [-1, 0],
+      ] as const) {
+        const nt = grid[y + dy]?.[x + dx];
+        if (nt === T.C) corrArms++;
+        if (nt === T.D || nt === T.SECRET_DOOR || nt === T.GATE || nt === T.DRAWBRIDGE) doorAdj++;
+        if (nt === T.W) wallAdj++;
+      }
+
+      let score = corrArms * 3 + doorAdj * 8 + wallAdj;
+      if (corrArms >= 3) score += 12;
+      else if (corrArms === 2 && doorAdj > 0) score += 10;
+      if (score < 3) continue;
+
+      candidates.push({ gx: x, gy: y, score });
+    }
+  }
+
+  candidates.sort((a, b) => b.score - a.score || a.gx - b.gx || a.gy - b.gy);
+  for (let i = candidates.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const a = candidates[i]!;
+    candidates[i] = candidates[j]!;
+    candidates[j] = a;
+  }
+
+  const out: SceneLight[] = [];
+  const used: { gx: number; gy: number }[] = [];
+  const minCheb = 3;
+
+  for (const c of candidates) {
+    if (out.length >= max) break;
+    if (used.some((u) => Math.max(Math.abs(c.gx - u.gx), Math.abs(c.gy - u.gy)) < minCheb)) continue;
+    used.push({ gx: c.gx, gy: c.gy });
+    out.push({
+      gx: c.gx,
+      gy: c.gy,
+      radiusCells: 4.4 + rng() * 1.4,
+      intensity: 0.28 + rng() * 0.12,
+      kind: "torch",
+      flicker: true,
+    });
+  }
+
+  return out;
+}
 
 export function collectBiomeLights(
   grid: number[][],
@@ -145,6 +298,11 @@ export function collectBiomeLights(
     out.push(L);
   };
 
+  const pushTown = (L: SceneLight) => {
+    if (out.length >= MAX_TOWN_STREET_LIGHTS) return;
+    out.push(L);
+  };
+
   const addFromRooms = (perRoom: number, mk: (gx: number, gy: number) => SceneLight) => {
     for (const room of rooms) {
       if (out.length >= MAX_BIOME_LIGHTS) return;
@@ -153,9 +311,15 @@ export function collectBiomeLights(
     }
   };
 
+  const addCorridorTorches = (loc: string, cap: number) => {
+    for (const L of collectDungeonCorridorTorchPlacements(grid, seed, cap, loc)) {
+      push(L);
+    }
+  };
+
   switch (locationType) {
     case "dungeon":
-      addFromRooms(2, (gx, gy) => ({
+      addFromRooms(3, (gx, gy) => ({
         gx,
         gy,
         radiusCells: 4 + rng() * 1,
@@ -163,6 +327,7 @@ export function collectBiomeLights(
         kind: "torch",
         flicker: true,
       }));
+      addCorridorTorches("dungeon", 18);
       break;
 
     case "cave": {
@@ -188,7 +353,7 @@ export function collectBiomeLights(
     }
 
     case "temple":
-      addFromRooms(2, (gx, gy) => ({
+      addFromRooms(3, (gx, gy) => ({
         gx,
         gy,
         radiusCells: 5,
@@ -196,6 +361,7 @@ export function collectBiomeLights(
         kind: "divine",
         flicker: false,
       }));
+      addCorridorTorches("temple", 12);
       if (rng() < 0.22 && rooms[0]) {
         const r = rooms[Math.floor(rng() * rooms.length)]!;
         const cells = pickWallAdjacentFloorCells(grid, r, 1, rng);
@@ -248,7 +414,7 @@ export function collectBiomeLights(
       break;
 
     case "sewer":
-      addFromRooms(2, (gx, gy) => ({
+      addFromRooms(3, (gx, gy) => ({
         gx,
         gy,
         radiusCells: 3,
@@ -256,10 +422,11 @@ export function collectBiomeLights(
         kind: "lantern",
         flicker: false,
       }));
+      addCorridorTorches("sewer", 14);
       break;
 
     case "castle":
-      addFromRooms(2, (gx, gy) => ({
+      addFromRooms(3, (gx, gy) => ({
         gx,
         gy,
         radiusCells: 5,
@@ -267,6 +434,7 @@ export function collectBiomeLights(
         kind: "torch",
         flicker: true,
       }));
+      addCorridorTorches("castle", 16);
       break;
 
     case "swamp":
@@ -281,8 +449,16 @@ export function collectBiomeLights(
       }));
       break;
 
+    case "town":
+    case "road": {
+      for (const L of collectTownStreetLights(grid, seed, MAX_TOWN_STREET_LIGHTS)) {
+        pushTown(L);
+      }
+      break;
+    }
+
     default:
-      addFromRooms(1, (gx, gy) => ({
+      addFromRooms(2, (gx, gy) => ({
         gx,
         gy,
         radiusCells: 4.5,
@@ -290,6 +466,7 @@ export function collectBiomeLights(
         kind: "torch",
         flicker: true,
       }));
+      addCorridorTorches(locationType || "dungeon", 10);
       break;
   }
 

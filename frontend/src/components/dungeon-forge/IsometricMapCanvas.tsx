@@ -44,6 +44,7 @@ const IsometricMapCanvasInner = forwardRef<IsometricMapCanvasHandle, IsometricMa
       doorStates,
       animPhase,
       sceneLights,
+      mapOutdoorTime,
       className,
       style,
       tileW = 64,
@@ -134,6 +135,7 @@ const IsometricMapCanvasInner = forwardRef<IsometricMapCanvasHandle, IsometricMa
         cameraPanX: useVp ? cam.panX : 0,
         cameraPanY: useVp ? cam.panY : 0,
         showMinimap: useVp && showMinimap,
+        mapOutdoorTime,
       });
     }, [
       grid,
@@ -145,6 +147,7 @@ const IsometricMapCanvasInner = forwardRef<IsometricMapCanvasHandle, IsometricMa
       doorStates,
       animPhase,
       sceneLights,
+      mapOutdoorTime,
       tileW,
       tileH,
       wallH,
@@ -163,6 +166,7 @@ const IsometricMapCanvasInner = forwardRef<IsometricMapCanvasHandle, IsometricMa
       (e: React.WheelEvent<HTMLCanvasElement>) => {
         if (!isoCameraEnabled || viewport.w < 32) return;
         e.preventDefault();
+        e.stopPropagation();
         const canvas = canvasRef.current;
         if (!canvas || cols === 0) return;
         const rect = canvas.getBoundingClientRect();
@@ -182,14 +186,24 @@ const IsometricMapCanvasInner = forwardRef<IsometricMapCanvasHandle, IsometricMa
       [cols, isoCameraEnabled, viewport.w],
     );
 
+    const endDrag = useCallback(() => {
+      dragRef.current = { active: false, px: 0, py: 0, moved: false };
+    }, []);
+
     const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
       if (e.button !== 0) return;
+      e.stopPropagation();
       e.currentTarget.setPointerCapture(e.pointerId);
       dragRef.current = { active: true, px: e.clientX, py: e.clientY, moved: false };
     }, []);
 
     const onPointerMove = useCallback(
       (e: React.PointerEvent<HTMLCanvasElement>) => {
+        e.stopPropagation();
+        if (e.buttons === 0 && dragRef.current.active) {
+          endDrag();
+          return;
+        }
         if (!dragRef.current.active || !isoCameraEnabled || viewport.w < 32) return;
         const dx = e.clientX - dragRef.current.px;
         const dy = e.clientY - dragRef.current.py;
@@ -198,11 +212,12 @@ const IsometricMapCanvasInner = forwardRef<IsometricMapCanvasHandle, IsometricMa
         dragRef.current.py = e.clientY;
         setCam((c) => ({ ...c, panX: c.panX + dx, panY: c.panY + dy }));
       },
-      [isoCameraEnabled, viewport.w],
+      [isoCameraEnabled, viewport.w, endDrag],
     );
 
     const onPointerUp = useCallback(
       (e: React.PointerEvent<HTMLCanvasElement>) => {
+        e.stopPropagation();
         try {
           e.currentTarget.releasePointerCapture(e.pointerId);
         } catch {
@@ -227,6 +242,10 @@ const IsometricMapCanvasInner = forwardRef<IsometricMapCanvasHandle, IsometricMa
       },
       [onCellClick, isoCameraEnabled, viewport.w, cols, rows, tileW, tileH, wallH, grid, cam, showMinimap],
     );
+
+    const onLostPointerCapture = useCallback(() => {
+      endDrag();
+    }, [endDrag]);
 
     const onKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -281,6 +300,7 @@ const IsometricMapCanvasInner = forwardRef<IsometricMapCanvasHandle, IsometricMa
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
+          onLostPointerCapture={onLostPointerCapture}
         />
       </div>
     );

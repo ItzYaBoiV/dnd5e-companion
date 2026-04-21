@@ -13,7 +13,7 @@ import { openForgePrintPacket } from "@/lib/forgePrintPacket";
 import { MonsterStatCard } from "@/components/dungeon-forge/MonsterStatCard";
 import { useSessionStore } from "@/store/sessionStore";
 import { DUNGEON_T as T } from "@/lib/dungeonForgeConstants";
-import { buildRenderGrid } from "@/lib/dungeonForgeRenderGrid";
+import { buildRenderGrid, effectiveDungeonGridDims } from "@/lib/dungeonForgeRenderGrid";
 import { applyForgeLocationUpgrades } from "@/lib/forgeLocationUpgrades";
 import {
   computeVisibleCellsForPlayer,
@@ -2415,6 +2415,7 @@ function generateMap(cfg) {
     dungeonWanderMin:cfg.dungeonWanderMin??10,
     graveyardTime:cfg.graveyardTime??"day",
     graveyardWeather:cfg.graveyardWeather??"clear",
+    forgeOutdoorTime:cfg.forgeOutdoorTime??"dusk",
   };
 }
 
@@ -2796,7 +2797,7 @@ export default function DungeonForge(){
   /** Locked display behavior — no sidebar toggles (tiny cells, fill viewport, 2× PNG, scenery). */
   const FIXED_FORGE_DISPLAY={showDecos:true,showThemes:false};
   const [cfg,setCfg]=useState(()=>{
-    const base={roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:FORGE_STYLE,seed:Math.floor(Math.random()*999999),locationType:"dungeon",dungeonLighting:"lit",dungeonWanderMin:10,graveyardTime:"day",graveyardWeather:"clear",townMarketDay:false,townFortified:false,townChaseMode:false,townDistrictStyle:"balanced",townStreetStyle:"organic",townArchitecture:"medieval",townDensity:"normal",townPlazas:"open",townWaterfront:"none",roadVariant:"dirt_trail",wildernessWeather:"clear",volcanicActivity:"dormant",eruptionRounds:15,feyShiftingPaths:false,feyPlayerDisorient:false,feyBioluminescent:true,caveVariant:"auto",caveBioluminescentMode:"auto",templeDeity:"auto",templeCondition:"auto",...FIXED_FORGE_DISPLAY,cellPx:18,exportCellPx:32,autoSync:false};
+    const base={roomCount:8,depth:1,level:3,width:80,height:52,trapsOn:true,itemsOn:true,monstersOn:true,style:FORGE_STYLE,seed:Math.floor(Math.random()*999999),locationType:"dungeon",dungeonLighting:"lit",dungeonWanderMin:10,graveyardTime:"day",graveyardWeather:"clear",forgeOutdoorTime:"dusk",townMarketDay:false,townFortified:false,townChaseMode:false,townDistrictStyle:"balanced",townStreetStyle:"organic",townArchitecture:"medieval",townDensity:"normal",townPlazas:"open",townWaterfront:"none",roadVariant:"dirt_trail",wildernessWeather:"clear",volcanicActivity:"dormant",eruptionRounds:15,feyShiftingPaths:false,feyPlayerDisorient:false,feyBioluminescent:true,caveVariant:"auto",caveBioluminescentMode:"auto",templeDeity:"auto",templeCondition:"auto",...FIXED_FORGE_DISPLAY,cellPx:18,exportCellPx:32,autoSync:false};
     try{
       const raw=localStorage.getItem(FORGE_CFG_KEY);
       if(raw){
@@ -3027,7 +3028,7 @@ export default function DungeonForge(){
   const isP=view==="player";
   const forgeGridCfg={...cfg,showThemes:!!cfg.showThemes&&!isP};
   const rg=dg?buildRenderGrid(dg,forgeGridCfg):null;const S=STY[FORGE_STYLE];
-  const Wm=dg?dg.width:1;const Hm=dg?dg.height:1;
+  const {w:Wm,h:Hm}=dg?effectiveDungeonGridDims(dg):{w:1,h:1};
   const cs=useMemo(()=>{
     const n=computeCellSize({
       vpW:vpSize.w,
@@ -3046,9 +3047,10 @@ export default function DungeonForge(){
   const effectiveLocType=dg?.locationType??cfg.locationType;
   const mapTileDetailStyle=useMemo(()=>{
     const loc=effectiveLocType||"dungeon";
+    if(loc==="town")return"town";
     if(loc==="cave")return"cave";
     if(loc==="temple")return"temple";
-    if(["dungeon","castle","sewer","graveyard","swamp","volcanic_lair","road","town"].includes(loc))return"dungeon";
+    if(["dungeon","castle","sewer","graveyard","swamp","volcanic_lair","road"].includes(loc))return"dungeon";
     return null;
   },[effectiveLocType]);
   const fogOpenFloor=useMemo(()=>isOpenFloorLocation(effectiveLocType),[effectiveLocType]);
@@ -3085,7 +3087,8 @@ export default function DungeonForge(){
     if(loc==="cave"&&dg.forgeLocationMeta?.caveBioluminescent){
       lights=[...lights,...collectCaveBiolumSceneLights(dg.decoOverlay??[],48)];
     }
-    return lights.length?lights.slice(0,24):null;
+    const maxScene=loc==="town"||loc==="road"?64:24;
+    return lights.length?lights.slice(0,maxScene):null;
   },[dg,cfg.locationType,cfg.feyBioluminescent,cfg.seed,cfg.mapName]);
   const revealableDoors=useMemo(()=>{
     if(!isP||!dg||!mapFogCells)return[];
@@ -3415,6 +3418,16 @@ export default function DungeonForge(){
             {Object.entries(LOCATIONS).map(([k,v])=><option key={k} value={k}>{v.name}</option>)}
           </select>
           {LOCATION_DESCRIPTIONS[cfg.locationType]&&<div style={{fontSize:11,color:S.dimText,fontStyle:"italic",lineHeight:1.35}}>{LOCATION_DESCRIPTIONS[cfg.locationType]}</div>}
+          {(cfg.locationType==="town"||cfg.locationType==="road")&&(
+            <>
+              <LB S={S}>OUTDOOR TIME</LB>
+              <select value={cfg.forgeOutdoorTime??"dusk"} onChange={e=>u("forgeOutdoorTime",e.target.value)} style={{padding:"4px 6px",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:"100%"}}>
+                <option value="day">Day — bright ambient light</option>
+                <option value="dusk">Dusk — dim streets</option>
+                <option value="night">Night — street lights stand out</option>
+              </select>
+            </>
+          )}
           {cfg.locationType==="road"&&(
             <>
               <LB S={S}>WILDERNESS ROAD</LB>
@@ -3634,7 +3647,7 @@ export default function DungeonForge(){
           <LB S={S}>ASCII COPY</LB>
           <div style={{fontSize:11,color:S.dimText,lineHeight:1.35}}>Plain text grid (same topology as the map).</div>
           <button type="button" onClick={()=>{const u=new URL(window.location.href);u.searchParams.set("seed",String(cfg.seed));u.searchParams.set("loc",cfg.locationType);u.searchParams.set("level",String(cfg.level));void navigator.clipboard.writeText(u.toString());}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>COPY SHARE URL</button>
-          <button type="button" disabled={!dg||!asciiExport?.text} onClick={()=>{if(!dg||!asciiExport)return;const cellPx=Math.max(24,cfg.exportCellPx??32);const gridDm=buildRenderGrid(dg,{...cfg,showThemes:!!cfg.showThemes});const dmEl=document.createElement("canvas");const locP=dg.locationType??cfg.locationType;renderDungeonToCanvas(dmEl,gridDm,{palette:forgePaletteForDungeon(dg),entities:ENTITY_PALETTE,cellPx,dpr:2,showEnts:true,playerSanitize:false,inkSaver:false,forgeDmHints:dg.forgeDmHints??null,dungeonLighting:cfg.dungeonLighting??dg.dungeonLighting??"lit",graveyardAmbience:locP==="graveyard"?{timeOfDay:cfg.graveyardTime??dg.graveyardTime??"day",weather:cfg.graveyardWeather??dg.graveyardWeather??"clear"}:undefined});const dm=dmEl.toDataURL("image/png");const lines=dg.rooms.map(r=>{const rt=r.roomType?` [${r.roomType}]`:"";const desc=r.description?` — ${r.description}`:"";return`Room ${r.id}:${rt} ${r.isSecretRoom?"[SECRET] ":""}${r.namedRoom||r.label||r.type} (depth ${r.depth??"?"}, theme ${r.theme||"?"})${desc}`;});const safe=(t)=>String(t??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");const structureTableHtml=locP==="graveyard"?`<table border="1" cellpadding="4" style="border-collapse:collapse;font-size:10pt;margin-top:8px"><thead><tr><th>#</th><th>Dimensions</th><th>Contains</th><th>Notes</th></tr></thead><tbody>${dg.rooms.map((r)=>`<tr><td>${r.id}</td><td>${r.w}×${r.h}</td><td>${safe(r.containsSummary)}</td><td>${safe(r.dmNotes)}</td></tr>`).join("")}</tbody></table>`:null;openForgePrintPacket({title:`${dg.mapName||"Forge"} seed ${cfg.seed}`,asciiText:asciiExport.text,dmMapDataUrl:dm,roomLines:lines,structureTableHtml});}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PRINT DM PACKET</button>
+          <button type="button" disabled={!dg||!asciiExport?.text} onClick={()=>{if(!dg||!asciiExport)return;const cellPx=Math.max(24,cfg.exportCellPx??32);const gridDm=buildRenderGrid(dg,{...cfg,showThemes:!!cfg.showThemes});const dmEl=document.createElement("canvas");const locP=dg.locationType??cfg.locationType;renderDungeonToCanvas(dmEl,gridDm,{palette:forgePaletteForDungeon(dg),entities:ENTITY_PALETTE,cellPx,dpr:2,showEnts:true,playerSanitize:false,inkSaver:false,forgeDmHints:dg.forgeDmHints??null,dungeonLighting:cfg.dungeonLighting??dg.dungeonLighting??"lit",graveyardAmbience:locP==="graveyard"?{timeOfDay:cfg.graveyardTime??dg.graveyardTime??"day",weather:cfg.graveyardWeather??dg.graveyardWeather??"clear"}:undefined,mapOutdoorTime:locP==="town"||locP==="road"?cfg.forgeOutdoorTime??dg.forgeOutdoorTime??"dusk":undefined});const dm=dmEl.toDataURL("image/png");const lines=dg.rooms.map(r=>{const rt=r.roomType?` [${r.roomType}]`:"";const desc=r.description?` — ${r.description}`:"";return`Room ${r.id}:${rt} ${r.isSecretRoom?"[SECRET] ":""}${r.namedRoom||r.label||r.type} (depth ${r.depth??"?"}, theme ${r.theme||"?"})${desc}`;});const safe=(t)=>String(t??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");const structureTableHtml=locP==="graveyard"?`<table border="1" cellpadding="4" style="border-collapse:collapse;font-size:10pt;margin-top:8px"><thead><tr><th>#</th><th>Dimensions</th><th>Contains</th><th>Notes</th></tr></thead><tbody>${dg.rooms.map((r)=>`<tr><td>${r.id}</td><td>${r.w}×${r.h}</td><td>${safe(r.containsSummary)}</td><td>${safe(r.dmNotes)}</td></tr>`).join("")}</tbody></table>`:null;openForgePrintPacket({title:`${dg.mapName||"Forge"} seed ${cfg.seed}`,asciiText:asciiExport.text,dmMapDataUrl:dm,roomLines:lines,structureTableHtml});}} style={{padding:"4px 0",fontSize:12,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.dimText,border:`1px solid ${S.inputBorder}`,borderRadius:2,cursor:"pointer",width:"100%"}}>PRINT DM PACKET</button>
           <LB S={S}>SEED</LB>
           <div style={{display:"flex",gap:2}}>
             <input type="number" value={cfg.seed} onChange={e=>u("seed",parseInt(e.target.value,10)||0)} style={{flex:1,padding:"2px 3px",fontSize:16,fontFamily:"'Crimson Text',Georgia,serif",background:S.inputBg,color:S.inputFg,border:`1px solid ${S.inputBorder}`,borderRadius:2,width:30}}/>
@@ -3799,9 +3812,12 @@ export default function DungeonForge(){
                               doorOpen={doorOpen}
                               animPhase={animPhase}
                               sceneLights={forgeSceneLights}
+                              showEnts={!isP}
+                              playerSanitize={!!isP}
                               forgeDmHints={dg.forgeDmHints??undefined}
                               dungeonLighting={(cfg.locationType==="dungeon"||dg.locationType==="dungeon")?(cfg.dungeonLighting??dg.dungeonLighting??"lit"):undefined}
                               graveyardAmbience={(cfg.locationType==="graveyard"||dg.locationType==="graveyard")?{timeOfDay:cfg.graveyardTime??dg.graveyardTime??"day",weather:cfg.graveyardWeather??dg.graveyardWeather??"clear"}:undefined}
+                              mapOutdoorTime={(cfg.locationType==="town"||cfg.locationType==="road")?(cfg.forgeOutdoorTime??dg?.forgeOutdoorTime??"dusk"):undefined}
                             />
                           </Suspense>
                         </div>
@@ -3822,6 +3838,7 @@ export default function DungeonForge(){
                           forgeDmHints={dg.forgeDmHints??undefined}
                           dungeonLighting={(cfg.locationType==="dungeon"||dg.locationType==="dungeon")?(cfg.dungeonLighting??dg.dungeonLighting??"lit"):undefined}
                           graveyardAmbience={(cfg.locationType==="graveyard"||dg.locationType==="graveyard")?{timeOfDay:cfg.graveyardTime??dg.graveyardTime??"day",weather:cfg.graveyardWeather??dg.graveyardWeather??"clear"}:undefined}
+                          mapOutdoorTime={(cfg.locationType==="town"||cfg.locationType==="road")?(cfg.forgeOutdoorTime??dg?.forgeOutdoorTime??"dusk"):undefined}
                           tileW={Math.min(72,Math.max(28,Math.floor(cs*3.2)))}
                           tileH={Math.min(40,Math.max(14,Math.floor(cs*1.6)))}
                           wallH={Math.min(36,Math.max(14,Math.floor(cs*1.8)))}
@@ -3843,6 +3860,7 @@ export default function DungeonForge(){
                         forgeDmHints={!isP?dg.forgeDmHints??undefined:undefined}
                         dungeonLighting={!isP&&(cfg.locationType==="dungeon"||dg.locationType==="dungeon")?(cfg.dungeonLighting??dg.dungeonLighting??"lit"):undefined}
                         graveyardAmbience={!isP&&(cfg.locationType==="graveyard"||dg.locationType==="graveyard")?{timeOfDay:cfg.graveyardTime??dg.graveyardTime??"day",weather:cfg.graveyardWeather??dg.graveyardWeather??"clear"}:undefined}
+                        mapOutdoorTime={(cfg.locationType==="town"||cfg.locationType==="road")?(cfg.forgeOutdoorTime??dg?.forgeOutdoorTime??"dusk"):undefined}
                         depthPass={!isP&&(forgeViewMode==="depth"||fxWallDepth)}
                         vignettePass={!isP&&(forgeViewMode==="depth"||fxVignette)}
                         depthFog={!isP&&forgeViewMode==="depth"}
