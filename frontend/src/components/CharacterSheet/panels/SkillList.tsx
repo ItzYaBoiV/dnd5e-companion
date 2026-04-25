@@ -40,8 +40,8 @@ export default function SkillList({ character }: Props) {
     if (!skill) return;
     setRolling(slug);
     try {
-      await runAppRoll(SKILL_LABELS[slug], "check", (adv) =>
-        combatApi.rollCheck(character.id, slug, adv) as Promise<Record<string, unknown>>,
+      await runAppRoll(SKILL_LABELS[slug], "check", (adv, opts) =>
+        combatApi.rollCheck(character.id, slug, adv, opts) as Promise<Record<string, unknown>>,
       );
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));

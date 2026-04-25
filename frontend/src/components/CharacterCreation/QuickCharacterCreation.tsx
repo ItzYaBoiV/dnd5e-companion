@@ -12,6 +12,7 @@ import { getCreationSpellProfile } from "@/lib/creationSpellGuide";
 import { referenceApi } from "@/services/api";
 import { useReferenceStore } from "@/store/referenceStore";
 import { useCharacterStore } from "@/store/characterStore";
+import { CharacterCreationStepNext } from "./CharacterCreationStepNext";
 import {
   applyAutoEquipToStartingRows,
   gear,
@@ -444,16 +445,11 @@ export default function QuickCharacterCreation() {
 
       {error && <p className="text-sm text-red-400">{error}</p>}
 
-      <div className="flex justify-stretch sm:justify-end pt-2">
-        <button
-          type="button"
-          onClick={handleCreate}
-          disabled={!canSubmit || isSubmitting}
-          className="btn-primary w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed px-8"
-        >
-          {isSubmitting ? "Creating..." : "Auto Generate Character"}
-        </button>
-      </div>
+      <CharacterCreationStepNext
+        label={isSubmitting ? "Creating…" : "Auto Generate Character"}
+        onClick={() => void handleCreate()}
+        disabled={!canSubmit || isSubmitting}
+      />
     </div>
   );
 }

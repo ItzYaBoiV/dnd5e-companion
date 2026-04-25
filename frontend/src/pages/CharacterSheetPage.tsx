@@ -5,7 +5,7 @@ import { useCharacterStore } from "@/store/characterStore";
 import { characterApi } from "@/services/api";
 import { useUIStore } from "@/store/uiStore";
 import { useSessionStore } from "@/store/sessionStore";
-import { LoadingSpinner } from "@/components/common";
+import { LoadingSpinner, Modal } from "@/components/common";
 import CharacterSheet from "@/components/CharacterSheet";
 import { downloadWizardsCharacterSheetPdf } from "@/lib/wizardsCharacterSheetPdfExport";
 
@@ -16,6 +16,8 @@ export default function CharacterSheetPage() {
   const { activeTab, setTab } = useUIStore();
   const { sessions, activeSession, loadSessions } = useSessionStore();
   const [pdfExporting, setPdfExporting] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   useEffect(() => {
     if (id) loadCharacter(id);
@@ -122,23 +124,7 @@ export default function CharacterSheetPage() {
           ))}
           <button
             type="button"
-            onClick={async () => {
-              if (!activeCharacter) return;
-              if (
-                !window.confirm(
-                  `Delete "${activeCharacter.name}" permanently? This cannot be undone. They will also be removed from any play sessions.`,
-                )
-              ) {
-                return;
-              }
-              try {
-                await characterApi.delete(activeCharacter.id);
-                clearCharacter();
-                navigate("/characters");
-              } catch (e) {
-                alert(String(e));
-              }
-            }}
+            onClick={() => setDeleteModalOpen(true)}
             className="ml-1 p-2 rounded text-gray-500 hover:text-red-400 hover:bg-red-950/40"
             title="Delete character"
             aria-label="Delete character"
@@ -152,6 +138,53 @@ export default function CharacterSheetPage() {
       <div className="flex-1 overflow-auto pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:pb-0">
         <CharacterSheet character={activeCharacter} activeTab={activeTab} />
       </div>
+
+      {deleteModalOpen && activeCharacter && (
+        <Modal
+          title="Delete character?"
+          onClose={() => {
+            if (!deleteBusy) setDeleteModalOpen(false);
+          }}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={deleteBusy}
+                onClick={() => setDeleteModalOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary bg-red-800 hover:bg-red-700 border-red-700"
+                disabled={deleteBusy}
+                onClick={async () => {
+                  if (!activeCharacter) return;
+                  setDeleteBusy(true);
+                  try {
+                    await characterApi.delete(activeCharacter.id);
+                    clearCharacter();
+                    setDeleteModalOpen(false);
+                    navigate("/characters");
+                  } catch (e) {
+                    alert(e instanceof Error ? e.message : String(e));
+                  } finally {
+                    setDeleteBusy(false);
+                  }
+                }}
+              >
+                {deleteBusy ? "Deleting…" : "Delete forever"}
+              </button>
+            </>
+          }
+        >
+          <p className="text-sm text-gray-300">
+            Delete <span className="font-semibold text-white">{activeCharacter.name}</span> permanently? This cannot be
+            undone. They will also be removed from any play sessions.
+          </p>
+        </Modal>
+      )}
     </div>
   );
 }

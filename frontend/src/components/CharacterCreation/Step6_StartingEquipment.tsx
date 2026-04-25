@@ -11,6 +11,7 @@ import {
   type ItemSearch,
 } from "@/lib/startingEquipmentKits";
 import { Plus, Trash2, Search, Package, Sparkles } from "lucide-react";
+import { CharacterCreationStepNext } from "./CharacterCreationStepNext";
 
 interface Props {
   draft: CharacterDraft;
@@ -576,11 +577,7 @@ export default function Step6_StartingEquipment({ draft, updateDraft, onNext }: 
         )}
       </div>
 
-      <div className="flex justify-stretch sm:justify-end pt-2">
-        <button type="button" onClick={onNext} className="btn-primary w-full sm:w-auto px-8">
-          Next: Starting Spells
-        </button>
-      </div>
+      <CharacterCreationStepNext label="Next: Starting Spells" onClick={onNext} />
     </div>
   );
 }

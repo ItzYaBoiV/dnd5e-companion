@@ -51,6 +51,7 @@
 .forge-layout {
   container-type: inline-size;
   container-name: forge;
+  min-height: 0;
 }
 
 .forge-layout-row {
@@ -90,11 +91,18 @@
 }
 
 @container forge (max-width: 900px) {
+  .forge-top-header {
+    padding: 4px 8px !important;
+  }
   .forge-layout-row {
     flex-direction: column;
+    /* Map first, then settings: main row (map + room panel) above left sidebar. */
   }
   .forge-main-row {
     flex-direction: column;
+    order: -1;
+    flex: 1 1 auto;
+    min-height: min(48dvh, 520px);
   }
   .forge-sidebar-left,
   .forge-sidebar-right {
@@ -105,12 +113,15 @@
   .forge-sidebar-left {
     border-right: none;
     border-bottom: 1px solid var(--forge-border, transparent);
-    max-height: min(50vh, 360px) !important;
+    order: 0;
+    flex: 0 1 auto;
+    /* Scrollable config below map; do not monopolize the viewport. */
+    max-height: min(40dvh, 380px) !important;
   }
   .forge-sidebar-right {
     border-left: none;
     border-top: 1px solid var(--forge-border, transparent);
-    max-height: min(40vh, 360px);
+    max-height: min(35dvh, 320px) !important;
   }
 }
 

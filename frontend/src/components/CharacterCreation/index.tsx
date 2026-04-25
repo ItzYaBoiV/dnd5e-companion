@@ -97,7 +97,7 @@ export default function CharacterCreation() {
   return (
     <div
       className={clsx(
-        "min-h-full mx-auto px-3 pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-4 sm:pt-4 sm:pb-6",
+        "min-h-full mx-auto px-3 pt-[max(0.5rem,env(safe-area-inset-top))] max-md:pb-44 sm:px-4 sm:pt-4 md:pb-6",
         draft.pdfImportPreviewUrl
           ? "max-w-7xl lg:grid lg:grid-cols-[minmax(0,1fr)_min(38%,420px)] lg:items-start lg:gap-6"
           : "max-w-3xl",
@@ -174,7 +174,10 @@ export default function CharacterCreation() {
             </p>
           )}
           <PdfImportReviewBanner />
-          <p className="text-xs text-stone-600 mb-6 leading-relaxed">
+          <p className="sm:hidden text-xs text-stone-600 mb-4 leading-relaxed">
+            SRD (Open5e) rules. Higher start levels add guided level-up steps before review.
+          </p>
+          <p className="hidden sm:block text-xs text-stone-600 mb-6 leading-relaxed">
             Rules follow the D&amp;D 5e SRD (Open5e). Starting above 1st level runs guided steps for each level (HP,
             features, spells, ASI) before review — for both single-class and multiclass (multiclass also sets 1st-level
             class and level order on the Class step).

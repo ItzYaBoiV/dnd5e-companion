@@ -14,6 +14,7 @@ import { referenceApi } from "@/services/api";
 import { mergeSpellListsPreferringRichestClasses } from "@/lib/spellDedupe";
 import { LoadingSpinner, SpellLevelBadge } from "@/components/common";
 import { clsx } from "clsx";
+import { CharacterCreationStepNext } from "./CharacterCreationStepNext";
 
 interface Props {
   draft: CharacterDraft;
@@ -90,14 +91,13 @@ export default function Step7_StartingSpells({ draft, updateDraft, onNext }: Pro
           </div>
         ))}
 
-        <button
-          type="button"
-          className="btn-primary w-full py-3 disabled:opacity-40"
+        <CharacterCreationStepNext
+          label={
+            canProceedMc ? "Continue to review" : "Finish the spell picks above for each class"
+          }
           disabled={!canProceedMc}
           onClick={onNext}
-        >
-          {canProceedMc ? "Continue to review" : "Finish the spell picks above for each class"}
-        </button>
+        />
       </div>
     );
   }
@@ -113,9 +113,12 @@ export default function Step7_StartingSpells({ draft, updateDraft, onNext }: Pro
               : "Your class and level don’t start with spellcasting in the SRD setup this app uses (for example, a 1st-level fighter or ranger, or a paladin before 2nd level). You can still add spells later on the Spells tab if your DM grants them."}
           </p>
         </div>
-        <button type="button" className="btn-primary w-full py-3" onClick={onNext}>
-          {!draft.useMulticlass && draft.level > 1 ? "Continue — level 2 choices" : "Continue to review"}
-        </button>
+        <CharacterCreationStepNext
+          label={
+            !draft.useMulticlass && draft.level > 1 ? "Continue — level 2 choices" : "Continue to review"
+          }
+          onClick={onNext}
+        />
       </div>
     );
   }
@@ -491,18 +494,17 @@ function SpellPickerPanel({
       )}
 
       {segmentKey === undefined && onNext != null && (
-        <button
-          type="button"
-          className="btn-primary w-full py-3 disabled:opacity-40"
+        <CharacterCreationStepNext
+          label={
+            canProceed
+              ? !draft.useMulticlass && draft.level > 1
+                ? "Continue — level 2 choices"
+                : "Continue to review"
+              : "Finish the spell picks above"
+          }
           disabled={!canProceed}
           onClick={onNext}
-        >
-          {canProceed
-            ? !draft.useMulticlass && draft.level > 1
-              ? "Continue — level 2 choices"
-              : "Continue to review"
-            : "Finish the spell picks above"}
-        </button>
+        />
       )}
 
       {(detailSpell != null || detailLoading || detailError) && (

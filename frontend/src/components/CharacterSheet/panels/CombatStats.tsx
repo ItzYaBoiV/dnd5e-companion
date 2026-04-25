@@ -64,7 +64,7 @@ export default function CombatStats({ character }: Props) {
   const rollInitiative = async () => {
     setIniRolling(true);
     try {
-      await runAppRoll("Initiative", "init", (_adv) =>
+      await runAppRoll("Initiative", "init", (_adv, _opts) =>
         combatApi.rollInitiative(character.id) as Promise<Record<string, unknown>>,
       );
     } catch (e) {

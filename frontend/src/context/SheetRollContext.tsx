@@ -30,7 +30,9 @@ export type SheetRollBannerState =
       result: Record<string, unknown>;
     };
 
-export type SheetRollFn = (advantage: AdvantageType) => Promise<Record<string, unknown>>;
+export type SheetRollOpts = { priorD20?: number };
+
+export type SheetRollFn = (advantage: AdvantageType, opts?: SheetRollOpts) => Promise<Record<string, unknown>>;
 
 type Ctx = {
   advantage: AdvantageType;
@@ -72,13 +74,14 @@ export function SheetRollProvider({ children }: { children: ReactNode }) {
       variant: SheetRollVariant,
       rollFn: SheetRollFn,
       advForApi: AdvantageType,
+      rollOpts?: SheetRollOpts,
     ): Promise<Record<string, unknown>> => {
       tossKeyRef.current += 1;
       const tossKey = tossKeyRef.current;
       rollCancelledRef.current = false;
       setBanner({ phase: "rolling", title, variant, tossKey });
       try {
-        const res = await rollFn(advForApi);
+        const res = await rollFn(advForApi, rollOpts);
         if (rollCancelledRef.current) {
           return res;
         }
@@ -118,7 +121,7 @@ export function SheetRollProvider({ children }: { children: ReactNode }) {
   const runAppRoll = useCallback(
     async (title: string, variant: SheetRollVariant, rollFn: SheetRollFn) => {
       lastRollRef.current = { title, variant, rollFn };
-      return performSheetRoll(title, variant, rollFn, advantage);
+      return performSheetRoll(title, variant, rollFn, advantage, undefined);
     },
     [advantage, performSheetRoll],
   );
@@ -127,9 +130,19 @@ export function SheetRollProvider({ children }: { children: ReactNode }) {
     const last = lastRollRef.current;
     if (!last || (last.variant !== "check" && last.variant !== "save")) return undefined;
     if (banner.phase !== "done") return undefined;
+    const priorD20 =
+      banner.result.advantage === "normal" && typeof banner.result.roll === "number"
+        ? banner.result.roll
+        : undefined;
     setAdvantage("advantage");
-    return performSheetRoll(last.title, last.variant, last.rollFn, "advantage");
-  }, [banner.phase, performSheetRoll]);
+    return performSheetRoll(
+      last.title,
+      last.variant,
+      last.rollFn,
+      "advantage",
+      priorD20 !== undefined ? { priorD20 } : undefined,
+    );
+  }, [banner, performSheetRoll]);
 
   const value = useMemo(
     () => ({

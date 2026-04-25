@@ -1,4 +1,5 @@
 import { DUNGEON_T as T } from "@/lib/dungeonForgeConstants";
+import { shouldVoidPlayerViewCell } from "@/lib/dungeonForgePlayerHidden";
 import type { RenderCell } from "@/lib/dungeonTileRenderer";
 
 export function trapGlyph(name: string | undefined): string {
@@ -76,7 +77,19 @@ export function effectiveDungeonGridDims(dg: {
 
 type ForgeGridDungeon = {
   grid: number[][];
-  rooms?: Array<{ id: number; x: number; y: number; w: number; h: number; cx: number; cy: number; theme?: string }>;
+  rooms?: Array<{
+    id: number;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    cx: number;
+    cy: number;
+    theme?: string;
+    /** DM-only room until `playerHiddenReleaseDoor` opens; see `applyPlayerHiddenRevealRules`. */
+    dmHideFromPlayer?: boolean;
+    playerHiddenReleaseDoorKey?: string;
+  }>;
   entities?: Array<{ x: number; y: number; type: string; name?: string; roomId?: number; [k: string]: unknown }>;
   decoOverlay?: Array<{ x: number; y: number; ch: string; fg?: string; name?: string; roomId?: number; [k: string]: unknown }>;
   width: number;
@@ -94,9 +107,20 @@ type ForgeGridDungeon = {
   } | null;
 };
 
-export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: boolean; playerView?: boolean }): RenderCell[][] {
+export function buildRenderGrid(
+  dg: ForgeGridDungeon,
+  forgeCfg: {
+    showThemes?: boolean;
+    playerView?: boolean;
+    /** Which door keys are passable; used with `playerView` for DM-hidden room voiding. */
+    doorOpen?: Set<string> | null;
+    doorStates?: Record<string, string> | null;
+  },
+): RenderCell[][] {
   const showThemes = !!forgeCfg?.showThemes;
   const playerView = !!forgeCfg?.playerView;
+  const doorOpen = forgeCfg.doorOpen;
+  const doorStates = forgeCfg.doorStates;
   const fo = dg.forgeRenderOverlay;
   const grid = dg.grid;
   const rooms = dg.rooms ?? [];
@@ -160,6 +184,10 @@ export function buildRenderGrid(dg: ForgeGridDungeon, forgeCfg: { showThemes?: b
     const row: RenderCell[] = [];
     for (let x = 0; x < W; x++) {
       const k = `${x},${y}`;
+      if (playerView && shouldVoidPlayerViewCell(x, y, rooms, doorOpen, doorStates)) {
+        row.push({ ch: G.voidCh, tile: T.V, eType: null, fg: null, eName: null, extra: null });
+        continue;
+      }
       const ent = eMap[k];
       const decoRaw = dMap[k];
       const deco =

@@ -172,10 +172,26 @@ export const referenceApi = {
 export const combatApi = {
   rollAttack:    (id: string, weaponItemId: string, advantage: AdvantageType = "normal") =>
     post<AttackRollResult>(`/combat/${id}/roll/attack`, { weaponItemId, advantage }),
-  rollSave:      (id: string, ability: string, advantage: AdvantageType = "normal") =>
-    post(`/combat/${id}/roll/save`, { ability, advantage }),
-  rollCheck:     (id: string, skill: string, advantage: AdvantageType = "normal") =>
-    post(`/combat/${id}/roll/check`, { skill, advantage }),
+  rollSave: (
+    id: string,
+    ability: string,
+    advantage: AdvantageType = "normal",
+    opts?: { priorD20?: number },
+  ) => {
+    const body: Record<string, unknown> = { ability, advantage };
+    if (opts?.priorD20 != null) body.priorD20 = opts.priorD20;
+    return post(`/combat/${id}/roll/save`, body);
+  },
+  rollCheck: (
+    id: string,
+    skill: string,
+    advantage: AdvantageType = "normal",
+    opts?: { priorD20?: number },
+  ) => {
+    const body: Record<string, unknown> = { skill, advantage };
+    if (opts?.priorD20 != null) body.priorD20 = opts.priorD20;
+    return post(`/combat/${id}/roll/check`, body);
+  },
   rollInitiative:(id: string) =>
     get(`/combat/${id}/roll/initiative`),
 };

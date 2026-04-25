@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { useSessionStore } from "@/store/sessionStore";
 import type { Combatant, PlayerRollInfo, DmRollInfo } from "@/store/sessionStore";
 import { characterApi } from "@/services/api";
@@ -12,6 +13,7 @@ import {
   RefreshCw,
   SkipForward,
   X,
+  LogOut,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -42,6 +44,7 @@ import {
   isOpenFloorLocation,
   maxFogHopsForLocationType,
 } from "@/lib/dungeonForgeFog";
+import { applyPlayerHiddenRevealRules } from "@/lib/dungeonForgePlayerHidden";
 import { DUNGEON_T } from "@/lib/dungeonForgeConstants";
 import {
   greedyStepToward,
@@ -332,6 +335,7 @@ export default function PlayPage() {
     loadSession,
     createSession,
     deleteSession,
+    leaveSession,
   } = useSessionStore();
   const [step, setStep] = useState<FlowStep>("map");
   const [workspacePane, setWorkspacePane] = useState<WorkspacePane>("rolls");
@@ -444,6 +448,19 @@ export default function PlayPage() {
                 );
               })}
             </div>
+          )}
+          {activeSession && (
+            <button
+              type="button"
+              onClick={() => {
+                leaveSession();
+                void loadSessions();
+              }}
+              className="btn-secondary flex items-center gap-1 text-sm"
+            >
+              <LogOut size={14} className="shrink-0" />
+              <span>Change session</span>
+            </button>
           )}
           <button
             type="button"
@@ -612,7 +629,26 @@ function MapStep({ onContinue, activeSessionId }: { onContinue: () => void; acti
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-hidden">
-        <DungeonForge />
+        <div className="hidden h-full min-h-0 lg:block">
+          <DungeonForge />
+        </div>
+        <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3 lg:hidden">
+          <p className="text-sm text-gray-400">
+            The map editor is built for a wide screen. Open <b>Dungeon Forge</b> in the{" "}
+            <span className="text-gray-200">Library</span> tab, set <b>ACTIVE SESSION</b> to this one, use{" "}
+            <b>SEND TO SESSION</b>, then return here and continue.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Link to="/dungeons" className="btn-primary inline-flex items-center gap-1 text-sm">
+              Open Dungeon Forge
+            </Link>
+          </div>
+          {hasSaved ? (
+            <p className="text-xs text-emerald-400/95">A map is already linked to this session — you can continue.</p>
+          ) : (
+            <p className="text-xs text-gray-500">Waiting for a saved map on this session…</p>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -962,15 +998,16 @@ export function EncounterWorkspace({
   const [mapActionBusy, setMapActionBusy] = useState(false);
   /** DM map zoom (multiplier on computed cell size). Pan uses the scrollable viewport. */
   const [dmMapZoom, setDmMapZoom] = useState(1);
-  /** Flat / depth / 3D — mirrored to player TV via `viewMode` on sync. */
-  const [dmMapViewMode, setDmMapViewMode] = useState<"flat" | "depth" | "3d">(() => {
+  /** Depth / 3D — mirrored to player TV via `viewMode` on sync (flat removed; legacy saves map to depth). */
+  const [dmMapViewMode, setDmMapViewMode] = useState<"depth" | "3d">(() => {
     try {
       const v = localStorage.getItem("dnd5e-play-map-view-mode");
-      if (v === "flat" || v === "depth" || v === "3d") return v;
+      if (v === "flat") return "depth";
+      if (v === "depth" || v === "3d") return v;
     } catch {
       /* ignore */
     }
-    return "flat";
+    return "depth";
   });
   const [partyLeaderId, setPartyLeaderId] = useState<string | null>(null);
   const [partyFollowIds, setPartyFollowIds] = useState<string[]>([]);
@@ -1302,11 +1339,16 @@ export function EncounterWorkspace({
   const renderGrid = useMemo(() => {
     if (!dungeon?.grid || !Array.isArray(dungeon?.rooms)) return null;
     try {
-      return buildRenderGrid(dungeon, { showThemes: false });
+      return buildRenderGrid(dungeon, {
+        showThemes: false,
+        playerView: playerViewPreview,
+        doorOpen: dmDoorOpen,
+        doorStates: readLastPlayerMapState()?.doorStates ?? null,
+      });
     } catch {
       return null;
     }
-  }, [dungeon]);
+  }, [dungeon, playerViewPreview, dmDoorOpen]);
 
   /** Stable palette identity — `forgePaletteForDungeon` returns a new object each call; 3D / canvas effects must not thrash on reference churn. */
   const palette = useMemo(() => forgePaletteForDungeon(dungeon), [dungeon]);
@@ -1470,11 +1512,17 @@ export function EncounterWorkspace({
     const doorForFog = dmDoorOpen === null ? null : dmDoorOpen;
     const locForFog = dungeon.locationType ?? "dungeon";
     const manualSeeds = dmManualReveal.size > 0 ? [...dmManualReveal] : null;
-    const fogCells = computeVisibleCellsForPlayer(
+    const revealedForFog = applyPlayerHiddenRevealRules(
       revealedSet,
+      dungeon.rooms,
+      doorForFog,
+      readLastPlayerMapState()?.doorStates ?? null,
+    );
+    const fogCells = computeVisibleCellsForPlayer(
+      revealedForFog,
       dgFog,
       doorForFog,
-      null,
+      readLastPlayerMapState()?.doorStates ?? null,
       {
         openFloor: isOpenFloorLocation(locForFog),
         maxFogHops: maxFogHopsForLocationType(locForFog),
@@ -1694,11 +1742,18 @@ export function EncounterWorkspace({
       }
 
       const manualSeeds = dmManualReveal.size > 0 ? [...dmManualReveal] : null;
-      const fogCells = computeVisibleCellsForPlayer(
+      const doorStates = readLastPlayerMapState()?.doorStates ?? null;
+      const revealedForFog = applyPlayerHiddenRevealRules(
         new Set(revealed),
+        dungeon.rooms,
+        doorForFog,
+        doorStates,
+      );
+      const fogCells = computeVisibleCellsForPlayer(
+        revealedForFog,
         dgFog,
         doorForFog,
-        null,
+        doorStates,
         {
           openFloor: isOpenFloorLocation(locForFog),
           maxFogHops: maxFogHopsForLocationType(locForFog),
@@ -2428,31 +2483,7 @@ export function EncounterWorkspace({
         dmRightSidebarCollapsed ? "lg:gap-2" : "lg:gap-0",
       )}
     >
-      <div className="dnd-card flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="md:hidden">
-          <DmPlayTvSyncPanel
-            tvId={dmTvId}
-            onTvIdChange={setDmTvId}
-            onApplyTvId={() => {
-              const t = dmTvId.trim();
-              if (!TV_ID_PATTERN.test(t)) {
-                setTvSyncStatus("TV id may only use letters, numbers, _ or - (max 32).");
-                return;
-              }
-              try {
-                localStorage.setItem("dnd5e_last_tv", t);
-              } catch {
-                /* ignore */
-              }
-              setTvSyncStatus(`Saved TV id “${t}”. Use the sync buttons to push.`);
-            }}
-            onSyncView={() => void runTvSync(true)}
-            onSyncFull={() => void runTvSync(false)}
-            busy={tvSyncBusy}
-            status={tvSyncStatus}
-            layout="compact"
-          />
-        </div>
+      <div className="dnd-card hidden min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex">
         <div className="mb-2 hidden rounded border border-gray-800/90 bg-black/35 px-2 py-1.5 text-[10px] leading-snug text-gray-400 md:block">
           <span className="font-display font-semibold text-dnd-gold/85">TV / projector</span> — controls live in the{" "}
           <span className="text-gray-300">left sidebar</span> (below the nav).{" "}
@@ -2545,7 +2576,7 @@ export function EncounterWorkspace({
                 disabled={dmMapViewMode === "3d"}
                 title={
                   dmMapViewMode === "3d"
-                    ? "Switch to Flat or Depth for 2D player preview."
+                    ? "Switch to Depth for 2D player preview."
                     : "Show roughly what players see on the TV: same fog of war, no DM map icons or secret-door highlights. Pan and zoom still work; map editing is paused."
                 }
                 className={clsx(
@@ -2563,8 +2594,7 @@ export function EncounterWorkspace({
               <span className="text-[10px] uppercase tracking-wide text-gray-600">Display</span>
               {(
                 [
-                  { k: "flat" as const, label: "Flat", t: "2D map (default). Sync sends this mode to the TV." },
-                  { k: "depth" as const, label: "Depth", t: "2D with wall depth and lighting on the TV." },
+                  { k: "depth" as const, label: "Depth", t: "2D with wall depth and lighting (default). Sync sends this mode to the TV." },
                   { k: "3d" as const, label: "3D", t: "Three.js view. Sync sends 3D to player TVs." },
                 ] as const
               ).map(({ k, label, t }) => (
@@ -2754,7 +2784,7 @@ export function EncounterWorkspace({
               vignettePass={dmMapViewMode === "depth"}
               depthFog={dmMapViewMode === "depth"}
               battleTokens={tokensLocal.length ? tokensLocal : undefined}
-              playerSightRingCells={PLAYER_SIGHT_RING_CELLS}
+              playerSightRingCells={playerViewPreview ? null : PLAYER_SIGHT_RING_CELLS}
               tokenDragEnabled={
                 !!activeCombat && !laserPointerMode && !fogPaintMode && !playerViewPreview
               }
@@ -3084,7 +3114,7 @@ export function EncounterWorkspace({
 
       <div
         className={clsx(
-          "dnd-card flex min-h-0 flex-col gap-2 overflow-hidden",
+          "dnd-card flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden",
           dmRightSidebarCollapsed
             ? "w-full lg:max-w-[2.75rem] lg:min-w-0 lg:items-center lg:py-2"
             : "w-full lg:min-w-0",
@@ -3148,7 +3178,7 @@ export function EncounterWorkspace({
               </button>
             </div>
 
-            <div className="flex shrink-0 gap-1 lg:hidden">
+            <div className="hidden shrink-0 gap-1 lg:flex">
               {(["combat", "rolls"] as WorkspacePane[]).map((p) => (
                 <button
                   key={p}
@@ -3168,22 +3198,24 @@ export function EncounterWorkspace({
 
             {activeCombat ? <ConcentrationDmBanner /> : null}
 
-            <div className="shrink-0 border-b border-gray-800 pb-2 lg:border-0 lg:pb-0">
-              <button
-                type="button"
-                className="mb-1 flex w-full items-center justify-between gap-2 text-left lg:mb-0"
-                onClick={() => setDmSecRolls((v) => !v)}
-              >
-                <span className="dnd-label text-xs">Players roll</span>
-                {dmSecRolls ? <ChevronUp size={14} className="shrink-0 text-gray-500" /> : <ChevronDown size={14} className="shrink-0 text-gray-500" />}
-              </button>
-            </div>
+            {workspaceWideLayout && (
+              <div className="shrink-0 border-b border-gray-800 pb-2 lg:border-0 lg:pb-0">
+                <button
+                  type="button"
+                  className="mb-1 flex w-full items-center justify-between gap-2 text-left lg:mb-0"
+                  onClick={() => setDmSecRolls((v) => !v)}
+                >
+                  <span className="dnd-label text-xs">What to roll (party &amp; DM)</span>
+                  {dmSecRolls ? <ChevronUp size={14} className="shrink-0 text-gray-500" /> : <ChevronDown size={14} className="shrink-0 text-gray-500" />}
+                </button>
+              </div>
+            )}
 
             <div
               className={clsx(
                 "min-h-0 flex-1 overflow-auto",
-                pane === "rolls" ? "block" : "hidden",
-                dmSecRolls ? "lg:block lg:min-h-[180px]" : "lg:hidden",
+                pane === "rolls" || !workspaceWideLayout ? "block" : "hidden",
+                dmSecRolls || !workspaceWideLayout ? "lg:block lg:min-h-[180px]" : "lg:hidden",
               )}
             >
               <div className="min-h-0 w-full">
@@ -3193,7 +3225,9 @@ export function EncounterWorkspace({
 
             {activeCombat && (
               <>
-                <div className="shrink-0 border-t border-gray-800 pt-2">
+                <div
+                  className={clsx("shrink-0 border-t border-gray-800 pt-2", !workspaceWideLayout && "hidden")}
+                >
                   <button
                     type="button"
                     className="flex w-full items-center justify-between gap-2 text-left"
@@ -3206,7 +3240,7 @@ export function EncounterWorkspace({
                 <div
                   className={clsx(
                     "min-h-0 flex-1 overflow-auto",
-                    pane === "combat" ? "block" : "hidden",
+                    workspaceWideLayout && pane === "combat" ? "block" : "hidden",
                     dmSecCombat ? "lg:block lg:min-h-[200px]" : "lg:hidden",
                   )}
                 >
@@ -3220,7 +3254,7 @@ export function EncounterWorkspace({
             {!activeCombat && (
               <div
                 className={clsx(
-                  "shrink-0 border-t border-gray-800 pt-2",
+                  "shrink-0 border-t border-gray-800 pt-2 max-lg:hidden",
                   pane === "combat" ? "block" : "hidden",
                   dmSecCombat ? "lg:block" : "lg:hidden",
                 )}
@@ -3250,8 +3284,17 @@ export function EncounterWorkspace({
           <div className="mt-2 max-h-56 overflow-y-auto text-xs">
             {!room ? (
               <p className="italic text-gray-500">
-                Click the map or a room chip to focus notes and the camera. Right-click creatures, loot, traps, or riddles
-                on the map for quick actions.
+                {workspaceWideLayout ? (
+                  <>
+                    Click the map or a room chip to focus notes and the camera. Right-click creatures, loot, traps, or
+                    riddles on the map for quick actions.
+                  </>
+                ) : (
+                  <>
+                    Open <b>Map &amp; player TV</b> at the bottom of this panel to focus a room, or use the map on a
+                    large screen.
+                  </>
+                )}
               </p>
             ) : (
               <>
@@ -3369,6 +3412,67 @@ export function EncounterWorkspace({
           </div>
               )}
             </div>
+
+            <details className="shrink-0 max-lg:mt-2 max-lg:rounded-lg max-lg:border max-lg:border-gray-800/80 max-lg:bg-gray-950/40 max-lg:px-2 max-lg:py-1.5 lg:hidden">
+              <summary className="cursor-pointer list-none text-xs font-display text-gray-300">
+                <span className="text-dnd-gold/90">Map &amp; player TV</span>
+                <span className="ml-1.5 text-[10px] text-gray-500">(sync, room for notes)</span>
+              </summary>
+              <div className="mt-2 space-y-2 border-t border-gray-800/80 pt-2">
+                <DmPlayTvSyncPanel
+                  tvId={dmTvId}
+                  onTvIdChange={setDmTvId}
+                  onApplyTvId={() => {
+                    const t = dmTvId.trim();
+                    if (!TV_ID_PATTERN.test(t)) {
+                      setTvSyncStatus("TV id may only use letters, numbers, _ or - (max 32).");
+                      return;
+                    }
+                    try {
+                      localStorage.setItem("dnd5e_last_tv", t);
+                    } catch {
+                      /* ignore */
+                    }
+                    setTvSyncStatus(`Saved TV id “${t}”. Use the sync buttons to push.`);
+                  }}
+                  onSyncView={() => void runTvSync(true)}
+                  onSyncFull={() => void runTvSync(false)}
+                  busy={tvSyncBusy}
+                  status={tvSyncStatus}
+                  layout="compact"
+                />
+                {dungeon && Array.isArray((dungeon as { rooms?: { id: number; label?: string; type?: string; isSecretRoom?: boolean }[] }).rooms) && (dungeon as { rooms: unknown[] }).rooms.length > 0 && (
+                  <div>
+                    <label className="dnd-label mb-1 block text-xs">Focus room (notes &amp; camera)</label>
+                    <select
+                      className="input-field w-full text-sm"
+                      value={selectedRoomId == null ? "" : String(selectedRoomId)}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === "") {
+                          setSelectedRoomId(null);
+                          setMapCamera("global");
+                        } else {
+                          setSelectedRoomId(Number(v));
+                          setMapCamera("room");
+                        }
+                      }}
+                    >
+                      <option value="">Whole map / none</option>
+                      {(
+                        (dungeon as { rooms: { id: number; label?: string; type?: string; isSecretRoom?: boolean }[] })
+                          .rooms
+                      ).map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.isSecretRoom ? "★ " : ""}
+                          {r.id}. {r.label || r.type}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            </details>
           </>
         )}
       </div>
@@ -4579,27 +4683,35 @@ function InlineRollHelper() {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-1">
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-display text-lg font-bold text-blue-400">Players Roll</h2>
-          <button type="button" onClick={() => void refreshRolls()} className="text-gray-500 hover:text-white">
-            <RefreshCw size={14} />
-          </button>
-        </div>
-        {rollSummary.playerRolls.map((p) => (
-          <PlayerRollCard key={p.characterId} info={p} />
-        ))}
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="font-display text-base font-bold text-dnd-gold sm:text-lg">What to roll</h2>
+        <button
+          type="button"
+          onClick={() => void refreshRolls()}
+          className="shrink-0 text-gray-500 hover:text-white"
+          title="Refresh from session"
+        >
+          <RefreshCw size={14} />
+        </button>
       </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-1">
+        <div className="space-y-3">
+          <h3 className="font-display text-sm font-bold uppercase tracking-wide text-blue-400/95">Party</h3>
+          {rollSummary.playerRolls.map((p) => (
+            <PlayerRollCard key={p.characterId} info={p} />
+          ))}
+        </div>
 
-      <div className="space-y-3">
-        <h2 className="font-display text-lg font-bold text-red-400">You Roll (DM)</h2>
-        {rollSummary.dmRolls.map((d) => (
-          <DmRollCard key={d.combatantId} info={d as DmRollInfo} />
-        ))}
-        {rollSummary.dmRolls.length === 0 && (
-          <p className="text-sm italic text-gray-500">No monsters in combat.</p>
-        )}
+        <div className="space-y-3">
+          <h3 className="font-display text-sm font-bold uppercase tracking-wide text-red-400/95">You (DM)</h3>
+          {rollSummary.dmRolls.map((d) => (
+            <DmRollCard key={d.combatantId} info={d as DmRollInfo} />
+          ))}
+          {rollSummary.dmRolls.length === 0 && (
+            <p className="text-sm italic text-gray-500">No monsters in combat.</p>
+          )}
+        </div>
       </div>
     </div>
   );

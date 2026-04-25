@@ -35,8 +35,8 @@ export default function SavingThrows({ character }: Props) {
   const rollApp = async (ability: AbilityName) => {
     setRolling(ability);
     try {
-      await runAppRoll(`${ABILITY_LABELS[ability].full} save`, "save", (adv) =>
-        combatApi.rollSave(character.id, ability, adv) as Promise<Record<string, unknown>>,
+      await runAppRoll(`${ABILITY_LABELS[ability].full} save`, "save", (adv, opts) =>
+        combatApi.rollSave(character.id, ability, adv, opts) as Promise<Record<string, unknown>>,
       );
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));

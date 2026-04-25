@@ -3,6 +3,7 @@ import type { CharacterDraft, Background } from "@/types/dnd";
 import { useReferenceStore } from "@/store/referenceStore";
 import { LoadingSpinner } from "@/components/common";
 import { clsx } from "clsx";
+import { CharacterCreationStepNext } from "./CharacterCreationStepNext";
 
 interface Props {
   draft: CharacterDraft;
@@ -111,16 +112,11 @@ export default function Step5_Background({ draft, updateDraft, onNext }: Props) 
         </div>
       )}
 
-      <div className="flex justify-stretch sm:justify-end pt-2">
-        <button
-          type="button"
-          onClick={onNext}
-          disabled={!draft.backgroundSlug}
-          className="btn-primary w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed px-8"
-        >
-          Next: Starting Equipment
-        </button>
-      </div>
+      <CharacterCreationStepNext
+        label="Next: Starting Equipment"
+        onClick={onNext}
+        disabled={!draft.backgroundSlug}
+      />
     </div>
   );
 }

@@ -112,6 +112,8 @@ interface SessionStore {
   loadSession:      (id: string) => Promise<void>;
   createSession:    (name: string) => Promise<ActiveSession>;
   deleteSession:    (id: string) => Promise<void>;
+  /** Clear the active session locally and return to the session picker (no server call). */
+  leaveSession:     () => void;
 
   addCharacter:     (characterId: string, playerName: string) => Promise<void>;
   removeCharacter:  (characterId: string) => Promise<void>;
@@ -162,6 +164,16 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   deleteSession: async (id) => {
     await req("DELETE", `/sessions/${id}`);
     set((s) => ({ sessions: s.sessions.filter((se) => se.id !== id), activeSession: null }));
+  },
+
+  leaveSession: () => {
+    set({
+      activeSession: null,
+      activeCombat: null,
+      rollSummary: null,
+      partyCharacters: [],
+      concentrationBanner: null,
+    });
   },
 
   addCharacter: async (characterId, playerName) => {

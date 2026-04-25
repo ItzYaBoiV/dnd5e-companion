@@ -281,30 +281,68 @@ function lightKindHex(kind: SceneLight["kind"] | undefined, custom?: string): st
   }
 }
 
-function dominantLightAtCell(
-  gx: number,
-  gy: number,
+type PerCellLightInfluence = {
+  /** Index into `lights` for tint multiply, or -1. */
+  dominantIdx: Int16Array;
+  /** Min Euclidean distance to any light (for depth fog), capped by a local box per light. */
+  minDistToAny: Float32Array;
+};
+
+/**
+ * O(sum of light-disc areas) + O(lights * span²) — avoids O(cells × lights) in depth + tint passes.
+ */
+function precomputePerCellLightInfluence(
+  grid: RenderCell[][],
+  cols: number,
+  rows: number,
   lights: SceneLight[],
   doorOpen: Set<string> | null | undefined,
   doorStates: Record<string, string> | null | undefined,
-  grid: RenderCell[][],
-): SceneLight | null {
-  if (!grid.length || !grid[0]?.length) return null;
-  let best: SceneLight | null = null;
-  let bestD = 1e9;
-  for (const L of lights) {
-    const lx = Math.floor(L.gx);
-    const ly = Math.floor(L.gy);
-    if (lx < 0 || ly < 0 || ly >= grid.length || lx >= grid[0].length) continue;
-    if (cellBlocksLightPropagation(grid[ly]![lx]!, lx, ly, doorOpen, doorStates)) continue;
-    const d = Math.hypot(gx - L.gx, gy - L.gy);
+): PerCellLightInfluence {
+  const n = cols * rows;
+  const dominantIdx = new Int16Array(n);
+  const bestD = new Float32Array(n);
+  const minDistToAny = new Float32Array(n);
+  dominantIdx.fill(-1);
+  bestD.fill(1e9);
+  minDistToAny.fill(1e9);
+
+  for (let li = 0; li < lights.length; li++) {
+    const L = lights[li]!;
+    const lx0 = Math.floor(L.gx);
+    const ly0 = Math.floor(L.gy);
+    if (lx0 < 0 || ly0 < 0 || ly0 >= rows || lx0 >= cols) continue;
+    if (cellBlocksLightPropagation(grid[ly0]![lx0]!, lx0, ly0, doorOpen, doorStates)) continue;
     const r = Math.max(0.5, L.radiusCells || 4);
-    if (d <= r && d < bestD) {
-      best = L;
-      bestD = d;
+    const rInt = Math.ceil(r) + 1;
+    for (let y = Math.max(0, ly0 - rInt); y < Math.min(rows, ly0 + rInt + 1); y++) {
+      for (let x = Math.max(0, lx0 - rInt); x < Math.min(cols, lx0 + rInt + 1); x++) {
+        const d = Math.hypot(x - L.gx, y - L.gy);
+        if (d > r) continue;
+        const i = y * cols + x;
+        if (d < bestD[i]!) {
+          bestD[i] = d;
+          dominantIdx[i] = li;
+        }
+      }
     }
   }
-  return best;
+
+  const fogSpan = 24;
+  for (let li = 0; li < lights.length; li++) {
+    const L = lights[li]!;
+    const cx = Math.floor(L.gx);
+    const cy = Math.floor(L.gy);
+    for (let y = Math.max(0, cy - fogSpan); y < Math.min(rows, cy + fogSpan + 1); y++) {
+      for (let x = Math.max(0, cx - fogSpan); x < Math.min(cols, cx + fogSpan + 1); x++) {
+        const d = Math.hypot(x - L.gx, y - L.gy);
+        const i = y * cols + x;
+        if (d < minDistToAny[i]!) minDistToAny[i] = d;
+      }
+    }
+  }
+
+  return { dominantIdx, minDistToAny };
 }
 
 function applyFloorWallMicroDetail(
@@ -440,7 +478,9 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
   canvas.style.width = `${cssW}px`;
   canvas.style.height = `${cssH}px`;
 
-  const ctx = canvas.getContext("2d");
+  // Do not use `desynchronized: true` — with ~380ms full-frame redraws (PlayPage
+  // `animPhase`) the compositor can show tearing / blank flashes. Default sync path is stable.
+  const ctx = canvas.getContext("2d", { alpha: true });
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingEnabled = false;
@@ -510,6 +550,11 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
   const depthFog = !!opts.depthFog;
   const ink = !!opts.inkSaver;
   const doorOpenSet = opts.doorOpen ?? null;
+
+  const perCellLight =
+    mergedLights.length > 0
+      ? precomputePerCellLightInfluence(grid, cols, rows, mergedLights, doorOpenSet, doorStates)
+      : null;
 
   const paintCell = (x: number, y: number): void => {
     const px = x * cellPx;
@@ -657,6 +702,15 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
     }
   }
 
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  if ("textRendering" in ctx) {
+    try {
+      (ctx as CanvasRenderingContext2D & { textRendering?: "auto" | "geometricPrecision" | "optimizeLegibility" }).textRendering = "geometricPrecision";
+    } catch {
+      /* older browsers */
+    }
+  }
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
       const px = x * cellPx;
@@ -679,6 +733,7 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
       );
     }
   }
+  ctx.restore();
 
   if (mergedLights.length > 0 && !ink) {
     for (let y = 0; y < rows; y++) {
@@ -686,14 +741,16 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
         if (fog && !fog.has(`${x},${y}`)) continue;
         const px = x * cellPx;
         const py = y * cellPx;
-        const L = dominantLightAtCell(x, y, mergedLights, doorOpenSet, doorStates, grid);
-        if (!L) continue;
+        const i = y * cols + x;
+        const li = perCellLight?.dominantIdx[i] ?? -1;
+        if (li < 0) continue;
+        const L = mergedLights[li]!;
         const flick =
           L.flicker !== false && L.kind !== "divine" && L.kind !== "room"
             ? 1 + 0.05 * Math.sin(animPhase * Math.PI + x + y)
             : 1;
         const hex = lightKindHex(L.kind, L.color);
-        const dark = lightDarkBuf ? lightDarkBuf[y * cols + x] ?? 0.5 : 0.25;
+        const dark = lightDarkBuf ? lightDarkBuf[i] ?? 0.5 : 0.25;
         const lit = Math.max(0, 1 - Math.min(1, dark / 0.48));
         const a = lit * 0.22 * flick;
         if (a < 0.02) continue;
@@ -882,20 +939,18 @@ export function renderDungeonToCanvas(canvas: HTMLCanvasElement, grid: RenderCel
     drawBattleTokens(ctx, tokens, cellPx, fog, cols, rows, opts.tokenImages ?? null);
   }
 
-  const ringR = opts.playerSightRingCells;
+  const ringR = opts.playerSanitize ? null : opts.playerSightRingCells;
   if (ringR != null && ringR > 0 && tokens?.length) {
     drawPlayerSightRings(ctx, tokens, ringR, cellPx, fog, cols, rows);
   }
 
   if (!ink) {
-    if (depthFog && mergedLights.length > 0) {
+    if (depthFog && mergedLights.length > 0 && perCellLight) {
+      const { minDistToAny } = perCellLight;
       for (let y = 0; y < rows; y++) {
         for (let x = 0; x < cols; x++) {
           if (fog && !fog.has(`${x},${y}`)) continue;
-          let dMin = 1e9;
-          for (const L of mergedLights) {
-            dMin = Math.min(dMin, Math.hypot(x - L.gx, y - L.gy));
-          }
+          const dMin = minDistToAny[y * cols + x] ?? 1e9;
           if (dMin < 8) continue;
           const alpha = dMin >= 16 ? 0.42 : ((dMin - 8) / 8) * 0.42;
           if (alpha < 0.02) continue;
@@ -1619,6 +1674,37 @@ function drawWallTorchDecoSmall(
   ctx.globalAlpha = 1;
 }
 
+const MAP_GLYPH_FONT =
+  'system-ui, "Segoe UI Symbol", "Noto Color Emoji", "Apple Color Emoji", "Segoe UI", sans-serif';
+
+/**
+ * Stroked + filled text so map icons stay legible at zoom; pairs with `imageSmoothingEnabled` for overlays.
+ */
+function drawStrokedMapText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  cx: number,
+  cy: number,
+  fontCss: string,
+  fillStyle: string,
+  strokeRgba = "rgba(0,0,0,0.5)",
+) {
+  ctx.save();
+  ctx.font = fontCss;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineJoin = "round";
+  ctx.miterLimit = 2;
+  const m = /(\d+(?:\.\d+)?)px/.exec(fontCss);
+  const sizePx = m ? Number(m[1]) : 12;
+  ctx.lineWidth = Math.max(1, sizePx * 0.12);
+  ctx.strokeStyle = strokeRgba;
+  ctx.fillStyle = fillStyle;
+  ctx.strokeText(text, cx, cy + 0.5);
+  ctx.fillText(text, cx, cy + 0.5);
+  ctx.restore();
+}
+
 function drawOverlays(
   ctx: CanvasRenderingContext2D,
   cell: RenderCell,
@@ -1674,11 +1760,9 @@ function drawOverlays(
     ctx.beginPath();
     ctx.arc(cx, cy, Math.max(2, s * 0.38), 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = ep.deco;
-    ctx.font = `${Math.max(8, s * 0.55)}px monospace`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(cell.ch.length > 2 ? cell.ch.slice(0, 2) : cell.ch, cx, cy + 0.5);
+    const ch = cell.ch.length > 2 ? cell.ch.slice(0, 2) : cell.ch;
+    const fs = Math.max(10, Math.round(s * 0.55));
+    drawStrokedMapText(ctx, ch, cx, cy, `bold ${fs}px ${MAP_GLYPH_FONT}`, ep.deco);
     return;
   }
 
@@ -1725,11 +1809,16 @@ function drawOverlays(
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.fill();
       if (s >= 10) {
-        ctx.fillStyle = "#ffffff";
-        ctx.font = `bold ${Math.floor(s * 0.55)}px monospace`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(cell.ch, cx, cy + 1);
+        const fs = Math.max(10, Math.round(s * 0.55));
+        drawStrokedMapText(
+          ctx,
+          cell.ch,
+          cx,
+          cy,
+          `bold ${fs}px ${MAP_GLYPH_FONT}`,
+          "#ffffff",
+          "rgba(0,0,0,0.55)",
+        );
       }
     }
     return;
@@ -1752,11 +1841,15 @@ function drawOverlays(
       ctx.fill();
     }
     ctx.globalAlpha = 1;
-    ctx.fillStyle = "#ffffff";
-    ctx.font = `bold ${Math.floor(s * 0.55)}px sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(cell.ch, cx, cy + 1);
+    const lfs = Math.max(10, Math.round(s * 0.55));
+    drawStrokedMapText(
+      ctx,
+      cell.ch,
+      cx,
+      cy,
+      `bold ${lfs}px ${MAP_GLYPH_FONT}`,
+      "#ffffff",
+    );
     return;
   }
 
@@ -1773,22 +1866,22 @@ function drawOverlays(
       else drawWallTorchDeco(ctx, px, py, s, animPhase, fg);
       return;
     }
-    ctx.fillStyle = fg;
-    ctx.font = `${Math.floor(s * 0.65)}px monospace`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
     ctx.globalAlpha = 0.9;
-    ctx.fillText(cell.ch, px + s / 2, py + s / 2 + 1);
+    const tch = String(cell.ch ?? "·");
+    const dcx = px + s / 2;
+    const dcy = py + s / 2;
+    const dfs = Math.max(11, Math.round(s * 0.64));
+    drawStrokedMapText(ctx, tch, dcx, dcy, `bold ${dfs}px ${MAP_GLYPH_FONT}`, fg.startsWith("#") ? fg : String(ep.deco));
     ctx.globalAlpha = 1;
     return;
   }
 
   if (cell.eType === "theme") {
-    ctx.fillStyle = ep.theme;
-    ctx.font = `bold ${Math.floor(s * 0.55)}px monospace`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(cell.ch.length > 1 ? cell.ch[0] : cell.ch, px + s / 2, py + s / 2 + 1);
+    const tcx = px + s / 2;
+    const tcy = py + s / 2;
+    const tfs = Math.max(10, Math.round(s * 0.55));
+    const tch2 = cell.ch.length > 1 ? cell.ch[0]! : cell.ch;
+    drawStrokedMapText(ctx, tch2, tcx, tcy, `bold ${tfs}px ${MAP_GLYPH_FONT}`, ep.theme);
     return;
   }
 
@@ -1801,11 +1894,36 @@ function drawOverlays(
     ctx.arc(cx, cy, s * 0.42, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
-    ctx.fillStyle = ep.label;
-    ctx.font = `${Math.max(10, Math.floor(s * 0.52))}px sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(cell.ch.length > 2 ? cell.ch : "\u{1F441}", cx, cy + 1);
+    const dmch = cell.ch.length > 2 ? cell.ch : "\u{1F441}";
+    const dmfs = Math.max(10, Math.round(s * 0.52));
+    drawStrokedMapText(ctx, dmch, cx, cy, `${dmfs}px ${MAP_GLYPH_FONT}`, ep.label);
+    return;
+  }
+
+  if (cell.eType === "spawn_suggestion") {
+    const cx = px + s / 2;
+    const cy = py + s / 2;
+    const rad = Math.max(2, s * 0.36);
+    const ghost = !!(ex && typeof ex === "object" && (ex as { ghosted?: boolean }).ghosted);
+    ctx.globalAlpha = ghost ? 0.44 : 0.9;
+    ctx.fillStyle = "rgba(70, 60, 110, 0.38)";
+    ctx.beginPath();
+    ctx.arc(cx, cy, rad * 1.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = ghost ? 0.52 : 1;
+    const g = String(cell.ch ?? "").trim();
+    const gtxt = g.length ? (g.length > 2 ? g.slice(0, 2) : g) : "\u25D4";
+    const gfs = Math.max(9, Math.round(s * 0.52));
+    drawStrokedMapText(
+      ctx,
+      gtxt,
+      cx,
+      cy,
+      `bold ${gfs}px ${MAP_GLYPH_FONT}`,
+      ep.deco,
+      "rgba(0,0,0,0.35)",
+    );
+    ctx.globalAlpha = 1;
     return;
   }
 }

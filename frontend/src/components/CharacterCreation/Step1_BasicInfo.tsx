@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { CharacterDraft, CreationLevelUpPayload } from "@/types/dnd";
 import { ALIGNMENT_LABELS } from "@/types/dnd";
 import { defaultMulticlassLevelOrder } from "@/lib/multiclassLevelPlan";
+import { CharacterCreationStepNext } from "./CharacterCreationStepNext";
 
 interface Props {
   draft: CharacterDraft;
@@ -119,19 +120,15 @@ export default function Step1_BasicInfo({ draft, updateDraft, onNext }: Props) {
         </div>
       </div>
 
-      <div className="flex justify-stretch sm:justify-end pt-4">
-        <button
-          type="button"
-          onClick={() => {
-            syncLevelFromField();
-            onNext();
-          }}
-          disabled={!valid}
-          className="btn-primary w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed px-8"
-        >
-          Next: Choose Race
-        </button>
-      </div>
+      <CharacterCreationStepNext
+        desktopPtClass="pt-4"
+        label="Next: Choose Race"
+        disabled={!valid}
+        onClick={() => {
+          syncLevelFromField();
+          onNext();
+        }}
+      />
     </div>
   );
 }

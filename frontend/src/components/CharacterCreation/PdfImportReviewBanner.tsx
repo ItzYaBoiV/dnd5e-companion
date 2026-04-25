@@ -34,7 +34,7 @@ export default function PdfImportReviewBanner() {
   if (issues.length === 0) return null;
 
   return (
-    <div className="mb-4 rounded-lg border border-amber-800/70 bg-amber-950/35 px-3 py-3 sm:px-4 space-y-3">
+    <div className="mb-4 rounded-lg border border-amber-800/70 bg-amber-950/35 px-3 py-3 sm:px-4 space-y-3 min-w-0">
       <div className="flex items-start justify-between gap-2">
         <h2 className="text-sm font-display font-semibold text-amber-100">PDF import — please confirm</h2>
         <button
@@ -49,7 +49,7 @@ export default function PdfImportReviewBanner() {
       <p className="text-xs text-amber-100/80 leading-relaxed">
         Open each step below and use the normal builder questions to fix anything the sheet could not map cleanly.
       </p>
-      <ul className="space-y-3">
+      <ul className="space-y-3 max-h-[min(40dvh,320px)] overflow-y-auto overscroll-contain pr-0.5">
         {steps.map((step) => (
           <li key={step} className="text-xs text-amber-50/95">
             <div className="flex flex-wrap items-center gap-2 mb-1">

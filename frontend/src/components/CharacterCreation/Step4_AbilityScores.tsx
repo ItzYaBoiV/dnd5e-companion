@@ -8,6 +8,7 @@ import {
 } from "@/lib/suggestedAbilityScores";
 import { useReferenceStore } from "@/store/referenceStore";
 import { clsx } from "clsx";
+import { CharacterCreationStepNext } from "./CharacterCreationStepNext";
 
 interface Props {
   draft: CharacterDraft;
@@ -388,16 +389,11 @@ export default function Step4_AbilityScores({ draft, updateDraft, onNext }: Prop
         </div>
       )}
 
-      <div className="flex justify-stretch sm:justify-end pt-2">
-        <button
-          type="button"
-          onClick={handleNextStep}
-          disabled={!isComplete}
-          className="btn-primary w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed px-8"
-        >
-          Next: Background
-        </button>
-      </div>
+      <CharacterCreationStepNext
+        label="Next: Background"
+        onClick={handleNextStep}
+        disabled={!isComplete}
+      />
     </div>
   );
 }

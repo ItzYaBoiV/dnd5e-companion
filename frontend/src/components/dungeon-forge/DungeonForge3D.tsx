@@ -48,15 +48,146 @@ function cellVisible(gx: number, gy: number, fogCells: Set<string> | null | unde
   return fogCells.has(`${gx},${gy}`);
 }
 
-const ENTITY_MARKER_TYPES = new Set(["monster", "item", "trap", "riddle"]);
+/** Parse palette hex/CSS the same way canvas fills do; avoids tone-map hue shifts on bad strings. */
+function paletteColor(hex: string | undefined, fallback: string): THREE.Color {
+  const c = new THREE.Color();
+  const s = typeof hex === "string" && hex.trim() ? hex.trim() : fallback;
+  try {
+    c.set(s);
+  } catch {
+    c.set(fallback);
+  }
+  return c;
+}
 
-function makeEntityMarkerSprite(label: string, hex: string): THREE.Sprite {
+/** Reused so thousands of instances do not allocate per cell. */
+const INST_DUMMY = new THREE.Object3D();
+
+type Xz = { x: number; z: number };
+
+function pushXz(map: Map<string, Xz[]>, key: string, x: number, z: number): void {
+  let arr = map.get(key);
+  if (!arr) {
+    arr = [];
+    map.set(key, arr);
+  }
+  arr.push({ x, z });
+}
+
+function addInstancedRotatedPlanes(
+  group: THREE.Group,
+  buckets: Map<string, Xz[]>,
+  y: number,
+  fallbackHex: string,
+): void {
+  for (const [hex, list] of buckets) {
+    if (!list.length) continue;
+    const geom = new THREE.PlaneGeometry(0.92, 0.92);
+    geom.rotateX(-Math.PI / 2);
+    const mat = new THREE.MeshLambertMaterial({ color: paletteColor(hex, fallbackHex) });
+    const mesh = new THREE.InstancedMesh(geom, mat, list.length);
+    mesh.frustumCulled = false;
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i]!;
+      INST_DUMMY.position.set(p.x, y, p.z);
+      INST_DUMMY.rotation.set(0, 0, 0);
+      INST_DUMMY.scale.set(1, 1, 1);
+      INST_DUMMY.updateMatrix();
+      mesh.setMatrixAt(i, INST_DUMMY.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    group.add(mesh);
+  }
+}
+
+function addInstancedCylinders8(
+  group: THREE.Group,
+  list: Xz[],
+  colorHex: string,
+  fallbackHex: string,
+): void {
+  if (!list.length) return;
+  const geom = new THREE.CylinderGeometry(0.28, 0.32, 1.65, 8);
+  const mat = new THREE.MeshLambertMaterial({ color: paletteColor(colorHex, fallbackHex) });
+  const mesh = new THREE.InstancedMesh(geom, mat, list.length);
+  mesh.frustumCulled = false;
+  for (let i = 0; i < list.length; i++) {
+    const p = list[i]!;
+    INST_DUMMY.position.set(p.x, 0.82, p.z);
+    INST_DUMMY.updateMatrix();
+    mesh.setMatrixAt(i, INST_DUMMY.matrix);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  group.add(mesh);
+}
+
+function addInstancedBoxes(
+  group: THREE.Group,
+  list: Xz[],
+  opts: {
+    y: number;
+    sx: number;
+    sy: number;
+    sz: number;
+    colorHex: string;
+    fallbackHex: string;
+    transparent?: boolean;
+    opacity?: number;
+  },
+): void {
+  if (!list.length) return;
+  const geom = new THREE.BoxGeometry(opts.sx, opts.sy, opts.sz);
+  const mat = new THREE.MeshLambertMaterial({
+    color: paletteColor(opts.colorHex, opts.fallbackHex),
+    transparent: opts.transparent ?? false,
+    opacity: opts.opacity ?? 1,
+    depthWrite: opts.transparent ? false : true,
+  });
+  const mesh = new THREE.InstancedMesh(geom, mat, list.length);
+  mesh.frustumCulled = false;
+  for (let i = 0; i < list.length; i++) {
+    const p = list[i]!;
+    INST_DUMMY.position.set(p.x, opts.y, p.z);
+    INST_DUMMY.updateMatrix();
+    mesh.setMatrixAt(i, INST_DUMMY.matrix);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  group.add(mesh);
+}
+
+function addInstancedLavaPlanes(
+  group: THREE.Group,
+  list: Xz[],
+  lavaBg: string,
+  lavaGlow: string,
+): void {
+  if (!list.length) return;
+  const geom = new THREE.PlaneGeometry(0.92, 0.92);
+  geom.rotateX(-Math.PI / 2);
+  const mat = new THREE.MeshLambertMaterial({
+    color: paletteColor(lavaBg, "#c04020"),
+    emissive: paletteColor(lavaGlow, "#ff4400"),
+    emissiveIntensity: 0.45,
+  });
+  const mesh = new THREE.InstancedMesh(geom, mat, list.length);
+  mesh.frustumCulled = false;
+  for (let i = 0; i < list.length; i++) {
+    const p = list[i]!;
+    INST_DUMMY.position.set(p.x, 0.02, p.z);
+    INST_DUMMY.updateMatrix();
+    mesh.setMatrixAt(i, INST_DUMMY.matrix);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  group.add(mesh);
+}
+
+function makeEntityMarkerSprite(label: string, hex: string, opacity = 1): THREE.Sprite {
   const canvas = document.createElement("canvas");
   canvas.width = 64;
   canvas.height = 64;
   const ctx = canvas.getContext("2d");
   if (!ctx) {
-    const mat = new THREE.SpriteMaterial({ color: hex });
+    const mat = new THREE.SpriteMaterial({ color: hex, transparent: opacity < 1, opacity });
     return new THREE.Sprite(mat);
   }
   ctx.fillStyle = hex;
@@ -67,19 +198,86 @@ function makeEntityMarkerSprite(label: string, hex: string): THREE.Sprite {
   ctx.lineWidth = 3;
   ctx.stroke();
   ctx.fillStyle = "#0a0810";
-  ctx.font = "bold 32px system-ui,sans-serif";
+  ctx.font = "bold 30px 'Segoe UI Symbol',system-ui,sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(label, 32, 34);
   const map = new THREE.CanvasTexture(canvas);
   map.colorSpace = THREE.SRGBColorSpace;
-  const mat = new THREE.SpriteMaterial({ map, depthTest: true, depthWrite: false });
+  const mat = new THREE.SpriteMaterial({
+    map,
+    depthTest: true,
+    depthWrite: false,
+    transparent: opacity < 1,
+    opacity,
+  });
   const s = new THREE.Sprite(mat);
   s.scale.set(0.55, 0.55, 1);
   return s;
 }
 
+/** Cap glyphs in 3D — each unique ch/fg pair still shares one GPU texture via cache. */
 const MAX_FLOOR_GLYPHS = 420;
+/** Forward renderer cost scales badly with many point lights; 2D canvas uses a different path. */
+const MAX_3D_POINT_LIGHTS = 26;
+
+/** Same entity / map-marker categories as `drawOverlays` in `dungeonTileRenderer` (flat / depth). */
+const ENTITY_BILLBOARD_TYPES = new Set([
+  "monster",
+  "item",
+  "trap",
+  "riddle",
+  "dm_marker",
+  "spawn_suggestion",
+  "npc",
+  "headstone",
+  "landmark",
+  "notice_board",
+  "stall",
+  "siege",
+  "banner",
+  "portcullis",
+]);
+
+const BILLBOARD_META: Record<string, { label: string; hex: string; opacity?: number }> = {
+  monster: { label: "M", hex: "#c04050" },
+  item: { label: "I", hex: "#d4af37" },
+  trap: { label: "T", hex: "#c87820" },
+  riddle: { label: "?", hex: "#8060c0" },
+  dm_marker: { label: "\u{1F441}", hex: "#5a9c4a" },
+  spawn_suggestion: { label: "\u25D4", hex: "#7a70a8", opacity: 0.55 },
+  npc: { label: "\u265F", hex: "#6a8cba" },
+  headstone: { label: "\u271D", hex: "#8a8a92" },
+  landmark: { label: "\u2606", hex: "#c4a86a" },
+  notice_board: { label: "\u25A3", hex: "#a08060" },
+  stall: { label: "\u20B0", hex: "#c89860" },
+  siege: { label: "\u2694", hex: "#b06050" },
+  banner: { label: "\u2691", hex: "#c04050" },
+  portcullis: { label: "\u2261", hex: "#888878" },
+};
+
+function billboardSpecForCell(cell: RenderCell): { label: string; hex: string; opacity?: number } | null {
+  const et = cell.eType;
+  if (!et || !ENTITY_BILLBOARD_TYPES.has(et)) return null;
+  const ch0 = String(cell.ch ?? "").trim();
+  const two = Array.from(ch0).slice(0, 2).join("") || "?";
+
+  if (et === "monster" || et === "item" || et === "trap" || et === "riddle") {
+    return { label: ch0.length ? Array.from(ch0)[0]! : BILLBOARD_META[et]!.label, hex: BILLBOARD_META[et]!.hex };
+  }
+  if (et === "dm_marker") {
+    const label = ch0.length > 0 && ch0.length <= 2 ? ch0 : BILLBOARD_META.dm_marker.label;
+    return { label, hex: BILLBOARD_META.dm_marker.hex };
+  }
+  if (et === "spawn_suggestion") {
+    const b = BILLBOARD_META.spawn_suggestion;
+    const label = Array.from(ch0)[0] ?? b.label;
+    return { ...b, label };
+  }
+  const fixed = BILLBOARD_META[et];
+  if (fixed) return { label: ch0.length ? Array.from(ch0)[0]! : fixed.label, hex: fixed.hex, opacity: fixed.opacity };
+  return { label: two, hex: "#a898b8" };
+}
 
 function makeFloorGlyphSprite(ch: string, fgHex: string): THREE.Sprite {
   const text = Array.from(ch)[0] ?? "?";
@@ -114,6 +312,7 @@ function makeFloorGlyphSprite(ch: string, fgHex: string): THREE.Sprite {
 
 function shouldDrawFloorGlyph(cell: RenderCell, playerSanitize: boolean): boolean {
   if (playerSanitize && (cell.eType === "label" || cell.eType === "dm_marker")) return false;
+  if (cell.eType && ENTITY_BILLBOARD_TYPES.has(cell.eType)) return false;
   if (cell.eType === "deco" || cell.eType === "theme") return true;
   if (cell.eType === "label") return true;
   const tile = cell.tile;
@@ -163,7 +362,7 @@ export default function DungeonForge3D({
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x121018);
     let density =
-      dungeonLighting === "dark" ? 0.022 : dungeonLighting === "dim" ? 0.016 : 0.009;
+      dungeonLighting === "dark" ? 0.009 : dungeonLighting === "dim" ? 0.007 : 0.0055;
     if (mapOutdoorTime === "day") density *= 0.28;
     else if (mapOutdoorTime === "dusk") density *= 0.48;
     scene.fog = new THREE.FogExp2(0x121018, density);
@@ -171,25 +370,40 @@ export default function DungeonForge3D({
     const cx = (cols - 1) / 2;
     const cz = (rows - 1) / 2;
     const camera = new THREE.PerspectiveCamera(50, 1, 0.1, Math.max(80, cols + rows + 40));
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    const renderer = new THREE.WebGLRenderer({
+      antialias: false,
+      alpha: false,
+      powerPreference: "low-power",
+      stencil: false,
+      depth: true,
+    });
+    renderer.setPixelRatio(Math.min(1.25, window.devicePixelRatio || 1));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.22;
+    /* Match 2D canvas albedo: ACESFilmic shifts wall/floor hues vs flat / depth. */
+    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.toneMappingExposure = 1;
 
     const ambientMul =
       mapOutdoorTime === "day" ? 1.75 : mapOutdoorTime === "dusk" ? 1.45 : mapOutdoorTime === "night" ? 1.05 : 1.2;
-    const litMul = dungeonLighting === "dark" ? 0.55 : dungeonLighting === "dim" ? 0.78 : 1;
-    const ambient = new THREE.AmbientLight(0xffffff, 0.72 * ambientMul * litMul);
+    const litMul = dungeonLighting === "dark" ? 0.95 : dungeonLighting === "dim" ? 1.02 : 1.08;
+    const ambient = new THREE.AmbientLight(0xffffff, 0.95 * ambientMul * litMul);
     scene.add(ambient);
-    const hemi = new THREE.HemisphereLight(0xc8dcff, 0x1a1510, 0.55 * litMul);
+    const hemi = new THREE.HemisphereLight(0xc8dcff, 0x1a1510, 0.72 * litMul);
     scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xfff5e8, 0.45 * litMul);
+    const sun = new THREE.DirectionalLight(0xfff5e8, 0.52 * litMul);
     sun.position.set(0.35, 1.2, 0.2);
     scene.add(sun);
 
     const group = new THREE.Group();
     group.position.set(-cx, 0, -cz);
+
+    const floorBuckets = new Map<string, Xz[]>();
+    const pillars: Xz[] = [];
+    const walls: Xz[] = [];
+    const doorsOpen: Xz[] = [];
+    const doorsShut: Xz[] = [];
+    const water: Xz[] = [];
+    const lava: Xz[] = [];
 
     for (let gy = 0; gy < rows; gy++) {
       for (let gx = 0; gx < cols; gx++) {
@@ -202,105 +416,96 @@ export default function DungeonForge3D({
         if (t === T.V) continue;
 
         if (t === T.F || t === T.C || t === T.ROAD || t === T.BRIDGE || t === T.ALLEY) {
-          const mat = new THREE.MeshStandardMaterial({
-            color: t === T.C ? palette.corridorBg : t === T.ROAD ? palette.roadBg : palette.floorBg,
-            roughness: 0.88,
-            metalness: 0,
-            emissive: new THREE.Color(0x222028),
-            emissiveIntensity: 0.06,
-          });
-          const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.92, 0.92), mat);
-          mesh.rotation.x = -Math.PI / 2;
-          mesh.position.set(px, 0.01, pz);
-          group.add(mesh);
+          const hexRaw =
+            t === T.C
+              ? palette.corridorBg
+              : t === T.ROAD
+                ? palette.roadBg
+                : t === T.BRIDGE
+                  ? palette.bridgeBg ?? palette.corridorBg
+                  : palette.floorBg;
+          const bucketKey =
+            typeof hexRaw === "string" && hexRaw.trim() ? hexRaw.trim() : `tile-${t}`;
+          pushXz(floorBuckets, bucketKey, px, pz);
         } else if (t === T.P) {
-          const mat = new THREE.MeshStandardMaterial({
-            color: palette.wallBg,
-            roughness: 0.88,
-            metalness: 0.02,
-          });
-          const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.32, 1.65, 8), mat);
-          mesh.position.set(px, 0.82, pz);
-          group.add(mesh);
+          pillars.push({ x: px, z: pz });
         } else if (t === T.W || t === T.HEADSTONE) {
-          const mat = new THREE.MeshStandardMaterial({
-            color: palette.wallBg,
-            roughness: 0.88,
-            metalness: 0.02,
-            emissive: new THREE.Color(0x151820),
-            emissiveIntensity: 0.08,
-          });
-          const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.92, 1.35, 0.92), mat);
-          mesh.position.set(px, 0.67, pz);
-          group.add(mesh);
+          walls.push({ x: px, z: pz });
         } else if (t === T.D || t === T.GATE || t === T.DRAWBRIDGE || t === T.SECRET_DOOR) {
           const open = !doorOpen || doorOpen.size === 0 || doorOpen.has(`${gx},${gy}`);
-          const mat = new THREE.MeshStandardMaterial({
-            color: palette.doorBg,
-            roughness: 0.75,
-            metalness: 0.05,
-            transparent: true,
-            opacity: open ? 0.55 : 1,
-          });
-          const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.75, 1.05, 0.12), mat);
-          mesh.position.set(px, 0.52, pz);
-          group.add(mesh);
+          (open ? doorsOpen : doorsShut).push({ x: px, z: pz });
         } else if (t === T.WA) {
-          const mat = new THREE.MeshStandardMaterial({
-            color: palette.waterBg,
-            roughness: 0.35,
-            metalness: 0.1,
-            transparent: true,
-            opacity: 0.88,
-          });
-          const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.88, 0.88), mat);
-          mesh.rotation.x = -Math.PI / 2;
-          mesh.position.set(px, 0.02, pz);
-          group.add(mesh);
+          water.push({ x: px, z: pz });
         } else if (t === T.LAVA) {
-          const mat = new THREE.MeshStandardMaterial({
-            color: palette.lavaBg ?? "#c04020",
-            emissive: new THREE.Color(palette.lavaGlow ?? "#ff4400"),
-            emissiveIntensity: 0.35,
-            roughness: 0.55,
-          });
-          const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.92, 0.92), mat);
-          mesh.rotation.x = -Math.PI / 2;
-          mesh.position.set(px, 0.02, pz);
-          group.add(mesh);
+          lava.push({ x: px, z: pz });
         } else {
-          const mat = new THREE.MeshStandardMaterial({
-            color: palette.floorBg,
-            roughness: 0.88,
-            metalness: 0,
-            emissive: new THREE.Color(0x222028),
-            emissiveIntensity: 0.05,
-          });
-          const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.92, 0.92), mat);
-          mesh.rotation.x = -Math.PI / 2;
-          mesh.position.set(px, 0.01, pz);
-          group.add(mesh);
+          pushXz(floorBuckets, String(palette.floorBg), px, pz);
         }
       }
     }
 
-    const markerMeta: Record<string, { label: string; hex: string }> = {
-      monster: { label: "M", hex: "#c04050" },
-      item: { label: "I", hex: "#d4af37" },
-      trap: { label: "T", hex: "#c87820" },
-      riddle: { label: "?", hex: "#8060c0" },
-    };
+    addInstancedRotatedPlanes(group, floorBuckets, 0.01, "#2a2820");
+    addInstancedCylinders8(group, pillars, palette.pillarBg ?? palette.wallBg, "#3a4034");
+    addInstancedBoxes(group, walls, {
+      y: 0.67,
+      sx: 0.92,
+      sy: 1.35,
+      sz: 0.92,
+      colorHex: palette.wallBg,
+      fallbackHex: "#3a3830",
+    });
+    addInstancedBoxes(group, doorsOpen, {
+      y: 0.52,
+      sx: 0.75,
+      sy: 1.05,
+      sz: 0.12,
+      colorHex: palette.doorBg,
+      fallbackHex: "#2a2418",
+      transparent: true,
+      opacity: 0.55,
+    });
+    addInstancedBoxes(group, doorsShut, {
+      y: 0.52,
+      sx: 0.75,
+      sy: 1.05,
+      sz: 0.12,
+      colorHex: palette.doorBg,
+      fallbackHex: "#2a2418",
+    });
+    if (water.length) {
+      const geom = new THREE.PlaneGeometry(0.88, 0.88);
+      geom.rotateX(-Math.PI / 2);
+      const mat = new THREE.MeshLambertMaterial({
+        color: paletteColor(palette.waterBg, "#0d2a4a"),
+        transparent: true,
+        opacity: 0.88,
+        depthWrite: false,
+      });
+      const wm = new THREE.InstancedMesh(geom, mat, water.length);
+      wm.frustumCulled = false;
+      for (let i = 0; i < water.length; i++) {
+        const p = water[i]!;
+        INST_DUMMY.position.set(p.x, 0.02, p.z);
+        INST_DUMMY.updateMatrix();
+        wm.setMatrixAt(i, INST_DUMMY.matrix);
+      }
+      wm.instanceMatrix.needsUpdate = true;
+      group.add(wm);
+    }
+    addInstancedLavaPlanes(group, lava, palette.lavaBg ?? "#c04020", palette.lavaGlow ?? "#ff4400");
+
     let glyphs = 0;
     for (let gy = 0; gy < rows; gy++) {
       for (let gx = 0; gx < cols; gx++) {
         if (!cellVisible(gx, gy, fogCells ?? null)) continue;
         const cell = grid[gy]![gx]! as RenderCell;
+        if (!showEnts) continue;
         const et = cell.eType;
-        if (!showEnts || !et || !ENTITY_MARKER_TYPES.has(et)) continue;
         if (et === "monster" && playerSanitize) continue;
-        const meta = markerMeta[et];
-        if (!meta) continue;
-        const spr = makeEntityMarkerSprite(meta.label, meta.hex);
+        if (playerSanitize && et === "dm_marker") continue;
+        const spec = billboardSpecForCell(cell);
+        if (!spec) continue;
+        const spr = makeEntityMarkerSprite(spec.label, spec.hex, spec.opacity ?? 1);
         spr.position.set(gx, 1.12, gy);
         group.add(spr);
       }
@@ -326,20 +531,23 @@ export default function DungeonForge3D({
 
     const merged: SceneLight[] = [...(sceneLights ?? [])];
     merged.push(...collectTorchFixtureLights(grid, cols, rows));
-    const cap = Math.min(merged.length, 42);
+    merged.sort((a, b) => (b.intensity ?? 0.35) - (a.intensity ?? 0.35));
+    const cap = Math.min(merged.length, MAX_3D_POINT_LIGHTS);
     for (let i = 0; i < cap; i++) {
       const L = merged[i]!;
       const hex = L.color ?? (L.kind ? KIND_HEX[L.kind] : undefined) ?? "#ff9040";
-      const col = new THREE.Color(hex.startsWith("#") ? hex : `#${hex}`);
+      const col = paletteColor(hex.startsWith("#") ? hex : `#${hex}`, "#ff9040");
       const baseInt = L.intensity ?? 0.38;
-      const dist = Math.max(16, (L.radiusCells ?? 5.5) * 2.6);
+      const dist = Math.max(20, (L.radiusCells ?? 5.5) * 3.05);
       const light = new THREE.PointLight(
         col,
-        Math.min(45, 6 + baseInt * 28),
+        Math.min(58, 8 + baseInt * 36),
         dist,
-        1.15,
+        1.08,
       );
-      light.position.set(L.gx, 2.0, L.gy);
+      const ox = L.offsetX ?? 0;
+      const oy = L.offsetY ?? 0;
+      light.position.set(L.gx + ox, 2.05, L.gy + oy);
       scene.add(light);
     }
 
@@ -417,6 +625,10 @@ export default function DungeonForge3D({
 
     let raf = 0;
     const tick = () => {
+      if (document.hidden) {
+        raf = 0;
+        return;
+      }
       const yaw = yawRef.current;
       const dist = distRef.current;
       const px = panXRef.current;
@@ -427,9 +639,22 @@ export default function DungeonForge3D({
       renderer.render(scene, camera);
       raf = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
+    const startLoop = () => {
+      if (!raf) raf = requestAnimationFrame(tick);
+    };
+    const onVis = () => {
+      if (document.hidden) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      } else {
+        startLoop();
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    startLoop();
 
     return () => {
+      document.removeEventListener("visibilitychange", onVis);
       cancelAnimationFrame(raf);
       ro.disconnect();
       renderer.domElement.removeEventListener("wheel", onWheel);
@@ -486,7 +711,7 @@ export default function DungeonForge3D({
             zIndex: 2,
           }}
         >
-          3D preview is disabled for very large maps (over 4096 cells). Use Flat, Depth, or Iso view instead.
+          3D preview is disabled for very large maps (over 4096 cells). Use Depth or Iso view instead.
         </div>
       )}
     </div>

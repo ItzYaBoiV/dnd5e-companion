@@ -70,6 +70,9 @@ export type SceneLightKind =
 export type SceneLight = {
   gx: number;
   gy: number;
+  /** Optional sub-cell offset (grid units) for wall-mounted fixtures in 3D. */
+  offsetX?: number;
+  offsetY?: number;
   radiusCells: number;
   intensity?: number;
   /** Room ambient vs wall torch vs creature — drives flicker + tint in renderer. */
@@ -87,6 +90,8 @@ export type PlayerMapBroadcast = {
   revealedCells?: string[];
   /** `null` = legacy “all doors open” for fog/rendering; `[]` = all closed; otherwise explicit open door keys. */
   doorOpen?: string[] | null;
+  /** Per-door "open" / "closed" (overrides `doorOpen` for keys that appear here). */
+  doorStates?: Record<string, string> | null;
   fogColor?: string;
   selectedRoomId?: number | null;
   /**

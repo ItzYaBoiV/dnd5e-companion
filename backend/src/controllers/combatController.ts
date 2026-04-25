@@ -77,13 +77,34 @@ export const rollSave = async (req: Request<{ id: string }>, res: Response) => {
   const char = await prisma.character.findUnique({ where: { id: req.params.id } });
   if (!char) throw new NotFoundError("Character");
 
-  const { ability, advantage } = req.body;
+  const { ability, advantage, priorD20 } = req.body as {
+    ability: string;
+    advantage: string;
+    priorD20?: number;
+  };
   const { mods, profB } = getCharacterStats(char);
   const saves = allSavingThrows(mods, profB, char.savingThrowProficiencies);
   const save  = saves[ability as AbilityName];
 
-  const d1 = rollDie(20);
-  const d2 = rollDie(20);
+  const usePrior =
+    (advantage === "advantage" || advantage === "disadvantage") &&
+    typeof priorD20 === "number" &&
+    Number.isInteger(priorD20) &&
+    priorD20 >= 1 &&
+    priorD20 <= 20;
+
+  let d1: number;
+  let d2: number;
+  let usedPriorD20 = false;
+  if (usePrior) {
+    d1 = priorD20;
+    d2 = rollDie(20);
+    usedPriorD20 = true;
+  } else {
+    d1 = rollDie(20);
+    d2 = rollDie(20);
+  }
+
   const roll =
     advantage === "advantage"    ? Math.max(d1, d2) :
     advantage === "disadvantage" ? Math.min(d1, d2) : d1;
@@ -94,6 +115,7 @@ export const rollSave = async (req: Request<{ id: string }>, res: Response) => {
     bonus:     save.bonus,
     total:     roll + save.bonus,
     proficient: save.proficient,
+    ...(usedPriorD20 ? { usedPriorD20: true } : {}),
   });
 };
 
@@ -101,14 +123,35 @@ export const rollCheck = async (req: Request<{ id: string }>, res: Response) => 
   const char = await prisma.character.findUnique({ where: { id: req.params.id } });
   if (!char) throw new NotFoundError("Character");
 
-  const { skill, advantage } = req.body;
+  const { skill, advantage, priorD20 } = req.body as {
+    skill: string;
+    advantage: string;
+    priorD20?: number;
+  };
   const { mods, profB } = getCharacterStats(char);
   const skills = allSkills(mods, profB, char.skillProficiencies, char.skillExpertise);
   const sk     = skills[skill];
   if (!sk) throw new NotFoundError(`Skill: ${skill}`);
 
-  const d1 = rollDie(20);
-  const d2 = rollDie(20);
+  const usePrior =
+    (advantage === "advantage" || advantage === "disadvantage") &&
+    typeof priorD20 === "number" &&
+    Number.isInteger(priorD20) &&
+    priorD20 >= 1 &&
+    priorD20 <= 20;
+
+  let d1: number;
+  let d2: number;
+  let usedPriorD20 = false;
+  if (usePrior) {
+    d1 = priorD20;
+    d2 = rollDie(20);
+    usedPriorD20 = true;
+  } else {
+    d1 = rollDie(20);
+    d2 = rollDie(20);
+  }
+
   const roll =
     advantage === "advantage"    ? Math.max(d1, d2) :
     advantage === "disadvantage" ? Math.min(d1, d2) : d1;
@@ -121,6 +164,7 @@ export const rollCheck = async (req: Request<{ id: string }>, res: Response) => 
     ability:    sk.ability,
     proficient: sk.proficient,
     expertise:  sk.expertise,
+    ...(usedPriorD20 ? { usedPriorD20: true } : {}),
   });
 };
 

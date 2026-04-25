@@ -119,7 +119,7 @@ export function collectCaveBiolumSceneLights(decoOverlay: DecoLite[] | null | un
   return out;
 }
 
-const MAX_BIOME_LIGHTS = 48;
+const MAX_BIOME_LIGHTS = 64;
 /** Streets + yards need many warm points; room-based cap is too low for towns. */
 const MAX_TOWN_STREET_LIGHTS = 64;
 
@@ -331,24 +331,24 @@ export function collectBiomeLights(
       break;
 
     case "cave": {
-      const fungi = rng() < 0.35;
-      if (fungi) {
-        for (let t = 0; t < 80 && out.length < MAX_BIOME_LIGHTS; t++) {
+      /* Dim bioluminescent fill (additive) — never replace real torches; caves stay readable in 3D. */
+      if (rng() < 0.42) {
+        for (let t = 0; t < 36 && out.length < MAX_BIOME_LIGHTS; t++) {
           const gx = 2 + Math.floor(rng() * Math.max(1, W - 4));
           const gy = 2 + Math.floor(rng() * Math.max(1, H - 4));
           if (grid[gy]?.[gx] !== T.F && grid[gy]?.[gx] !== T.C) continue;
-          push({ gx, gy, radiusCells: 3, intensity: 0.1, kind: "fey", flicker: false });
+          push({ gx, gy, radiusCells: 3.4, intensity: 0.12, kind: "fey", flicker: false });
         }
-      } else {
-        addFromRooms(1, (gx, gy) => ({
-          gx,
-          gy,
-          radiusCells: 3,
-          intensity: 0.2,
-          kind: "torch",
-          flicker: true,
-        }));
       }
+      addFromRooms(3, (gx, gy) => ({
+        gx,
+        gy,
+        radiusCells: 5 + rng() * 1.1,
+        intensity: 0.4 + rng() * 0.1,
+        kind: "torch",
+        flicker: true,
+      }));
+      addCorridorTorches("cave", 30);
       break;
     }
 
@@ -417,24 +417,24 @@ export function collectBiomeLights(
       addFromRooms(3, (gx, gy) => ({
         gx,
         gy,
-        radiusCells: 3,
-        intensity: 0.08,
+        radiusCells: 3.6,
+        intensity: 0.12 + rng() * 0.05,
         kind: "lantern",
         flicker: false,
       }));
-      addCorridorTorches("sewer", 14);
+      addCorridorTorches("sewer", 18);
       break;
 
     case "castle":
-      addFromRooms(3, (gx, gy) => ({
+      addFromRooms(4, (gx, gy) => ({
         gx,
         gy,
-        radiusCells: 5,
-        intensity: 0.4,
+        radiusCells: 5.2 + rng() * 0.6,
+        intensity: 0.44 + rng() * 0.08,
         kind: "torch",
         flicker: true,
       }));
-      addCorridorTorches("castle", 16);
+      addCorridorTorches("castle", 22);
       break;
 
     case "swamp":

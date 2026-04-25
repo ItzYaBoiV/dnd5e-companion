@@ -100,11 +100,33 @@ export function collectTorchFixtureLights(grid: RenderCell[][], cols: number, ro
       const dk = String((c.extra as { decoKey?: string }).decoKey ?? "");
       if (dk !== "torch_w") continue;
       if ((c.extra as { townWallSconce?: boolean }).townWallSconce) continue;
+
+      let offsetX = 0;
+      let offsetY = 0;
+      for (const [dx, dy] of [
+        [-1, 0],
+        [1, 0],
+        [0, -1],
+        [0, 1],
+      ] as const) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+        const nt = grid[ny]![nx]!.tile;
+        if (nt === T_WALL || nt === T_ARROW_SLIT || nt === T_MURDER_HOLE || nt === T_CELL_BARS) {
+          offsetX = dx * 0.38;
+          offsetY = dy * 0.38;
+          break;
+        }
+      }
+
       out.push({
         gx: x,
         gy: y,
+        offsetX: offsetX || undefined,
+        offsetY: offsetY || undefined,
         radiusCells: 5.5,
-        intensity: 0.38,
+        intensity: 0.42,
         kind: "torch",
       });
     }
@@ -118,9 +140,9 @@ function idx(cols: number, x: number, y: number): number {
 
 /** Integer line cells from (x0,y0) to (x1,y1), inclusive start, Bresenham. */
 /** Max black overlay alpha from light occlusion (lower = brighter overall maps). */
-const LIGHT_DARKNESS_ALPHA_SCALE = 0.34;
+const LIGHT_DARKNESS_ALPHA_SCALE = 0.28;
 /** Every cell gets at least this much “fill” light so distant corners are not pitch black. */
-const AMBIENT_BRIGHT_FLOOR = 0.11;
+const AMBIENT_BRIGHT_FLOOR = 0.17;
 
 function bresenhamLine(x0: number, y0: number, x1: number, y1: number): { x: number; y: number }[] {
   const out: { x: number; y: number }[] = [];

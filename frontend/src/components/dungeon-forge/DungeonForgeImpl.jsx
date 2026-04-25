@@ -21,6 +21,8 @@ import {
   isOpenFloorLocation,
   maxFogHopsForLocationType,
 } from "@/lib/dungeonForgeFog";
+import { applyPlayerHiddenRevealRules, tryMarkPlayerHiddenRoom } from "@/lib/dungeonForgePlayerHidden";
+import { postprocessSafeWallNibs } from "@/lib/dungeonForgeWallNibs";
 import { broadcastPlayerMapState } from "@/lib/playerMapBroadcast";
 import { pickReferenceLootItem } from "@/lib/forgeLootFromReference";
 import { pickGoofyRiddle } from "@/lib/forgeRiddles";
@@ -214,7 +216,7 @@ const LOCATION_GLYPHS={
 
 const LOCATION_DESCRIPTIONS={
   dungeon:"Classic stone halls — chambers, crypts, traps",
-  town:"Road grid, lots with buildings — larger plazas by default (toggle Plazas)",
+  town:"Streets + yards; organic mode uses larger uneven blocks, diagonals, and short cross-streets (toggle Plazas)",
   castle:"Thick walls, towers, keep, battlements",
   graveyard:"Open yard, mausoleums, catacombs, gate",
   swamp:"Waterlogged islands connected by bridges",
@@ -363,6 +365,39 @@ function placeNarrowWaterBridges(grid,locationType,rng,W,H){
       if((h||v)&&rng()<0.38) grid[y][x]=T.BRIDGE;
     }
   }
+}
+
+/** Multi-cell deco stamp: every ink cell sits on walkable floor and is unused. */
+function decoStampFitsOnFloor(grid,usedCells,px,py,stamp,W,H){
+  const sh=stamp.rows.length;
+  const sw=Math.max(...stamp.rows.map((r)=>r.length));
+  for(let dy=0;dy<sh;dy++){
+    for(let dx=0;dx<sw;dx++){
+      const ch=stamp.rows[dy]?.[dx];
+      if(ch&&String(ch).trim()!==""){
+        const xx=px+dx, yy=py+dy;
+        if(usedCells.has(`${xx},${yy}`)||grid[yy]?.[xx]!==T.F) return false;
+      }
+    }
+  }
+  return true;
+}
+
+/** True if any ink cell of the stamp is orthogonally adjacent to a stone wall (sconce placement). */
+function decoStampTouchesWall(grid,px,py,stamp,W,H){
+  const sh=stamp.rows.length;
+  const sw=Math.max(...stamp.rows.map((r)=>r.length));
+  for(let dy=0;dy<sh;dy++){
+    for(let dx=0;dx<sw;dx++){
+      const ch=stamp.rows[dy]?.[dx];
+      if(!ch||String(ch).trim()==="") continue;
+      const xx=px+dx, yy=py+dy;
+      if(xx<1||yy<1||xx>=W-1||yy>=H-1) continue;
+      const row=grid[yy];
+      if(row[xx-1]===T.W||row[xx+1]===T.W||grid[yy-1][xx]===T.W||grid[yy+1][xx]===T.W) return true;
+    }
+  }
+  return false;
 }
 
 /** Flavor lever props by doors (DM hint — not a full door machine yet). */
@@ -1208,11 +1243,101 @@ function stampTownPlazaFootprint(grid,b,plazaMode,rng){
   }
 }
 
-function carveTownBlockIrregularity(grid,block,rng){
-  const {rx,ry,rw,rh}=block;
-  const bites=rI(0,2,rng);
-  for(let i=0;i<bites;i++){
-    const side=pick(["n","s","e","w"],rng);
+/**
+ * Any cell not marked as road/bridge is still T.V after the first paint pass. Those
+ * slivers (often the lot between streets when the inner `rw<5` skip removed the block
+ * from the list) read as a black "void" with stray road legs — fill them as open yard.
+ */
+function fillTownYardsNotRoad(grid, W, H) {
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (grid[y][x] === T.V) grid[y][x] = T.F;
+    }
+  }
+}
+
+/**
+ * Vary how many main parallel streets are carved: "organic" uses wider, uneven blocks
+ * and slightly larger minimum gap between parallel roads so the result is not a uniform
+ * 3×3 cell spreadsheet on medium maps.
+ */
+function buildTownStreetAxes(limit, rng, streetStyle, roadW) {
+  const isGrid = streetStyle === "grid";
+  const minBlockSpan = isGrid ? 12 : 11;
+  const minStepBetweenStreets = isGrid ? roadW + 6 : Math.max(roadW + 7, 12);
+  const jitter = isGrid ? 1 : 4;
+  const minSpanPick = isGrid ? 12 : 13;
+  const maxSpanPick = isGrid ? 18 : 32;
+  const out = [0];
+  let cursor = 0;
+  let guard = 0;
+  while (guard++ < 240) {
+    let span = rI(minSpanPick, maxSpanPick, rng);
+    if (!isGrid && rng() < 0.32) {
+      span = rI(
+        minSpanPick + 4,
+        Math.min(maxSpanPick + 16, Math.max(minSpanPick + 8, Math.floor(limit * 0.45))),
+        rng,
+      );
+    }
+    let next = cursor + roadW + span + rI(-jitter, jitter, rng);
+    next = clamp(next, roadW + 4, limit - roadW - 4);
+    if (next - cursor < roadW + minBlockSpan) next = cursor + roadW + minBlockSpan;
+    if (next >= limit - roadW - 2) break;
+    out.push(next);
+    cursor = next;
+  }
+  out.push(limit - roadW);
+  const dedup = [...new Set(out)].sort((a, b) => a - b);
+  return dedup.filter((v, i) => i === 0 || v - dedup[i - 1] >= minStepBetweenStreets);
+}
+
+/**
+ * A ~boulevard~ or lane that does not span the whole map, so lots read less like one grid.
+ */
+function addOrganicSubStreetSpans(grid, W, H, rng) {
+  const n = rI(1, 2, rng);
+  const rw = 2;
+  for (let k = 0; k < n; k++) {
+    if (H < 24 || W < 24) break;
+    if (rng() < 0.5) {
+      const y0 = rI(Math.max(2, Math.floor(H * 0.12)), Math.max(3, Math.floor(H * 0.86) - 5), rng);
+      const x0 = rI(2, Math.floor(W * 0.28) + 2);
+      const x1 = rI(Math.max(x0 + 10, Math.floor(W * 0.4)), W - 4, rng);
+      for (let d = 0; d < rw; d++) {
+        const y = y0 + d;
+        if (y < 1 || y >= H - 1) continue;
+        for (let x = x0; x <= x1; x++) {
+          if (x < 1 || x >= W - 1) continue;
+          const t = grid[y][x];
+          if (t === T.WA || t === T.BRIDGE) continue;
+          if (t === T.F || t === T.ROAD || t === T.P) grid[y][x] = T.ROAD;
+        }
+      }
+    } else {
+      const x0 = rI(Math.max(2, Math.floor(W * 0.12)), Math.max(3, Math.floor(W * 0.86) - 5), rng);
+      const y0 = rI(2, Math.floor(H * 0.28) + 2);
+      const y1 = rI(Math.max(y0 + 10, Math.floor(H * 0.4)), H - 4, rng);
+      for (let d = 0; d < rw; d++) {
+        const x = x0 + d;
+        if (x < 1 || x >= W - 1) continue;
+        for (let y = y0; y <= y1; y++) {
+          if (y < 1 || y >= H - 1) continue;
+          const t = grid[y][x];
+          if (t === T.WA || t === T.BRIDGE) continue;
+          if (t === T.F || t === T.ROAD || t === T.P) grid[y][x] = T.ROAD;
+        }
+      }
+    }
+  }
+}
+
+function carveTownBlockIrregularity(grid, block, rng, streetStyle) {
+  const { rx, ry, rw, rh } = block;
+  const maxBite = streetStyle === "organic" ? 3 : 2;
+  const bites = rI(0, maxBite, rng);
+  for (let i = 0; i < bites; i++) {
+    const side = pick(["n", "s", "e", "w"], rng);
     const depth=side==="n"||side==="s"?rI(1,Math.max(1,Math.floor(rh/4)),rng):rI(1,Math.max(1,Math.floor(rw/4)),rng);
     const span=side==="n"||side==="s"?rI(3,Math.max(3,Math.floor(rw*0.45)),rng):rI(3,Math.max(3,Math.floor(rh*0.45)),rng);
     if(side==="n"){
@@ -1243,32 +1368,14 @@ function generateTownLayout(cfg,rng){
   const waterfront=cfg.townWaterfront??"none";
   const densityFactor=density==="sparse"?0.72:density==="dense"?1.34:1;
   const ROAD_W=streetStyle==="grid"?(rng()<0.7?3:2):rng()<0.45?3:2;
-  const MIN_BLOCK=streetStyle==="grid"?12:9;
-  const MAX_BLOCK=streetStyle==="grid"?18:20;
-  const jitter=streetStyle==="grid"?1:3;
-  const buildAxes=(limit)=>{
-    const out=[0];
-    let cursor=0;
-    let guard=0;
-    while(guard++<240){
-      const span=rI(MIN_BLOCK,MAX_BLOCK,rng);
-      let next=cursor+ROAD_W+span+rI(-jitter,jitter,rng);
-      next=clamp(next,ROAD_W+4,limit-ROAD_W-4);
-      if(next-cursor<ROAD_W+MIN_BLOCK) next=cursor+ROAD_W+MIN_BLOCK;
-      if(next>=limit-ROAD_W-2) break;
-      out.push(next);
-      cursor=next;
-    }
-    out.push(limit-ROAD_W);
-    const dedup=[...new Set(out)].sort((a,b)=>a-b);
-    return dedup.filter((v,i)=>i===0||v-dedup[i-1]>=ROAD_W+6);
-  };
-  const vX=buildAxes(W);
-  const hY=buildAxes(H);
+  const vX=buildTownStreetAxes(W,rng,streetStyle,ROAD_W);
+  const hY=buildTownStreetAxes(H,rng,streetStyle,ROAD_W);
   const drawV=(rx)=>{for(let y=0;y<H;y++)for(let d=0;d<ROAD_W;d++){const x=rx+d;if(x>=0&&x<W)grid[y][x]=T.ROAD;}};
   const drawH=(ry)=>{for(let x=0;x<W;x++)for(let d=0;d<ROAD_W;d++){const y=ry+d;if(y>=0&&y<H)grid[y][x]=T.ROAD;}};
   vX.forEach(drawV);
   hY.forEach(drawH);
+  // Land = yard/floor; keeps thin void slivers (skipped building lots) from reading as out-of-bounds.
+  fillTownYardsNotRoad(grid,W,H);
   // Optional waterfront pass (river/canal) with bridge preservation at street crossings.
   const paintWater=(x,y)=>{
     if(x<1||y<1||x>=W-1||y>=H-1) return;
@@ -1298,9 +1405,9 @@ function generateTownLayout(cfg,rng){
     for(let y=1;y<H-1;y++) paintWater(vx,y);
     for(let x=1;x<W-1;x++) paintWater(x,hy);
   }
-  // Organic street mode: one or two soft diagonal connectors to break strict orthogonality.
+  // Organic street mode: 1–3 diagonal / bent connectors; plus short boulevards that do not cross the full map.
   if(streetStyle==="organic"){
-    const diagCount=rng()<0.55?1:2;
+    const diagCount=rI(1,3,rng);
     for(let i=0;i<diagCount;i++){
       let x=rI(1,Math.max(1,Math.floor(W*0.2)),rng);
       let y=rI(1,Math.max(1,Math.floor(H*0.2)),rng);
@@ -1317,6 +1424,7 @@ function generateTownLayout(cfg,rng){
         if(rng()<0.22) { if(rng()<0.5&&x+1<W-1)x++; else if(y+1<H-1)y++; }
       }
     }
+    if(rng()<0.72) addOrganicSubStreetSpans(grid,W,H,rng);
   }
 
   const blocks=[];
@@ -1339,7 +1447,7 @@ function generateTownLayout(cfg,rng){
     for(let y=b.ry;y<b.ry+b.rh;y++)for(let x=b.rx;x<b.rx+b.rw;x++){
       if(y>=0&&y<H&&x>=0&&x<W&&grid[y][x]===T.V) grid[y][x]=T.F;
     }
-    if(streetStyle==="organic"&&rng()<0.45) carveTownBlockIrregularity(grid,b,rng);
+    if(streetStyle==="organic"&&rng()<0.58) carveTownBlockIrregularity(grid,b,rng,streetStyle);
   }
 
   applyTownCoastalQuayBand(grid,W,H,rng,waterfront,architecture);
@@ -2152,7 +2260,31 @@ function generateMap(cfg) {
         const sh=stamp.rows.length;
         if(sw+2>room.w||sh+2>room.h)continue;
 
+        const placeAt=(px,py)=>{
+          for(let dy=0;dy<sh;dy++){
+            for(let dx=0;dx<stamp.rows[dy].length;dx++){
+              const ch=stamp.rows[dy][dx];
+              if(ch&&String(ch).trim()!==""){
+                const xx=px+dx, yy=py+dy;
+                usedCells.add(`${xx},${yy}`);
+                decoOverlay.push({x:xx,y:yy,ch,fg:stamp.fg,name:stamp.n,roomId:room.id,decoKey});
+              }
+            }
+          }
+        };
+
         let placed=false;
+        const wallTorch=decoKey==="torch_w";
+        if(wallTorch){
+          for(let tryN=0;tryN<26&&!placed;tryN++){
+            const px=rI(room.x+1,room.x+room.w-sw-1,rng);
+            const py=rI(room.y+1,room.y+room.h-sh-1,rng);
+            if(!decoStampFitsOnFloor(grid,usedCells,px,py,stamp,W,H)) continue;
+            if(!decoStampTouchesWall(grid,px,py,stamp,W,H)) continue;
+            placeAt(px,py);
+            placed=true;
+          }
+        }
         for(let tryN=0;tryN<20&&!placed;tryN++){
           const px=rI(room.x+1,room.x+room.w-sw-1,rng);
           const py=rI(room.y+1,room.y+room.h-sh-1,rng);
@@ -2168,17 +2300,7 @@ function generateMap(cfg) {
             }
           }
           if(ok){
-            for(let dy=0;dy<sh;dy++){
-              for(let dx=0;dx<stamp.rows[dy].length;dx++){
-                const ch=stamp.rows[dy][dx];
-                if(ch&&String(ch).trim()!==""){
-                  const xx=px+dx, yy=py+dy;
-                  const k=`${xx},${yy}`;
-                  usedCells.add(k);
-                  decoOverlay.push({x:xx,y:yy,ch,fg:stamp.fg,name:stamp.n,roomId:room.id,decoKey});
-                }
-              }
-            }
+            placeAt(px,py);
             placed=true;
           }
         }
@@ -2395,6 +2517,10 @@ function generateMap(cfg) {
     forgeDmHints={...(forgeDmHints||{}),roadEncounterZones:forgeBiome.road.encounterZones};
   }
 
+  if(["dungeon","sewer","castle"].includes(locationType)){
+    postprocessSafeWallNibs(grid,W,H,rng);
+  }
+  tryMarkPlayerHiddenRoom(rooms,grid,W,H,rng,locationType);
   const roomsMeta=enrichForgeRoomMeta(rooms,rng,locationType,H);
   return {
     grid,
@@ -2835,7 +2961,7 @@ export default function DungeonForge(){
   const [sendMsg,setSendMsg]=useState(null);
   const [doorOpen,setDoorOpen]=useState(()=>new Set());
   const [animPhase,setAnimPhase]=useState(0);
-  const [forgeViewMode,setForgeViewMode]=useState(()=>{ try{ const v=localStorage.getItem("dungeon-forge-view-mode"); if(v==="flat"||v==="depth"||v==="iso"||v==="3d")return v; }catch(_){} return "flat"; });
+  const [forgeViewMode,setForgeViewMode]=useState(()=>{ try{ const v=localStorage.getItem("dungeon-forge-view-mode"); if(v==="flat")return "depth"; if(v==="depth"||v==="iso"||v==="3d")return v; }catch(_){} return "depth"; });
   const [fxWallDepth,setFxWallDepth]=useState(false);
   const [fxAo,setFxAo]=useState(false);
   const [fxVignette,setFxVignette]=useState(false);
@@ -3027,7 +3153,10 @@ export default function DungeonForge(){
   },[]);
   const isP=view==="player";
   const forgeGridCfg={...cfg,showThemes:!!cfg.showThemes&&!isP};
-  const rg=dg?buildRenderGrid(dg,forgeGridCfg):null;const S=STY[FORGE_STYLE];
+  /** Stable for Three.js: avoid rebuilding the 3D scene every React render (palette + grid were new refs each time). */
+  const rg=useMemo(()=>(dg?buildRenderGrid(dg,forgeGridCfg):null),[dg,cfg.showThemes,isP]);
+  const forgeDmPalette=useMemo(()=>(dg?forgePaletteForDungeon(dg):null),[dg]);
+  const S=STY[FORGE_STYLE];
   const {w:Wm,h:Hm}=dg?effectiveDungeonGridDims(dg):{w:1,h:1};
   const cs=useMemo(()=>{
     const n=computeCellSize({
@@ -3056,7 +3185,8 @@ export default function DungeonForge(){
   const fogOpenFloor=useMemo(()=>isOpenFloorLocation(effectiveLocType),[effectiveLocType]);
   const mapFogCells=useMemo(()=>{
     if(!isP||!dg||!revealed)return null;
-    return computeVisibleCellsForPlayer(revealed,dg,doorOpen,null,{
+    const rev=applyPlayerHiddenRevealRules(revealed,dg.rooms,doorOpen,null);
+    return computeVisibleCellsForPlayer(rev,dg,doorOpen,null,{
       openFloor:fogOpenFloor,
       maxFogHops:maxFogHopsForLocationType(effectiveLocType),
       locationType:effectiveLocType,
@@ -3087,7 +3217,7 @@ export default function DungeonForge(){
     if(loc==="cave"&&dg.forgeLocationMeta?.caveBioluminescent){
       lights=[...lights,...collectCaveBiolumSceneLights(dg.decoOverlay??[],48)];
     }
-    const maxScene=loc==="town"||loc==="road"?64:24;
+    const maxScene=loc==="town"||loc==="road"?72:loc==="cave"?60:56;
     return lights.length?lights.slice(0,maxScene):null;
   },[dg,cfg.locationType,cfg.feyBioluminescent,cfg.seed,cfg.mapName]);
   const revealableDoors=useMemo(()=>{
@@ -3334,7 +3464,8 @@ export default function DungeonForge(){
     const mergedRevealed=overrides.revealed!=null?new Set(overrides.revealed):revealed;
     const mergedDoorOpen=overrides.doorOpen!=null?new Set(overrides.doorOpen):doorOpen;
     const locT=dg.locationType??cfg.locationType;
-    const revealedCells=[...computeVisibleCellsForPlayer(mergedRevealed,dg,mergedDoorOpen,null,{
+    const revForFog=applyPlayerHiddenRevealRules(mergedRevealed,dg.rooms,mergedDoorOpen,null);
+    const revealedCells=[...computeVisibleCellsForPlayer(revForFog,dg,mergedDoorOpen,null,{
       openFloor:isOpenFloorLocation(locT),
       maxFogHops:maxFogHopsForLocationType(locT),
       locationType:locT,
@@ -3378,9 +3509,10 @@ export default function DungeonForge(){
         width:"100%",
         height:"100%",
         minHeight:0,
+        maxHeight:"100%",
         minWidth:0,
         paddingInline:"var(--forge-pad)",
-        paddingBlock:"var(--forge-pad)",
+        paddingBlock:"max(6px, var(--forge-pad))",
         boxSizing:"border-box",
         background:S.bg,
         color:S.textColor,
@@ -3391,7 +3523,7 @@ export default function DungeonForge(){
       }}
     >
       <style>{`@keyframes forge-pulse { 0%,100%{opacity:0.35;} 50%{opacity:1;} }`}</style>
-      <div style={{padding:"7px 12px",borderBottom:`1px solid ${S.panelBorder}`,background:S.headerBg,display:"flex",alignItems:"center",justifyContent:"flex-start",flexWrap:"wrap",gap:4}}>
+      <div className="forge-top-header" style={{padding:"7px 12px",borderBottom:`1px solid ${S.panelBorder}`,background:S.headerBg,display:"flex",alignItems:"center",justifyContent:"flex-start",flexWrap:"wrap",gap:4}}>
         <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
           <span style={{fontFamily:"Cinzel,serif",fontSize:18,fontWeight:"bold",color:S.accent,letterSpacing:3}}>DUNGEON FORGE</span>
           {dg?.mapName&&<span style={{fontSize:15,color:S.textColor,fontStyle:"italic",opacity:0.92}}>— {dg.mapName}{floors.length>1?` (Floor ${curFloor}/${floors.length})`:""}</span>}
@@ -3806,7 +3938,7 @@ export default function DungeonForge(){
                           <Suspense fallback={<div style={{padding:20,color:S.dimText,fontSize:13}}>Loading 3D…</div>}>
                             <DungeonForge3D
                               grid={rg}
-                              palette={forgePaletteForDungeon(dg)}
+                              palette={forgeDmPalette ?? forgePaletteForDungeon(dg)}
                               entities={ENTITY_PALETTE}
                               fogCells={mapFogCells}
                               doorOpen={doorOpen}
@@ -3826,7 +3958,7 @@ export default function DungeonForge(){
                         <IsometricMapCanvas
                           ref={isoCanvasRef}
                           grid={rg}
-                          palette={forgePaletteForDungeon(dg)}
+                          palette={forgeDmPalette ?? forgePaletteForDungeon(dg)}
                           entities={ENTITY_PALETTE}
                           fogCells={mapFogCells}
                           doorOpen={doorOpen}
@@ -3848,7 +3980,7 @@ export default function DungeonForge(){
                       <DungeonMapCanvas
                         grid={rg}
                         cellPx={cs}
-                        palette={forgePaletteForDungeon(dg)}
+                        palette={forgeDmPalette ?? forgePaletteForDungeon(dg)}
                         entities={ENTITY_PALETTE}
                         fogCells={mapFogCells}
                         doorOpen={doorOpen}
@@ -3950,7 +4082,6 @@ export default function DungeonForge(){
                       <div style={{fontSize:10,color:S.dimText,letterSpacing:1}}>VIEW</div>
                       <div style={{display:"flex",gap:3,flexWrap:"wrap",justifyContent:"flex-end"}}>
                         {[
-                          {k:"flat",label:"Flat"},
                           {k:"depth",label:"Depth"},
                           {k:"iso",label:"Iso"},
                           {k:"3d",label:"3D"},

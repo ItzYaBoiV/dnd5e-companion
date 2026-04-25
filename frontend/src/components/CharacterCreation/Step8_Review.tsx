@@ -14,6 +14,7 @@ import {
 } from "@/lib/multiclassLevelPlan";
 import { startingInventoryRowLabel } from "@/lib/startingEquipmentKits";
 import { clsx } from "clsx";
+import { CREATION_MOBILE_CTA_BOTTOM } from "./CharacterCreationStepNext";
 
 interface Props {
   draft: CharacterDraft;
@@ -340,17 +341,38 @@ export default function Step8_Review({ draft, onBack, onSubmit }: Props) {
         </div>
       )}
 
-      <div className="flex flex-col-reverse sm:flex-row gap-3 pt-2">
-        <button type="button" onClick={onBack} className="btn-secondary w-full sm:w-auto px-6">
+      <div className="hidden flex-col-reverse gap-3 pt-2 md:flex md:flex-row">
+        <button type="button" onClick={onBack} className="btn-secondary w-full px-6 sm:w-auto">
           Back
         </button>
         <button
           type="button"
           onClick={handleSubmit}
           disabled={submitting}
-          className="btn-primary w-full sm:flex-1 py-3 text-base sm:text-lg"
+          className="btn-primary w-full py-3 text-base sm:flex-1 sm:text-lg"
         >
           {submitting ? "Creating…" : "Create Character"}
+        </button>
+      </div>
+
+      <div
+        className="fixed left-0 right-0 z-30 flex flex-col gap-2 p-2 md:hidden"
+        style={{ bottom: CREATION_MOBILE_CTA_BOTTOM }}
+      >
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={submitting}
+          className="btn-primary w-full min-h-[52px] touch-manipulation py-3.5 text-base font-display font-semibold"
+        >
+          {submitting ? "Creating…" : "Create Character"}
+        </button>
+        <button
+          type="button"
+          onClick={onBack}
+          className="btn-secondary w-full min-h-[48px] touch-manipulation"
+        >
+          Back
         </button>
       </div>
     </div>

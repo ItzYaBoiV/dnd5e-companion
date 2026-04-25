@@ -3,13 +3,15 @@ import { useNavigate } from "react-router-dom";
 import { Plus, Sword, Heart, Star, Trash2 } from "lucide-react";
 import { characterApi } from "@/services/api";
 import type { CharacterSummary } from "@/types/dnd";
-import { LoadingSpinner, EmptyState, HPBar } from "@/components/common";
+import { LoadingSpinner, EmptyState, HPBar, Modal } from "@/components/common";
 
 export default function CharacterListPage() {
   const navigate = useNavigate();
   const [characters, setCharacters] = useState<CharacterSummary[]>([]);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<CharacterSummary | null>(null);
+  const [deleteBusy, setDeleteBusy]     = useState(false);
 
   useEffect(() => {
     characterApi.list()
@@ -69,10 +71,56 @@ export default function CharacterListPage() {
               key={char.id}
               character={char}
               onOpen={() => navigate(`/characters/${char.id}`)}
-              onDeleted={() => setCharacters((prev) => prev.filter((c) => c.id !== char.id))}
+              onRequestDelete={() => setDeleteTarget(char)}
             />
           ))}
         </div>
+      )}
+
+      {deleteTarget && (
+        <Modal
+          title="Delete character?"
+          onClose={() => {
+            if (!deleteBusy) setDeleteTarget(null);
+          }}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={deleteBusy}
+                onClick={() => setDeleteTarget(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary bg-red-800 hover:bg-red-700 border-red-700"
+                disabled={deleteBusy}
+                onClick={async () => {
+                  setDeleteBusy(true);
+                  setError(null);
+                  try {
+                    await characterApi.delete(deleteTarget.id);
+                    setCharacters((prev) => prev.filter((c) => c.id !== deleteTarget.id));
+                    setDeleteTarget(null);
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : String(e));
+                  } finally {
+                    setDeleteBusy(false);
+                  }
+                }}
+              >
+                {deleteBusy ? "Deleting…" : "Delete forever"}
+              </button>
+            </>
+          }
+        >
+          <p className="text-sm text-gray-300">
+            Delete <span className="font-semibold text-white">{deleteTarget.name}</span> permanently? This cannot be
+            undone. They will also be removed from any play sessions.
+          </p>
+        </Modal>
       )}
     </div>
   );
@@ -81,30 +129,18 @@ export default function CharacterListPage() {
 function CharacterCard({
   character,
   onOpen,
-  onDeleted,
+  onRequestDelete,
 }: {
   character: CharacterSummary;
   onOpen: () => void;
-  onDeleted: () => void;
+  onRequestDelete: () => void;
 }) {
   const hpPct = Math.round((character.currentHp / character.maxHp) * 100);
 
-  const handleDelete = async (e: MouseEvent<HTMLButtonElement>) => {
+  const handleDelete = (e: MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    if (
-      !window.confirm(
-        `Delete "${character.name}" permanently? This cannot be undone. They will also be removed from any play sessions.`,
-      )
-    ) {
-      return;
-    }
-    try {
-      await characterApi.delete(character.id);
-      onDeleted();
-    } catch (err) {
-      alert(String(err));
-    }
+    onRequestDelete();
   };
 
   return (

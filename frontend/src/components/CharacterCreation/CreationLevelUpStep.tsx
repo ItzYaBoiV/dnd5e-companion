@@ -36,6 +36,7 @@ import { clsx } from "clsx";
 import { useReferenceStore } from "@/store/referenceStore";
 import { formatModifier } from "@/components/common";
 import { classLevelsAfterCharLevel } from "@/lib/multiclassLevelPlan";
+import { CharacterCreationStepNext } from "./CharacterCreationStepNext";
 
 type GrantEntry = {
   key: string;
@@ -1112,16 +1113,11 @@ export default function CreationLevelUpStep({ draft, updateDraft, onNext, slotIn
         />
       </div>
 
-      <div className="flex justify-stretch sm:justify-end gap-2 pt-2">
-        <button
-          type="button"
-          disabled={busy || missingRequirements.length > 0}
-          onClick={() => persistAndContinue()}
-          className="btn-primary w-full sm:w-auto px-6 disabled:opacity-40"
-        >
-          {busy ? "…" : `Continue (level ${nextCharLevel})`}
-        </button>
-      </div>
+      <CharacterCreationStepNext
+        label={busy ? "…" : `Continue (level ${nextCharLevel})`}
+        onClick={() => void persistAndContinue()}
+        disabled={busy || missingRequirements.length > 0}
+      />
     </div>
   );
 }

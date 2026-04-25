@@ -3,6 +3,7 @@
  * (2D canvas, isometric, or Three.js 3D).
  */
 import { buildRenderGrid, effectiveDungeonGridDims } from "@/lib/dungeonForgeRenderGrid";
+import { applyPlayerHiddenRevealRules } from "@/lib/dungeonForgePlayerHidden";
 import {
   computeVisibleCellsForPlayer,
   expandFogWithPlayerTokenVision,
@@ -86,15 +87,21 @@ export function buildPlayerTvMapFrame(mapState: PlayerMapBroadcast | null): Play
   const { gw, gh } = gridDims(dg);
   if (gw < 1 || gh < 1) return null;
 
-  const revealed = new Set(mapState?.revealed ?? []);
   const doorOpen =
     mapState?.doorOpen === undefined || mapState.doorOpen === null ? null : new Set(mapState.doorOpen);
+  const doorStates = mapState?.doorStates ?? null;
+  const revealed = applyPlayerHiddenRevealRules(
+    new Set(mapState?.revealed ?? []),
+    dg.rooms,
+    doorOpen,
+    doorStates,
+  );
   const locType = dg.locationType ?? "dungeon";
   const manualSeeds =
     mapState?.dmManualRevealCells?.length && Array.isArray(mapState.dmManualRevealCells)
       ? mapState.dmManualRevealCells
       : null;
-  const fogCells = computeVisibleCellsForPlayer(revealed, dg, doorOpen, null, {
+  const fogCells = computeVisibleCellsForPlayer(revealed, dg, doorOpen, doorStates, {
     openFloor: isOpenFloorLocation(locType),
     maxFogHops: maxFogHopsForLocationType(locType),
     locationType: locType,
@@ -108,7 +115,7 @@ export function buildPlayerTvMapFrame(mapState: PlayerMapBroadcast | null): Play
   );
 
   const palette = forgePaletteForDungeon(dg);
-  const rg = buildRenderGrid(dg, { showThemes: false });
+  const rg = buildRenderGrid(dg, { showThemes: false, playerView: true, doorOpen, doorStates });
 
   const vc = mapState?.viewCrop;
   let minX = 0;
@@ -204,7 +211,7 @@ export function buildPlayerTvMapFrame(mapState: PlayerMapBroadcast | null): Play
     doorOpen,
     sceneLights,
     palette,
-    viewMode: mapState?.viewMode,
+    viewMode: mapState?.viewMode === "flat" ? "depth" : (mapState?.viewMode ?? "depth"),
     dungeonLighting,
     mapOutdoorTime,
   };

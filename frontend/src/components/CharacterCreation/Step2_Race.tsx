@@ -4,6 +4,7 @@ import { walkingSpeedAfterSubrace } from "@/lib/suggestedAbilityScores";
 import { useReferenceStore } from "@/store/referenceStore";
 import { LoadingSpinner } from "@/components/common";
 import { clsx } from "clsx";
+import { CharacterCreationStepNext } from "./CharacterCreationStepNext";
 
 interface Props {
   draft: CharacterDraft;
@@ -98,16 +99,11 @@ export default function Step2_Race({ draft, updateDraft, onNext }: Props) {
         </div>
       )}
 
-      <div className="flex justify-stretch sm:justify-end pt-2">
-        <button
-          type="button"
-          onClick={onNext}
-          disabled={!draft.raceSlug}
-          className="btn-primary w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed px-8"
-        >
-          Next: Choose Class
-        </button>
-      </div>
+      <CharacterCreationStepNext
+        label="Next: Choose Class"
+        onClick={onNext}
+        disabled={!draft.raceSlug}
+      />
     </div>
   );
 }

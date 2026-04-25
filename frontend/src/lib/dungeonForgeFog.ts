@@ -1,4 +1,5 @@
 import { DUNGEON_T as T } from "@/lib/dungeonForgeConstants";
+import { isDoorPassableInFog } from "@/lib/dungeonForgeDoorState";
 import { effectiveDungeonGridDims } from "@/lib/dungeonForgeRenderGrid";
 import type { BattleToken } from "@/lib/playerMapBroadcast";
 
@@ -143,7 +144,7 @@ export function computeVisibleCellsForPlayer(
       if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
 
       const dk = doorKeyForStep(x, y, nx, ny);
-      if (dk && !doorPassableAt(dk, doorOpen, doorStates ?? null)) {
+      if (dk && !isDoorPassableInFog(dk, doorOpen, doorStates ?? null)) {
         const nt = g[ny][nx];
         if (
           (nt === T.D || nt === T.SECRET_DOOR || nt === T.GATE || nt === T.DRAWBRIDGE) &&
@@ -197,8 +198,52 @@ export function computeVisibleCellsForPlayer(
   }
 
   clipGraveyardMausoleumFog(cells, dg, rev, fogOpts?.graveyardInteriorRevealed ?? null);
+  clipPlayerHiddenRoomFog(cells, dg, doorOpen, doorStates);
 
   return cells;
+}
+
+type RoomPlayerHidden = {
+  id: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  dmHideFromPlayer?: boolean;
+  playerHiddenReleaseDoorKey?: string;
+};
+
+/** While the release door is closed, strip visibility of every cell in a DM-only hidden room (incl. wall outline). The door cell remains. */
+function clipPlayerHiddenRoomFog(
+  cells: Set<string>,
+  dg: FogDungeonGrid,
+  doorOpen: Set<string> | null | undefined,
+  doorStates: Record<string, string> | null | undefined,
+): void {
+  const g = dg.grid;
+  const { w: W, h: H } = effectiveDungeonGridDims(dg);
+  for (const raw of dg.rooms ?? []) {
+    const r = raw as RoomPlayerHidden;
+    if (!r.dmHideFromPlayer) continue;
+    const dk = r.playerHiddenReleaseDoorKey;
+    if (typeof dk !== "string" || !dk) continue;
+    if (isDoorPassableInFog(dk, doorOpen, doorStates)) continue;
+    for (let y = r.y; y < r.y + r.h; y++) {
+      for (let x = r.x; x < r.x + r.w; x++) {
+        if (y < 0 || x < 0 || y >= H || x >= W) continue;
+        cells.delete(`${x},${y}`);
+      }
+    }
+    const p = dk.split(",");
+    if (p.length === 2) {
+      const dx = Number(p[0]);
+      const dy = Number(p[1]);
+      if (Number.isFinite(dx) && Number.isFinite(dy) && dy >= 0 && dx >= 0 && dy < H && dx < W) {
+        const t = g[dy][dx];
+        if (t === T.D || t === T.SECRET_DOOR || t === T.GATE || t === T.DRAWBRIDGE) cells.add(dk);
+      }
+    }
+  }
 }
 
 /** Hide mausoleum floor until DM marks interior revealed — only door threshold + 1 tile deep stays visible. */
